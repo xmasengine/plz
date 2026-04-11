@@ -1,4 +1,4 @@
-package isa
+package emu
 
 import "errors"
 
@@ -10,6 +10,7 @@ type Registers struct {
 	C byte
 	D byte
 	E byte
+	F isa.Flag
 	H byte
 	L byte
 }
@@ -81,6 +82,14 @@ func (c *CPU) GetImm16() uint16 {
 	return (uint16(lo) + (uint16(hi) << 8))
 }
 
+func (c *CPU) GetImm8() uint8 {
+	return c.GetNext()
+}
+
+func (c *CPU) GetDisp() int16 {
+	return int16(int8(c.GetNext())) // Not too sure this is correct.
+}
+
 func (c *CPU) GetNext() uint8 {
 	b := c.Memory.Get(c.IP)
 	c.IP++
@@ -95,6 +104,13 @@ func (c *CPU) SetPtr(to uint16, val uint8) {
 	c.Memory.Put(to, val)
 }
 
+// jr gets a displacement and jumps relatively
+func (c CPU) jr() {
+	disp := c.GetDisp()
+	c.IP -= 2
+	c.IP = uint16(int16(c.IP) + disp)
+}
+
 func (c *CPU) Step() error {
 	opcode := isa.Opcode(c.GetNext())
 	c.Wait = opcode.Wait()
@@ -106,6 +122,210 @@ func (c *CPU) Step() error {
 		c.SetPtr(c.BC(), c.A)
 	case isa.INC_BC:
 		c.SetBC(c.BC() + 1)
+	case isa.INC_B:
+		c.B++
+	case isa.DEC_B:
+		c.B--
+	case isa.LD_B_Imm8:
+		c.B = c.GetImm8()
+
+	case isa.RLCA:
+		bit := c.A >> 7
+		c.A = c.A << 1
+		if bit > 0 {
+			c.F.SetFlag(isa.FlagCarry)
+			c.A |= 1
+		} else {
+			c.F.ClearFlag(isa.FlagCarry)
+			c.A &= 0xfe
+		}
+
+	case isa.EX_AF_xAF:
+		c.A, c.Shadow.A = c.Shadow.A, c.A
+		c.F, c.Shadow.F = c.Shadow.F, c.F
+	case isa.ADD_HL_BC:
+		c.SetHL(c.HL() + c.BC())
+	case isa.DEC_BC:
+		c.SetBC(c.BC() - 1)
+	case isa.INC_C:
+		c.C++
+	case isa.DEC_C:
+		c.C--
+	case isa.LD_C_Imm8:
+		c.C = c.GetImm8()
+
+	case isa.RRCA:
+		bit := c.A & 0xfe
+		c.A = c.A >> 1
+		if bit > 0 {
+			c.F.SetFlag(isa.FlagCarry)
+			c.A |= 0xfe
+		} else {
+			c.F.ClearFlag(isa.FlagCarry)
+			c.A &= 0xfe
+		}
+
+	case isa.DJNZ_Disp:
+		c.B--
+		if c.B != 0 {
+			c.jr()
+		}
+	case isa.LD_DE_Imm16:
+		c.SetDE(c.GetImm16())
+	case isa.LD_PtrDE_A:
+		c.SetPtr(c.DE(), c.A)
+	case isa.INC_DE:
+		c.SetDE(c.DE() + 1)
+	case isa.INC_D:
+		c.D++
+	case isa.DEC_D:
+		c.D--
+	case isa.LD_D_Imm8:
+		c.D = c.GetImm8()
+	case isa.RLA:
+		old := c.F.IsFlag(isa.FlagCarry)
+		bit := c.A >> 7
+		c.A = c.A << 1
+		if bit > 0 {
+			c.F.SetFlag(isa.FlagCarry)
+		} else {
+			c.F.ClearFlag(isa.FlagCarry)
+		}
+		if old {
+			c.A |= 1
+		} else {
+			c.A &= 0xfe
+		}
+
+	case isa.JR_Disp:
+		c.jr()
+	case isa.ADD_HL_DE:
+		c.SetHL(c.HL() + c.DE())
+	case isa.DEC_DE:
+		c.SetDE(c.DE() - 1)
+	case isa.INC_E:
+		c.E++
+	case isa.DEC_E:
+		c.E--
+	case isa.LD_E_Imm8:
+		c.E = c.GetImm8()
+
+	case isa.RRA:
+		old := c.F.IsFlag(isa.FlagCarry)
+
+		bit := c.A & 0b10000000
+		c.A = c.A >> 1
+
+		if bit > 0 {
+			c.F.SetFlag(isa.FlagCarry)
+		} else {
+			c.F.ClearFlag(isa.FlagCarry)
+		}
+		if old {
+			c.A |= 0b10000000
+		} else {
+			c.A &= 0b01111111
+		}
+
+		if bit > 0 {
+			c.F.SetFlag(isa.FlagCarry)
+			c.A |= 0xfe
+		} else {
+			c.F.ClearFlag(isa.FlagCarry)
+			c.A &= 0xfe
+		}
+
+	case isa.JRNZ_Disp:
+		if !c.F.IsFlag(isa.FlagZero) {
+			c.jr()
+		}
+	case isa.LD_HL_Imm16:
+		c.SetHL(c.GetImm16())
+	case isa.LD_PtrImm16_HL:
+		addr := c.GetImm16()
+		c.SetPtr(addr, c.L)
+		c.SetPtr(addr+1, c.H)
+	case isa.INC_HL:
+		c.SetHL(c.HL() + 1)
+	case isa.INC_H:
+		c.H++
+	case isa.DEC_H:
+		c.H--
+	case isa.LD_H_Imm8:
+		c.D = c.GetImm8()
+	case isa.DAA:
+		// Not sure what DAA is supposed to do.
+		return InstructionNotImplemented
+
+	case isa.JRZ_Disp:
+		if c.F.IsFlag(isa.FlagZero) {
+			c.jr()
+		}
+	case isa.ADD_HL_HL:
+		c.SetHL(c.HL() + c.HL())
+	case isa.DEC_HL:
+		c.SetHL(c.HL() - 1)
+	case isa.INC_L:
+		c.L++
+	case isa.DEC_L:
+		c.L--
+	case isa.LD_L_Imm8:
+		c.L = c.GetImm8()
+
+	case isa.CPL:
+		c.A = ^c.A
+
+	case isa.JRNC_Disp:
+		if !c.F.IsFlag(isa.FlagCarry) {
+			c.jr()
+		}
+	case isa.LD_SP_Imm16:
+		c.SP = c.GetImm16()
+	case isa.LD_PtrImm16_A:
+		addr := c.GetImm16()
+		c.SetPtr(addr, c.A)
+	case isa.INC_SP:
+		c.SP++
+	case isa.INC_PtrHL:
+		value := c.Ptr(c.HL())
+		c.SetPtr(c.HL(), value+1)
+	case isa.DEC_PtrHL:
+		value := c.Ptr(c.HL())
+		c.SetPtr(c.HL(), value-1)
+	case isa.LD_PtrHL_Imm8:
+		c.D = c.GetImm8()
+	case isa.SCF:
+		c.F.SetFlag(isa.FlagCarry)
+		c.F.ClearFlag(isa.FlagHalfCarry)
+		c.F.ClearFlag(isa.FlagNegative)
+
+	case isa.JRC_Disp:
+		if c.F.IsFlag(isa.FlagCarry) {
+			c.jr()
+		}
+	case isa.ADD_HL_SP:
+		c.SetHL(c.HL() + c.SP)
+	case isa.LD_A_PtrImm16:
+		c.A = c.Ptr(c.GetImm16())
+	case isa.DEC_SP:
+		c.SP--
+	case isa.INC_A:
+		c.A++
+	case isa.DEC_A:
+		c.A--
+	case isa.LD_A_Imm8:
+		c.A = c.GetImm8()
+
+	case isa.CCF:
+		if c.F.IsFlag(isa.FlagCarry) {
+			c.F.ClearFlag(isa.FlagCarry)
+			c.F.ClearFlag(isa.FlagHalfCarry)
+		} else {
+			c.F.SetFlag(isa.FlagCarry)
+			c.F.SetFlag(isa.FlagHalfCarry)
+		}
+		c.F.ClearFlag(isa.FlagNegative)
+
 	default:
 		return InstructionNotImplemented
 	}
@@ -117,6 +337,7 @@ func (c *CPU) Step() error {
 	LD_BC_Imm16
 	LD_PtrBC_A
 	INC_BC
+	INC_B
 	DEC_B
 	LD_B_Imm8
 	RLCA
