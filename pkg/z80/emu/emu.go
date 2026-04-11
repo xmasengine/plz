@@ -64,12 +64,15 @@ type CPU struct {
 	Flags     byte
 	SP        uint16
 	IP        uint16
+	Halted    bool
 	IFF1      bool
 	IFF2      bool
 	Interrupt chan byte
 	NMI       chan struct{}
 	Clock     chan struct{}
 	Wait      byte
+	PrefixCP  bool
+	PrefixDD  bool
 	Memory
 	IO
 }
@@ -104,14 +107,140 @@ func (c *CPU) SetPtr(to uint16, val uint8) {
 	c.Memory.Put(to, val)
 }
 
+func (c *CPU) SetPtr16(to uint16, val uint16) {
+	c.Memory.Put(to, uint8(val&0xff))
+	c.Memory.Put(to+1, uint8(val>>8))
+}
+
+func (c *CPU) GetPtr16(to uint16) uint16 {
+	return uint16(c.Ptr(to)) + (uint16(c.Ptr(to+1)) << 8)
+}
+
+func (c *CPU) SetPtrHL(val uint8) {
+	c.SetPtr(c.HL(), val)
+}
+
+func (c *CPU) PtrHL() uint8 {
+	return c.Ptr(c.HL())
+}
+
+func (c *CPU) PtrSP() uint16 {
+	return c.GetPtr16(c.SP)
+}
+
+func (c *CPU) SetPtrSP(value uint16) {
+	c.SetPtr16(c.SP, value)
+}
+
 // jr gets a displacement and jumps relatively
-func (c CPU) jr() {
+func (c *CPU) jr() {
 	disp := c.GetDisp()
 	c.IP -= 2
 	c.IP = uint16(int16(c.IP) + disp)
 }
 
+// jp jumps absolutely
+func (c *CPU) jp(to uint16) {
+	c.IP = to
+}
+
+func (c *CPU) add(value uint8) {
+	// TODO: set flags correctly
+	c.A += value
+}
+
+func (c *CPU) adc(value uint8) {
+	// TODO: set flags correctly
+	c.A += value
+	if c.F.IsFlag(isa.FlagCarry) {
+		c.A++
+		c.F.ClearFlag(isa.FlagCarry)
+	}
+}
+
+func (c *CPU) sub(value uint8) {
+	// TODO: set flags correctly
+	c.A -= value
+}
+
+func (c *CPU) sbc(value uint8) {
+	// TODO: set flags correctly
+	c.A -= value
+	if c.F.IsFlag(isa.FlagCarry) {
+		c.A--
+		c.F.ClearFlag(isa.FlagCarry)
+	}
+}
+
+func (c *CPU) and(value uint8) {
+	// TODO: set flags correctly
+	c.A &= value
+}
+
+func (c *CPU) xor(value uint8) {
+	// TODO: set flags correctly
+	c.A ^= value
+}
+
+func (c *CPU) or(value uint8) {
+	// TODO: set flags correctly
+	c.A |= value
+}
+
+func (c *CPU) cmp(value uint8) {
+	// TODO: set flags correctly
+	res := c.A - value
+	if res == 0 {
+		c.F.SetFlag(isa.FlagZero)
+	} else {
+		c.F.ClearFlag(isa.FlagZero)
+	}
+	if int8(res) < 0 {
+		c.F.SetFlag(isa.FlagNegative)
+	} else {
+		c.F.ClearFlag(isa.FlagNegative)
+	}
+}
+
+func (c *CPU) pop() uint16 {
+	res := c.PtrSP()
+	c.SP += 2
+	return res
+}
+
+func (c *CPU) push(value uint16) {
+	c.SP -= 2
+	c.SetPtrSP(value)
+}
+
+func (c *CPU) ret() {
+	c.IP = c.pop()
+}
+
+func (c *CPU) call(to uint16) {
+	c.push(c.IP + 3)
+	c.jp(to)
+}
+
+func (c *CPU) rst(to uint16) {
+	c.push(c.IP)
+	c.jp(to)
+}
+
+func (c *CPU) out(port uint8, value uint8) {
+	c.IO.Output(port, value)
+}
+
+func (c *CPU) in(port uint8) uint8 {
+	return c.IO.Input(port)
+}
+
 func (c *CPU) Step() error {
+	if c.PrefixCP || c.PrefixDD {
+		// TODO, prefixed instructions
+		return InstructionNotImplemented
+	}
+
 	opcode := isa.Opcode(c.GetNext())
 	c.Wait = opcode.Wait()
 	switch opcode {
@@ -288,12 +417,12 @@ func (c *CPU) Step() error {
 		c.SP++
 	case isa.INC_PtrHL:
 		value := c.Ptr(c.HL())
-		c.SetPtr(c.HL(), value+1)
+		c.SetPtrHL(value + 1)
 	case isa.DEC_PtrHL:
 		value := c.Ptr(c.HL())
-		c.SetPtr(c.HL(), value-1)
+		c.SetPtrHL(value - 1)
 	case isa.LD_PtrHL_Imm8:
-		c.D = c.GetImm8()
+		c.SetPtrHL(c.GetImm8())
 	case isa.SCF:
 		c.F.SetFlag(isa.FlagCarry)
 		c.F.ClearFlag(isa.FlagHalfCarry)
@@ -325,6 +454,376 @@ func (c *CPU) Step() error {
 			c.F.SetFlag(isa.FlagHalfCarry)
 		}
 		c.F.ClearFlag(isa.FlagNegative)
+
+	case isa.LD_B_B:
+		c.B = c.B
+	case isa.LD_B_C:
+		c.B = c.C
+	case isa.LD_B_D:
+		c.B = c.D
+	case isa.LD_B_E:
+		c.B = c.E
+	case isa.LD_B_H:
+		c.B = c.H
+	case isa.LD_B_L:
+		c.B = c.L
+	case isa.LD_B_PtrHL:
+		c.B = c.PtrHL()
+	case isa.LD_B_A:
+		c.B = c.A
+
+	case isa.LD_C_B:
+		c.C = c.B
+	case isa.LD_C_C:
+		c.C = c.C
+	case isa.LD_C_D:
+		c.C = c.D
+	case isa.LD_C_E:
+		c.C = c.E
+	case isa.LD_C_H:
+		c.C = c.H
+	case isa.LD_C_L:
+		c.C = c.L
+	case isa.LD_C_PtrHL:
+		c.C = c.PtrHL()
+	case isa.LD_C_A:
+		c.C = c.A
+
+	case isa.LD_D_B:
+		c.D = c.B
+	case isa.LD_D_C:
+		c.D = c.C
+	case isa.LD_D_D:
+		c.D = c.D
+	case isa.LD_D_E:
+		c.D = c.E
+	case isa.LD_D_H:
+		c.D = c.H
+	case isa.LD_D_L:
+		c.D = c.L
+	case isa.LD_D_PtrHL:
+		c.D = c.PtrHL()
+	case isa.LD_D_A:
+		c.D = c.A
+
+	case isa.LD_E_B:
+		c.E = c.B
+	case isa.LD_E_C:
+		c.E = c.C
+	case isa.LD_E_D:
+		c.E = c.D
+	case isa.LD_E_E:
+		c.E = c.E
+	case isa.LD_E_H:
+		c.E = c.H
+	case isa.LD_E_L:
+		c.E = c.L
+	case isa.LD_E_PtrHL:
+		c.E = c.PtrHL()
+	case isa.LD_E_A:
+		c.E = c.A
+
+	case isa.LD_H_B:
+		c.H = c.B
+	case isa.LD_H_C:
+		c.H = c.C
+	case isa.LD_H_D:
+		c.H = c.D
+	case isa.LD_H_E:
+		c.H = c.E
+	case isa.LD_H_H:
+		c.H = c.H
+	case isa.LD_H_L:
+		c.H = c.L
+	case isa.LD_H_PtrHL:
+		c.H = c.PtrHL()
+	case isa.LD_H_A:
+		c.H = c.A
+
+	case isa.LD_L_B:
+		c.L = c.B
+	case isa.LD_L_C:
+		c.L = c.C
+	case isa.LD_L_D:
+		c.L = c.D
+	case isa.LD_L_E:
+		c.L = c.E
+	case isa.LD_L_H:
+		c.L = c.H
+	case isa.LD_L_L:
+		c.L = c.L
+	case isa.LD_L_PtrHL:
+		c.L = c.Ptr(c.HL())
+	case isa.LD_L_A:
+		c.L = c.A
+
+	case isa.LD_PtrHL_B:
+		c.SetPtrHL(c.B)
+	case isa.LD_PtrHL_C:
+		c.SetPtrHL(c.C)
+	case isa.LD_PtrHL_D:
+		c.SetPtrHL(c.D)
+	case isa.LD_PtrHL_E:
+		c.SetPtrHL(c.E)
+	case isa.LD_PtrHL_H:
+		c.SetPtrHL(c.H)
+	case isa.LD_PtrHL_L:
+		c.SetPtrHL(c.L)
+	case isa.HALT:
+		c.Halted = true
+	case isa.LD_PtrHL_A:
+		c.SetPtrHL(c.A)
+
+	case isa.LD_A_B:
+		c.A = c.B
+	case isa.LD_A_C:
+		c.A = c.C
+	case isa.LD_A_D:
+		c.A = c.D
+	case isa.LD_A_E:
+		c.A = c.E
+	case isa.LD_A_H:
+		c.A = c.H
+	case isa.LD_A_L:
+		c.A = c.L
+	case isa.LD_A_PtrHL:
+		c.A = c.Ptr(c.HL())
+	case isa.LD_A_A:
+		c.A = c.A
+
+	case isa.ADD_A_B:
+		c.add(c.B)
+	case isa.ADD_A_C:
+		c.add(c.C)
+	case isa.ADD_A_D:
+		c.add(c.D)
+	case isa.ADD_A_E:
+		c.add(c.E)
+	case isa.ADD_A_H:
+		c.add(c.H)
+	case isa.ADD_A_L:
+		c.add(c.L)
+	case isa.ADD_A_PtrHL:
+		c.add(c.PtrHL())
+	case isa.ADD_A_A:
+		c.add(c.A)
+
+	case isa.ADC_A_B:
+		c.adc(c.B)
+	case isa.ADC_A_C:
+		c.adc(c.C)
+	case isa.ADC_A_D:
+		c.adc(c.D)
+	case isa.ADC_A_E:
+		c.adc(c.E)
+	case isa.ADC_A_H:
+		c.adc(c.H)
+	case isa.ADC_A_L:
+		c.adc(c.L)
+	case isa.ADC_A_PtrHL:
+		c.adc(c.PtrHL())
+	case isa.ADC_A_A:
+		c.adc(c.A)
+
+	case isa.SUB_A_B:
+		c.sub(c.B)
+	case isa.SUB_A_C:
+		c.sub(c.C)
+	case isa.SUB_A_D:
+		c.sub(c.D)
+	case isa.SUB_A_E:
+		c.sub(c.E)
+	case isa.SUB_A_H:
+		c.sub(c.H)
+	case isa.SUB_A_L:
+		c.sub(c.L)
+	case isa.SUB_A_PtrHL:
+		c.sub(c.PtrHL())
+	case isa.SUB_A_A:
+		c.sub(c.A)
+
+	case isa.SBC_A_B:
+		c.sbc(c.B)
+	case isa.SBC_A_C:
+		c.sbc(c.C)
+	case isa.SBC_A_D:
+		c.sbc(c.D)
+	case isa.SBC_A_E:
+		c.sbc(c.E)
+	case isa.SBC_A_H:
+		c.sbc(c.H)
+	case isa.SBC_A_L:
+		c.sbc(c.L)
+	case isa.SBC_A_PtrHL:
+		c.sbc(c.PtrHL())
+	case isa.SBC_A_A:
+		c.sbc(c.A)
+
+	case isa.AND_A_B:
+		c.and(c.B)
+	case isa.AND_A_C:
+		c.and(c.C)
+	case isa.AND_A_D:
+		c.and(c.D)
+	case isa.AND_A_E:
+		c.and(c.E)
+	case isa.AND_A_H:
+		c.and(c.H)
+	case isa.AND_A_L:
+		c.and(c.L)
+	case isa.AND_A_PtrHL:
+		c.and(c.PtrHL())
+	case isa.AND_A_A:
+		c.and(c.A)
+
+	case isa.XOR_A_B:
+		c.xor(c.B)
+	case isa.XOR_A_C:
+		c.xor(c.C)
+	case isa.XOR_A_D:
+		c.xor(c.D)
+	case isa.XOR_A_E:
+		c.xor(c.E)
+	case isa.XOR_A_H:
+		c.xor(c.H)
+	case isa.XOR_A_L:
+		c.xor(c.L)
+	case isa.XOR_A_PtrHL:
+		c.xor(c.PtrHL())
+	case isa.XOR_A_A:
+		c.xor(c.A)
+
+	case isa.OR_A_B:
+		c.or(c.B)
+	case isa.OR_A_C:
+		c.or(c.C)
+	case isa.OR_A_D:
+		c.or(c.D)
+	case isa.OR_A_E:
+		c.or(c.E)
+	case isa.OR_A_H:
+		c.or(c.H)
+	case isa.OR_A_L:
+		c.or(c.L)
+	case isa.OR_A_PtrHL:
+		c.or(c.PtrHL())
+	case isa.OR_A_A:
+		c.or(c.A)
+
+	case isa.CP_A_B:
+		c.cmp(c.B)
+	case isa.CP_A_C:
+		c.cmp(c.C)
+	case isa.CP_A_D:
+		c.cmp(c.D)
+	case isa.CP_A_E:
+		c.cmp(c.E)
+	case isa.CP_A_H:
+		c.cmp(c.H)
+	case isa.CP_A_L:
+		c.cmp(c.L)
+	case isa.CP_A_PtrHL:
+		c.cmp(c.PtrHL())
+	case isa.CP_A_A:
+		c.cmp(c.A)
+
+	case isa.RETNZ:
+		if !c.F.IsFlag(isa.FlagZero) {
+			c.ret()
+		}
+	case isa.POP_BC:
+		c.SetBC(c.pop())
+	case isa.JPNZ_Imm16:
+		if !c.F.IsFlag(isa.FlagZero) {
+			c.jp(c.GetImm16())
+		}
+	case isa.JP_Imm16:
+		c.jp(c.GetImm16())
+	case isa.CALLNZ_Imm16:
+		if !c.F.IsFlag(isa.FlagZero) {
+			c.call(c.GetImm16())
+		}
+
+	case isa.PUSH_BC:
+		c.push(c.BC())
+	case isa.ADD_A_Imm8:
+		c.add(c.GetImm8())
+	case isa.RST_0x00:
+		c.rst(0x00)
+
+	case isa.RETZ:
+		if c.F.IsFlag(isa.FlagZero) {
+			c.ret()
+		}
+
+	case isa.RET:
+		c.ret()
+	case isa.JPZ_Imm16:
+		if c.F.IsFlag(isa.FlagZero) {
+			c.jp(c.GetImm16())
+		}
+
+	case isa.CB_Prefix:
+		c.PrefixCP = true
+	case isa.CALLZ_Imm16:
+		if c.F.IsFlag(isa.FlagZero) {
+			c.call(c.GetImm16())
+		}
+	case isa.CALL_Imm16:
+		c.call(c.GetImm16())
+	case isa.ADC_A_Imm8:
+		c.adc(c.GetImm8())
+	case isa.RST_0x08:
+		c.rst(0x08)
+
+	case isa.RETNC:
+		if !c.F.IsFlag(isa.FlagCarry) {
+			c.ret()
+		}
+	case isa.POP_DE:
+		c.SetDE(c.pop())
+	case isa.JPNC_Imm16:
+		if !c.F.IsFlag(isa.FlagCarry) {
+			c.jp(c.GetImm16())
+		}
+	case isa.OUT_Port_A:
+		c.out(c.GetImm8(), c.A)
+	case isa.CALLNC_Imm16:
+		if !c.F.IsFlag(isa.FlagCarry) {
+			c.call(c.GetImm16())
+		}
+
+	case isa.PUSH_DE:
+		c.push(c.DE())
+	case isa.SUB_A_Imm8:
+		c.sub(c.GetImm8())
+	case isa.RST_0x10:
+		c.rst(0x10)
+
+	case isa.RETC:
+		if c.F.IsFlag(isa.FlagCarry) {
+			c.ret()
+		}
+
+	case isa.EXX:
+		c.Registers, c.Shadow = c.Shadow, c.Registers
+	case isa.JPC_Imm16:
+		if c.F.IsFlag(isa.FlagCarry) {
+			c.jp(c.GetImm16())
+		}
+
+	case isa.IN_A_Port:
+		c.A = c.in(c.GetImm8())
+	case isa.CALLC_Imm16:
+		if c.F.IsFlag(isa.FlagCarry) {
+			c.call(c.GetImm16())
+		}
+	case isa.DD_Prefix:
+		c.PrefixDD = true
+	case isa.SBC_A_Imm8:
+		c.sbc(c.GetImm8())
+	case isa.RST_0x18:
+		c.rst(0x18)
 
 	default:
 		return InstructionNotImplemented

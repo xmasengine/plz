@@ -234,16 +234,16 @@ const (
 	LD_L_PtrHL
 	LD_L_A
 
-	LD_PtrLH_B
-	LD_PtrLH_C
-	LD_PtrLH_D
-	LD_PtrLH_E
-	LD_PtrLH_H
-	LD_PtrLH_L
+	LD_PtrHL_B
+	LD_PtrHL_C
+	LD_PtrHL_D
+	LD_PtrHL_E
+	LD_PtrHL_H
+	LD_PtrHL_L
 	HALT // Exception
-	LD_PtrLH_A
+	LD_PtrHL_A
 
-	LD_A_N
+	LD_A_B
 	LD_A_C
 	LD_A_D
 	LD_A_E
