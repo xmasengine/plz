@@ -75,12 +75,13 @@ type ImmediateWord uint16
 type Flag uint8
 
 const (
-	FlagSign           Flag = 1 << 7
-	FlagZero           Flag = 1 << 6
-	FlagHalfCarry      Flag = 1 << 4
-	FlagParityOverflow Flag = 1 << 2
-	FlagNegative       Flag = 1 << 1
-	FlagCarry          Flag = 1 << 0
+	FlagSign      Flag = 1 << 7
+	FlagZero      Flag = 1 << 6
+	FlagHalfCarry Flag = 1 << 4
+	FlagParity    Flag = 1 << 2
+	FlagNegative  Flag = 1 << 1
+	FlagCarry     Flag = 1 << 0
+	FlagOverflow       = FlagParity
 )
 
 func (f *Flag) SetFlag(bit Flag) Flag {
