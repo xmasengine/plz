@@ -17,6 +17,7 @@ type Registers struct {
 	UseIY bool
 	IX    uint16
 	IY    uint16
+	Disp  int16
 }
 
 func (r *Registers) SetBC(v uint16) {
@@ -114,7 +115,61 @@ type CPU struct {
 	IO
 }
 
+type cpuOption func(*CPU)
+
+type LinearMemory [1 << 16]uint8
+
+func (l LinearMemory) Get(addr uint16) byte {
+	return l[addr]
+}
+
+func (l *LinearMemory) Put(addr uint16, v byte) {
+	l[addr] = v
+}
+
+type ByteIO struct {
+	Index int
+	In    [255][]byte
+	Out   [255][]byte
+}
+
+func (b *ByteIO) Input(port byte) byte {
+	if b.Index >= len(b.In[port]) {
+		return 0
+	}
+	res := b.In[port][b.Index]
+	b.Index++
+	return res
+}
+
+func (b *ByteIO) Output(port byte, val byte) {
+	b.Out[port] = append(b.Out[port], val)
+}
+
+func Program(program ...isa.Opcode) func(*CPU) {
+	return func(c *CPU) {
+		for i, op := range program {
+			c.Memory.Put(uint16(i), byte(op))
+		}
+	}
+}
+
+func NewCPU(opts ...cpuOption) *CPU {
+	cpu := &CPU{}
+	cpu.NMI = make(chan struct{})
+	cpu.Clock = make(chan struct{})
+	cpu.Interrupt = make(chan byte)
+	cpu.Memory = &LinearMemory{}
+	cpu.IO = &ByteIO{}
+
+	for _, opt := range opts {
+		opt(cpu)
+	}
+	return cpu
+}
+
 var InstructionNotImplemented = errors.New("instruction not implemented")
+var InstructionNotCorrect = errors.New("instruction not correct")
 
 func (c *CPU) GetImm16() uint16 {
 	lo := c.GetNext()
@@ -173,11 +228,15 @@ func (c *CPU) SetPtrSP(value uint16) {
 	c.SetPtr16(c.SP, value)
 }
 
+func displace(addr uint16, disp int16) uint16 {
+	return uint16(int16(addr) + disp) // XXX not too sure of this.
+}
+
 // jr gets a displacement and jumps relatively
 func (c *CPU) jr() {
 	disp := c.GetDisp()
 	c.IP -= 2
-	c.IP = uint16(int16(c.IP) + disp)
+	c.IP = displace(c.IP, disp)
 }
 
 // jp jumps absolutely
@@ -276,7 +335,21 @@ func (c *CPU) in(port uint8) uint8 {
 	return c.IO.Input(port)
 }
 
+func (c *CPU) RunUntilHalted() error {
+	for !c.Halted {
+		err := c.Step()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *CPU) Step() error {
+	if c.UseIX || c.UseIY {
+		c.Disp = c.GetDisp()
+	}
+
 	if c.PrefixCBBitInstructions || c.PrefixEDMiscInstructions {
 		// TODO, prefixed instructions
 		return InstructionNotImplemented
@@ -975,5 +1048,191 @@ func (c *CPU) Step() error {
 	default:
 		return InstructionNotImplemented
 	}
+	return nil
+}
+
+func (c *CPU) bitInstruction(opcode isa.Opcode) error {
+	x, y, z := opcode.SplitBitOpcode()
+	if c.UseIY || c.UseIX {
+		c.Disp = c.GetDisp()
+	}
+
+	switch x {
+	case isa.BitOpcodeKindShift:
+		return c.bitInstructionShift(y, z)
+	case isa.BitOpcodeKindTest:
+		return c.bitInstructionTest(uint8(y), z)
+	case isa.BitOpcodeKindClear:
+		return c.bitInstructionClear(uint8(y), z)
+	case isa.BitOpcodeKindSet:
+		return c.bitInstructionSet(uint8(y), z)
+	default:
+		return InstructionNotCorrect
+	}
+}
+
+func (c *CPU) RegB() uint8 { return c.B }
+func (c *CPU) RegC() uint8 { return c.C }
+func (c *CPU) RegD() uint8 { return c.D }
+func (c *CPU) RegE() uint8 { return c.E }
+func (c *CPU) RegH() uint8 { return c.H }
+func (c *CPU) RegL() uint8 { return c.L }
+func (c *CPU) RegPtrIX() uint8 {
+	disp := c.Disp
+	c.Disp = 0
+	c.UseIX = false
+	return c.Ptr(displace(c.IX, disp))
+}
+
+func (c *CPU) RegPtrIY() uint8 {
+	disp := c.Disp
+	c.Disp = 0
+	c.UseIY = false
+	return c.Ptr(displace(c.IY, disp))
+}
+
+func (c *CPU) RegPtrHL() uint8 {
+	if c.UseIX {
+		return c.RegPtrIX()
+	}
+	if c.UseIY {
+		return c.RegPtrIY()
+	}
+
+	return c.PtrHL()
+}
+func (c *CPU) RegA() uint8 { return c.A }
+
+func (c *CPU) Reg(reg isa.RegisterIndex) func() uint8 {
+	switch reg {
+	case isa.RegisterIndexB:
+		return c.RegB
+	case isa.RegisterIndexC:
+		return c.RegC
+	case isa.RegisterIndexD:
+		return c.RegD
+	case isa.RegisterIndexE:
+		return c.RegE
+	case isa.RegisterIndexH:
+		return c.RegH
+	case isa.RegisterIndexL:
+		return c.RegL
+	case isa.RegisterIndexPtrHL:
+		return c.RegPtrHL
+	case isa.RegisterIndexA:
+		return c.RegA
+	default:
+		return nil
+	}
+}
+
+func (c *CPU) SetRegB(v uint8) { c.B = v }
+func (c *CPU) SetRegC(v uint8) { c.C = v }
+func (c *CPU) SetRegD(v uint8) { c.D = v }
+func (c *CPU) SetRegE(v uint8) { c.E = v }
+func (c *CPU) SetRegH(v uint8) { c.H = v }
+func (c *CPU) SetRegL(v uint8) { c.L = v }
+func (c *CPU) SetRegPtrIX(v uint8) {
+	disp := c.Disp
+	c.Disp = 0
+	c.UseIX = false
+	c.SetPtr(displace(c.IX, disp), v)
+}
+
+func (c *CPU) SetRegPtrIY(v uint8) {
+	disp := c.Disp
+	c.Disp = 0
+	c.UseIY = false
+	c.SetPtr(displace(c.IY, disp), v)
+}
+
+func (c *CPU) SetRegPtrHL(v uint8) {
+	if c.UseIX {
+		c.SetRegPtrIX(v)
+		return
+	}
+	if c.UseIY {
+		c.SetRegPtrIY(v)
+		return
+	}
+
+	c.SetPtrHL(v)
+}
+
+func (c *CPU) SetRegA(v uint8) { c.A = v }
+
+func (c *CPU) SetReg(reg isa.RegisterIndex) func(uint8) {
+	switch reg {
+	case isa.RegisterIndexB:
+		return c.SetRegB
+	case isa.RegisterIndexC:
+		return c.SetRegC
+	case isa.RegisterIndexD:
+		return c.SetRegD
+	case isa.RegisterIndexE:
+		return c.SetRegE
+	case isa.RegisterIndexH:
+		return c.SetRegH
+	case isa.RegisterIndexL:
+		return c.SetRegL
+	case isa.RegisterIndexPtrHL:
+		return c.SetRegPtrHL
+	case isa.RegisterIndexA:
+		return c.SetRegA
+	default:
+		return nil
+	}
+}
+
+func (c *CPU) bitInstructionShift(bit isa.BitOpcodeBit, reg isa.RegisterIndex) error {
+	return InstructionNotImplemented
+}
+
+func (c *CPU) bitInstructionTest(bit uint8, reg isa.RegisterIndex) error {
+	getter := c.Reg(reg)
+	if getter == nil {
+		return InstructionNotCorrect
+	}
+	flag := uint8(1 << bit)
+	isSet := (getter() & flag) == flag
+	c.F.SetFlag(isa.FlagHalfCarry)
+	c.F.ClearFlag(isa.FlagNegative)
+	if isSet {
+		c.F.ClearFlag(isa.FlagZero)
+	} else {
+		c.F.SetFlag(isa.FlagZero)
+	}
+	return nil
+}
+
+func (c *CPU) bitInstructionSet(bit uint8, reg isa.RegisterIndex) error {
+	getter := c.Reg(reg)
+	if getter == nil {
+		return InstructionNotCorrect
+	}
+	setter := c.SetReg(reg)
+	if setter == nil {
+		return InstructionNotCorrect
+	}
+	flag := uint8(1 << bit)
+	v := (getter() | flag)
+	setter(v)
+
+	return nil
+}
+
+func (c *CPU) bitInstructionClear(bit uint8, reg isa.RegisterIndex) error {
+	getter := c.Reg(reg)
+	if getter == nil {
+		return InstructionNotCorrect
+	}
+	setter := c.SetReg(reg)
+	if setter == nil {
+		return InstructionNotCorrect
+	}
+	flag := uint8(1 << bit)
+	v := (getter() & ^flag)
+	setter(v)
+
 	return nil
 }

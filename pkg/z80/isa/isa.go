@@ -456,3 +456,84 @@ F+	RET M	11	5	LD SP,HL	6	JP M,nn	10		    EI	4		        CALL M,nn	17	10	--- FD --
 A-	AND B	4		AND C	4		AND D	4		AND E	4		AND H	4		AND L	4		AND (HL)	7		AND A	4
 
 */
+
+type BitOpcodeKind uint8
+
+const (
+	BitOpcodeKindShift BitOpcodeKind = 0
+	BitOpcodeKindTest  BitOpcodeKind = 1
+	BitOpcodeKindClear BitOpcodeKind = 2
+	BitOpcodeKindSet   BitOpcodeKind = 3
+)
+
+type BitOpcodeBit uint8
+
+const (
+	BitOpcodeBitRLC BitOpcodeBit = 0
+	BitOpcodeBitRRC BitOpcodeBit = 1
+	BitOpcodeBitRL  BitOpcodeBit = 2
+	BitOpcodeBitRR  BitOpcodeBit = 3
+	BitOpcodeBitSLA BitOpcodeBit = 4
+	BitOpcodeBitSRA BitOpcodeBit = 5
+	BitOpcodeBitSLL BitOpcodeBit = 6
+	BitOpcodeBitSRL BitOpcodeBit = 7
+)
+
+type RegisterIndex uint8
+
+const (
+	RegisterIndexB     RegisterIndex = 0
+	RegisterIndexC     RegisterIndex = 1
+	RegisterIndexD     RegisterIndex = 2
+	RegisterIndexE     RegisterIndex = 3
+	RegisterIndexH     RegisterIndex = 4
+	RegisterIndexL     RegisterIndex = 5
+	RegisterIndexPtrHL RegisterIndex = 6
+	RegisterIndexA     RegisterIndex = 7
+)
+
+/*
+SplitBitCode splits an opcode that is a bit operation into
+x, y and z components as per the following:
+
+	Z80 bit instructions are decoded using specific opcode prefixes
+	and bit-field patterns within the opcode byte.
+	The CB prefix ($CB) decodes bit manipulation instructions
+	(Bit, Set, Reset, Rotate/Shift) for general registers and memory
+	locations, while DD/FD prefixes combined with CB ($DDCB/$FDCB) extend
+	these operations to indexed memory addresses $(IX+d)$ or $(IY+d)$,
+	requiring a displacement byte between the prefixes and the CB opcode.
+
+	The decoding algorithm relies on the opcode's three 3-bit fields:
+
+	x (bits 7-6): Determines the instruction group
+		(0 for rotate/shift, 1 for Bit test, 2 for Reset, 3 for Set).
+	y (bits 5-3): Specifies the bit number
+		(0–7) to operate on or the rotation mode.
+	z (bits 2-0):
+		Identifies the target register or memory location
+		namely B, C, D, E, H, L, (HL), A.
+
+	The following table outlines the primary CB-prefixed instruction
+	patterns for standard registers and memory:
+
+	x (Bits 7-6)	y (Bits 5-3)	z (Bits 2-0)	Operation	Example Mnemonic
+	0	0–7	0–7	Rotate/Shift Register or Memory	RLC r, RL (HL)
+	1	0–7	0–7	Test Bit	BIT y, r, BIT y, (HL)
+	2	0–7	0–7	Reset Bit	RES y, r, RES y, (HL)
+	3	0–7	0–7	Set Bit	SET y, r, SET y, (HL)
+	For indexed operations using DDCB or FDCB, the byte sequence is
+	[DD/FD] [CB] [displacement] [opcode].
+	The displacement byte is a signed 8-bit integer added to the IX or IY
+	register to calculate the memory address, effectively replacing the
+	(HL) operand in the standard CB table with (IX+d) or (IY+d).
+	Undocumented instructions may also utilize these patterns,
+	but the official set follows this strict octal-based layout where the
+	first octal digit (x) dictates the operation class
+*/
+func (opcode Opcode) SplitBitOpcode() (x BitOpcodeKind, y BitOpcodeBit, z RegisterIndex) {
+	x = BitOpcodeKind(opcode >> 5)
+	y = BitOpcodeBit(0b00111000&opcode) >> 3
+	z = RegisterIndex(0b00000111 & opcode)
+	return x, y, z
+}
