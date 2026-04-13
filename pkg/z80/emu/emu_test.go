@@ -24,10 +24,10 @@ func TestNewCPU(t *testing.T) {
 	}
 }
 
-func helperTestProgram(t *testing.T, inPort, outPort int, in, expected string, op ...isa.Opcode) {
+func helperTestOpcodes(t *testing.T, inPort, outPort int, in, expected string, op ...isa.Opcode) {
 	t.Helper()
-	prog1 := Program(isa.HALT)
-	cpu := NewCPU(prog1)
+	program := Opcodes(op...)
+	cpu := NewCPU(program)
 	io := cpu.IO.(*ByteIO)
 	io.In[inPort] = []byte(in)
 
@@ -42,12 +42,19 @@ func helperTestProgram(t *testing.T, inPort, outPort int, in, expected string, o
 }
 
 func TestEmuRunUntilHalted(t *testing.T) {
-	prog1 := Program(isa.HALT)
-	cpu := NewCPU(prog1)
-	err := cpu.RunUntilHalted()
-	if err != nil {
-		t.Fatalf("Run failed: %s", err)
-	}
-	helperTestProgram(t, 0, 0, "", "", isa.HALT)
-	helperTestProgram(t, 0, 0, "", "H", isa.LD_A_Imm8, isa.Opcode('H'), isa.OUT_Port_A, isa.Opcode(0))
+	helperTestOpcodes(t, 0, 0, "", "", isa.HALT)
+	// The traditional greeting. We expect HELLO WORLD in the output.
+	helperTestOpcodes(t, 0, 7, "", "HELLO WORLD",
+		isa.LD_A_Imm8, isa.Opcode('H'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('E'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('O'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode(' '), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('W'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('O'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('R'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('D'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.HALT)
 }

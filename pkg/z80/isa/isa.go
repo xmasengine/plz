@@ -410,6 +410,565 @@ func (o Opcode) Wait() uint8 {
 	return 4
 }
 
+func (o Opcode) String() string {
+	switch o {
+	case NOP:
+		return "NOP"
+	case LD_BC_Imm16:
+		return "LD_BC_Imm16"
+	case LD_PtrBC_A:
+		return "LD_PtrBC_A"
+	case INC_BC:
+		return "INC_BC"
+	case INC_B:
+		return "INC_B"
+	case DEC_B:
+		return "DEC_B"
+	case LD_B_Imm8:
+		return "LD_B_Imm8"
+	case RLCA:
+		return "RLCA"
+
+	case EX_AF_xAF:
+		return "EX_AF_xAF"
+	case ADD_HL_BC:
+		return "ADD_HL_BC"
+	case LD_A_PtrBC:
+		return "LD_A_PtrBC"
+	case DEC_BC:
+		return "DEC_BC"
+	case INC_C:
+		return "INC_C"
+	case DEC_C:
+		return "DEC_C"
+	case LD_C_Imm8:
+		return "LD_C_Imm8"
+	case RRCA:
+		return "RRCA"
+
+	case DJNZ_Disp:
+		return "DJNZ_Disp"
+	case LD_DE_Imm16:
+		return "LD_DE_Imm16"
+	case LD_PtrDE_A:
+		return "LD_PtrDE_A"
+	case INC_DE:
+		return "INC_DE"
+	case INC_D:
+		return "INC_D"
+	case DEC_D:
+		return "DEC_D"
+	case LD_D_Imm8:
+		return "LD_D_Imm8"
+	case RLA:
+		return "RLA"
+
+	case JR_Disp:
+		return "JR_Disp"
+	case ADD_HL_DE:
+		return "ADD_HL_DE"
+	case LD_A_PtrDE:
+		return "LD_A_PtrDE"
+	case DEC_DE:
+		return "DEC_DE"
+	case INC_E:
+		return "INC_E"
+	case DEC_E:
+		return "DEC_E"
+	case LD_E_Imm8:
+		return "LD_E_Imm8"
+	case RRA:
+		return "RRA"
+
+	case JRNZ_Disp:
+		return "JRNZ_Disp"
+	case LD_HL_Imm16:
+		return "LD_HL_Imm16"
+	case LD_PtrImm16_HL:
+		return "LD_PtrImm16_HL"
+	case INC_HL:
+		return "INC_HL"
+	case INC_H:
+		return "INC_H"
+	case DEC_H:
+		return "DEC_H"
+	case LD_H_Imm8:
+		return "LD_H_Imm8"
+	case DAA:
+		return "DAA"
+
+	case JRZ_Disp:
+		return "JRZ_Disp"
+	case ADD_HL_HL:
+		return "ADD_HL_HL"
+	case LD_HL_PtrImm16:
+		return "LD_HL_PtrImm16"
+	case DEC_HL:
+		return "DEC_HL"
+	case INC_L:
+		return "INC_L"
+	case DEC_L:
+		return "DEC_L"
+	case LD_L_Imm8:
+		return "LD_L_Imm8"
+	case CPL:
+		return "CPL"
+
+	case JRNC_Disp:
+		return "JRNC_Disp"
+	case LD_SP_Imm16:
+		return "LD_SP_Imm16"
+	case LD_PtrImm16_A:
+		return "LD_PtrImm16_A"
+	case INC_SP:
+		return "INC_SP"
+	case INC_PtrHL:
+		return "INC_PtrHL"
+	case DEC_PtrHL:
+		return "DEC_PtrHL"
+	case LD_PtrHL_Imm8:
+		return "LD_PtrHL_Imm8"
+	case SCF:
+		return "SCF"
+
+	case JRC_Disp:
+		return "JRC_Disp"
+	case ADD_HL_SP:
+		return "ADD_HL_SP"
+	case LD_A_PtrImm16:
+		return "LD_A_PtrImm16"
+	case DEC_SP:
+		return "DEC_SP"
+	case INC_A:
+		return "INC_A"
+	case DEC_A:
+		return "DEC_A"
+	case LD_A_Imm8:
+		return "LD_A_Imm8"
+	case CCF:
+		return "CCF"
+
+	case LD_B_B:
+		return "LD_B_B"
+	case LD_B_C:
+		return "LD_B_C"
+	case LD_B_D:
+		return "LD_B_D"
+	case LD_B_E:
+		return "LD_B_E"
+	case LD_B_H:
+		return "LD_B_H"
+	case LD_B_L:
+		return "LD_B_L"
+	case LD_B_PtrHL:
+		return "LD_B_PtrHL"
+	case LD_B_A:
+		return "LD_B_A"
+
+	case LD_C_B:
+		return "LD_C_B"
+	case LD_C_C:
+		return "LD_C_C"
+	case LD_C_D:
+		return "LD_C_D"
+	case LD_C_E:
+		return "LD_C_E"
+	case LD_C_H:
+		return "LD_C_H"
+	case LD_C_L:
+		return "LD_C_L"
+	case LD_C_PtrHL:
+		return "LD_C_PtrHL"
+	case LD_C_A:
+		return "LD_C_A"
+
+	case LD_D_B:
+		return "LD_D_B"
+	case LD_D_C:
+		return "LD_D_C"
+	case LD_D_D:
+		return "LD_D_D"
+	case LD_D_E:
+		return "LD_D_E"
+	case LD_D_H:
+		return "LD_D_H"
+	case LD_D_L:
+		return "LD_D_L"
+	case LD_D_PtrHL:
+		return "LD_D_PtrHL"
+	case LD_D_A:
+		return "LD_D_A"
+
+	case LD_E_B:
+		return "LD_E_B"
+	case LD_E_C:
+		return "LD_E_C"
+	case LD_E_D:
+		return "LD_E_D"
+	case LD_E_E:
+		return "LD_E_E"
+	case LD_E_H:
+		return "LD_E_H"
+	case LD_E_L:
+		return "LD_E_L"
+	case LD_E_PtrHL:
+		return "LD_E_PtrHL"
+	case LD_E_A:
+		return "LD_E_A"
+
+	case LD_H_B:
+		return "LD_H_B"
+	case LD_H_C:
+		return "LD_H_C"
+	case LD_H_D:
+		return "LD_H_D"
+	case LD_H_E:
+		return "LD_H_E"
+	case LD_H_H:
+		return "LD_H_H"
+	case LD_H_L:
+		return "LD_H_L"
+	case LD_H_PtrHL:
+		return "LD_H_PtrHL"
+	case LD_H_A:
+		return "LD_H_A"
+
+	case LD_L_B:
+		return "LD_L_B"
+	case LD_L_C:
+		return "LD_L_C"
+	case LD_L_D:
+		return "LD_L_D"
+	case LD_L_E:
+		return "LD_L_E"
+	case LD_L_H:
+		return "LD_L_H"
+	case LD_L_L:
+		return "LD_L_L"
+	case LD_L_PtrHL:
+		return "LD_L_PtrHL"
+	case LD_L_A:
+		return "LD_L_A"
+
+	case LD_PtrHL_B:
+		return "LD_PtrHL_B"
+	case LD_PtrHL_C:
+		return "LD_PtrHL_C"
+	case LD_PtrHL_D:
+		return "LD_PtrHL_D"
+	case LD_PtrHL_E:
+		return "LD_PtrHL_E"
+	case LD_PtrHL_H:
+		return "LD_PtrHL_H"
+	case LD_PtrHL_L:
+		return "LD_PtrHL_L"
+	case HALT:
+		return "HALT"
+	case LD_PtrHL_A:
+		return "LD_PtrHL_A"
+
+	case LD_A_B:
+		return "LD_A_B"
+	case LD_A_C:
+		return "LD_A_C"
+	case LD_A_D:
+		return "LD_A_D"
+	case LD_A_E:
+		return "LD_A_E"
+	case LD_A_H:
+		return "LD_A_H"
+	case LD_A_L:
+		return "LD_A_L"
+	case LD_A_PtrHL:
+		return "LD_A_PtrHL"
+	case LD_A_A:
+		return "LD_A_A"
+
+	// Add
+	case ADD_A_B:
+		return "ADD_A_B"
+	case ADD_A_C:
+		return "ADD_A_C"
+	case ADD_A_D:
+		return "ADD_A_D"
+	case ADD_A_E:
+		return "ADD_A_E"
+	case ADD_A_H:
+		return "ADD_A_H"
+	case ADD_A_L:
+		return "ADD_A_L"
+	case ADD_A_PtrHL:
+		return "ADD_A_PtrHL"
+	case ADD_A_A:
+		return "ADD_A_A"
+
+	// Add with carry
+	case ADC_A_B:
+		return "ADC_A_B"
+	case ADC_A_C:
+		return "ADC_A_C"
+	case ADC_A_D:
+		return "ADC_A_D"
+	case ADC_A_E:
+		return "ADC_A_E"
+	case ADC_A_H:
+		return "ADC_A_H"
+	case ADC_A_L:
+		return "ADC_A_L"
+	case ADC_A_PtrHL:
+		return "ADC_A_PtrHL"
+	case ADC_A_A:
+		return "ADC_A_A"
+
+	// Subtract
+	case SUB_A_B:
+		return "SUB_A_B"
+	case SUB_A_C:
+		return "SUB_A_C"
+	case SUB_A_D:
+		return "SUB_A_D"
+	case SUB_A_E:
+		return "SUB_A_E"
+	case SUB_A_H:
+		return "SUB_A_H"
+	case SUB_A_L:
+		return "SUB_A_L"
+	case SUB_A_PtrHL:
+		return "SUB_A_PtrHL"
+	case SUB_A_A:
+		return "SUB_A_A"
+
+	// Subtract with carry
+	case SBC_A_B:
+		return "SBC_A_B"
+	case SBC_A_C:
+		return "SBC_A_C"
+	case SBC_A_D:
+		return "SBC_A_D"
+	case SBC_A_E:
+		return "SBC_A_E"
+	case SBC_A_H:
+		return "SBC_A_H"
+	case SBC_A_L:
+		return "SBC_A_L"
+	case SBC_A_PtrHL:
+		return "SBC_A_PtrHL"
+	case SBC_A_A:
+		return "SBC_A_A"
+
+	// BINARY AND
+	case AND_A_B:
+		return "AND_A_B"
+	case AND_A_C:
+		return "AND_A_C"
+	case AND_A_D:
+		return "AND_A_D"
+	case AND_A_E:
+		return "AND_A_E"
+	case AND_A_H:
+		return "AND_A_H"
+	case AND_A_L:
+		return "AND_A_L"
+	case AND_A_PtrHL:
+		return "AND_A_PtrHL"
+	case AND_A_A:
+		return "AND_A_A"
+
+	// Binary XOR
+	case XOR_A_B:
+		return "XOR_A_B"
+	case XOR_A_C:
+		return "XOR_A_C"
+	case XOR_A_D:
+		return "XOR_A_D"
+	case XOR_A_E:
+		return "XOR_A_E"
+	case XOR_A_H:
+		return "XOR_A_H"
+	case XOR_A_L:
+		return "XOR_A_L"
+	case XOR_A_PtrHL:
+		return "XOR_A_PtrHL"
+	case XOR_A_A:
+		return "XOR_A_A"
+
+	// Binary OR
+	case OR_A_B:
+		return "OR_A_B"
+	case OR_A_C:
+		return "OR_A_C"
+	case OR_A_D:
+		return "OR_A_D"
+	case OR_A_E:
+		return "OR_A_E"
+	case OR_A_H:
+		return "OR_A_H"
+	case OR_A_L:
+		return "OR_A_L"
+	case OR_A_PtrHL:
+		return "OR_A_PtrHL"
+	case OR_A_A:
+		return "OR_A_A"
+
+	// Compare: subtract and set flags but do not set A
+	case CP_A_B:
+		return "CP_A_B"
+	case CP_A_C:
+		return "CP_A_C"
+	case CP_A_D:
+		return "CP_A_D"
+	case CP_A_E:
+		return "CP_A_E"
+	case CP_A_H:
+		return "CP_A_H"
+	case CP_A_L:
+		return "CP_A_L"
+	case CP_A_PtrHL:
+		return "CP_A_PtrHL"
+	case CP_A_A:
+		return "CP_A_A"
+
+	case RETNZ:
+		return "RETNZ"
+	case POP_BC:
+		return "POP_BC"
+	case JPNZ_Imm16:
+		return "JPNZ_Imm16"
+	case JP_Imm16:
+		return "JP_Imm16"
+	case CALLNZ_Imm16:
+		return "CALLNZ_Imm16"
+	case PUSH_BC:
+		return "PUSH_BC"
+	case ADD_A_Imm8:
+		return "ADD_A_Imm8"
+	case RST_0x00:
+		return "RST_0x00"
+
+	case RETZ:
+		return "RETZ"
+	case RET:
+		return "RET"
+	case JPZ_Imm16:
+		return "JPZ_Imm16"
+	case CB_Prefix:
+		return "CB_Prefix"
+	case CALLZ_Imm16:
+		return "CALLZ_Imm16"
+	case CALL_Imm16:
+		return "CALL_Imm16"
+	case ADC_A_Imm8:
+		return "ADC_A_Imm8"
+	case RST_0x08:
+		return "RST_0x08"
+
+	case RETNC:
+		return "RETNC"
+	case POP_DE:
+		return "POP_DE"
+	case JPNC_Imm16:
+		return "JPNC_Imm16"
+	case OUT_Port_A:
+		return "OUT_Port_A"
+	case CALLNC_Imm16:
+		return "CALLNC_Imm16"
+	case PUSH_DE:
+		return "PUSH_DE"
+	case SUB_A_Imm8:
+		return "SUB_A_Imm8"
+	case RST_0x10:
+		return "RST_0x10"
+
+	case RETC:
+		return "RETC"
+	case EXX:
+		return "EXX"
+	case JPC_Imm16:
+		return "JPC_Imm16"
+	case IN_A_Port:
+		return "IN_A_Port"
+	case CALLC_Imm16:
+		return "CALLC_Imm16"
+	case DD_Prefix:
+		return "DD_Prefix"
+	case SBC_A_Imm8:
+		return "SBC_A_Imm8"
+	case RST_0x18:
+		return "RST_0x18"
+
+	case RETPO:
+		return "RETPO"
+	case POP_HL:
+		return "POP_HL"
+	case JPPO_Imm16:
+		return "JPPO_Imm16"
+	case EX_PtrSP_HL:
+		return "EX_PtrSP_HL"
+	case CALLPO_Imm16:
+		return "CALLPO_Imm16"
+	case PUSH_HL:
+		return "PUSH_HL"
+	case AND_A_Imm8:
+		return "AND_A_Imm8"
+	case RST_0x20:
+		return "RST_0x20"
+
+	case RETPE:
+		return "RETPE"
+	case JP_PtrHL:
+		return "JP_PtrHL"
+	case JPPE_Imm16:
+		return "JPPE_Imm16"
+	case EX_DE_HL:
+		return "EX_DE_HL"
+	case CALLPE_Imm16:
+		return "CALLPE_Imm16"
+	case ED_Prefix:
+		return "ED_Prefix"
+	case XOR_A_Imm8:
+		return "XOR_A_Imm8"
+	case RST_0x28:
+		return "RST_0x28"
+
+	case RETP:
+		return "RETP " // Return is sign flag is not set that is, positive
+	case POP_AF:
+		return "POP_AF"
+	case JPP_Imm16:
+		return "JPP_Imm16"
+	case DI:
+		return "DI" // Disable interrupts
+	case CALLP_Imm16:
+		return "CALLP_Imm16"
+	case PUSH_AF:
+		return "PUSH_AF"
+	case OR_A_Imm8:
+		return "OR_A_Imm8"
+	case RST_0x30:
+		return "RST_0x30"
+
+	case RETM:
+		return "RETM"
+	case LD_SP_HL:
+		return "LD_SP_HL"
+	case JPM_Imm16:
+		return "JPM_Imm16"
+	case EI:
+		return "EI" // Enable interrupts
+	case CALLM_Imm16:
+		return "CALLM_Imm16"
+	case FD_Prefix:
+		return "FD_Prefix"
+	case CP_A_Imm8:
+		return "CP_A_Imm8"
+	case RST_0x38:
+		return "RST_0x38"
+	default:
+		return "instruction not possible"
+	}
+
+}
+
 /*
 A+	XOR B	4		XOR C	4		XOR D	    4		XOR E	4		    XOR H	4		XOR L	4		XOR (HL)	7		XOR A	4
 B-	OR B	4		OR C	4		OR D	    4		OR E	4		    OR H	4		OR L	4		OR (HL)	7		OR A	4
@@ -537,3 +1096,15 @@ func (opcode Opcode) SplitBitOpcode() (x BitOpcodeKind, y BitOpcodeBit, z Regist
 	z = RegisterIndex(0b00000111 & opcode)
 	return x, y, z
 }
+
+type ld_a struct{}
+
+func (ld_a) Imm8(b byte) []Opcode {
+	return []Opcode{LD_A_Imm8, Opcode(b)}
+}
+
+func (ld_a) B() Opcode {
+	return LD_A_B
+}
+
+var LD_A ld_a

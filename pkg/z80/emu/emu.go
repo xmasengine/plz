@@ -1,6 +1,7 @@
 package emu
 
 import "errors"
+import "log/slog"
 
 import "github.com/xmasengine/plz/pkg/z80/isa"
 
@@ -146,7 +147,7 @@ func (b *ByteIO) Output(port byte, val byte) {
 	b.Out[port] = append(b.Out[port], val)
 }
 
-func Program(program ...isa.Opcode) func(*CPU) {
+func Opcodes(program ...isa.Opcode) func(*CPU) {
 	return func(c *CPU) {
 		for i, op := range program {
 			c.Memory.Put(uint16(i), byte(op))
@@ -356,6 +357,7 @@ func (c *CPU) Step() error {
 	}
 
 	opcode := isa.Opcode(c.GetNext())
+	slog.Debug("CPU.Step", "opcode", opcode.String())
 	c.Wait = opcode.Wait()
 	switch opcode {
 	case isa.NOP:
