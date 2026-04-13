@@ -30,14 +30,15 @@ func helperTestOpcodes(t *testing.T, inPort, outPort int, in, expected string, o
 	cpu := NewCPU(program)
 	io := cpu.IO.(*ByteIO)
 	io.In[inPort] = []byte(in)
+	cpu.StepsUntilError = 10000
 
 	err := cpu.RunUntilHalted()
 	if err != nil {
 		t.Fatalf("Run failed: %s", err)
 	}
 	observed := string(io.Out[outPort])
-	if observed != expected {
-		t.Fatalf("Output not correct, expected %s, observed %s", expected, observed)
+	if expected != observed {
+		t.Fatalf("Output not correct, expected >%s<, observed >%s<: >%v<, >%v<", expected, observed, []byte(expected), []byte(observed))
 	}
 }
 
@@ -57,4 +58,19 @@ func TestEmuRunUntilHalted(t *testing.T) {
 		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
 		isa.LD_A_Imm8, isa.Opcode('D'), isa.OUT_Port_A, isa.Opcode(7),
 		isa.HALT)
+	helperTestOpcodes(t, 0, 7, "", "WORLD",
+		isa.JR_Disp, isa.Opcode(4*6+2),
+		isa.LD_A_Imm8, isa.Opcode('H'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('E'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('O'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode(' '), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('W'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('O'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('R'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.LD_A_Imm8, isa.Opcode('D'), isa.OUT_Port_A, isa.Opcode(7),
+		isa.HALT)
+	helperTestOpcodes(t, 0, 0, "", "", isa.NOP, isa.HALT)
 }

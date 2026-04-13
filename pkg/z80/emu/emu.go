@@ -112,6 +112,7 @@ type CPU struct {
 	Wait                     byte
 	PrefixCBBitInstructions  bool
 	PrefixEDMiscInstructions bool
+	StepsUntilError          int
 	Memory
 	IO
 }
@@ -341,6 +342,12 @@ func (c *CPU) RunUntilHalted() error {
 		err := c.Step()
 		if err != nil {
 			return err
+		}
+		if c.StepsUntilError > 0 {
+			c.StepsUntilError--
+			if c.StepsUntilError == 0 {
+				return errors.New("Program did not halt in the maximum amount of steps")
+			}
 		}
 	}
 	return nil
