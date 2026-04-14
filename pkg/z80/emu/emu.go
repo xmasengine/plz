@@ -148,10 +148,23 @@ func (b *ByteIO) Output(port byte, val byte) {
 	b.Out[port] = append(b.Out[port], val)
 }
 
-func Opcodes(program ...isa.Opcode) func(*CPU) {
+func Opcodes(ops ...isa.Opcode) func(*CPU) {
 	return func(c *CPU) {
-		for i, op := range program {
+		for i, op := range ops {
 			c.Memory.Put(uint16(i), byte(op))
+		}
+	}
+}
+
+func Instructions(ins ...isa.Instruction) func(*CPU) {
+	return func(c *CPU) {
+		addr := uint16(0)
+		for _, in := range ins {
+			by := in.Bytes()
+			for o, b := range by {
+				c.Memory.Put(addr+uint16(o), b)
+			}
+			addr += uint16(len(by))
 		}
 	}
 }

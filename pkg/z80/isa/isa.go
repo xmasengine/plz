@@ -1,5 +1,7 @@
 package isa
 
+import "strconv"
+
 const (
 	OpGroupLD = 0b00
 )
@@ -1097,14 +1099,33 @@ func (opcode Opcode) SplitBitOpcode() (x BitOpcodeKind, y BitOpcodeBit, z Regist
 	return x, y, z
 }
 
-type ld_a struct{}
-
-func (ld_a) Imm8(b byte) []Opcode {
-	return []Opcode{LD_A_Imm8, Opcode(b)}
+type Instruction interface {
+	String() string
+	Bytes() []byte
 }
 
-func (ld_a) B() Opcode {
-	return LD_A_B
+func (o Opcode) Bytes() []byte {
+	return []byte{byte(o)}
 }
 
-var LD_A ld_a
+type Imm8 uint8
+
+func (i Imm8) String() string {
+	return strconv.Itoa(int(i))
+}
+
+func (i Imm8) Bytes() []byte {
+	return []byte{byte(i)}
+}
+
+type Imm16 uint16
+
+func (i Imm16) String() string {
+	return strconv.Itoa(int(i))
+}
+
+func (i Imm16) Bytes() []byte {
+	l := uint8(i & 256)
+	h := uint8(i >> 6)
+	return []byte{l, h}
+}
