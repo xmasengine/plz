@@ -1129,3 +1129,79 @@ func (i Imm16) Bytes() []byte {
 	h := uint8(i >> 6)
 	return []byte{l, h}
 }
+
+// MiscOpcodes are the opcodes for modified operations after the ED prefix
+type MiscOpcode Opcode
+
+const (
+	IN_B_PtrBC      MiscOpcode = 0x40
+	OUT_PtrBC_B     MiscOpcode = 0x41
+	SBC_HL_BC       MiscOpcode = 0x42
+	SBC_PtrImm16_BC MiscOpcode = 0x43
+	NEG             MiscOpcode = 0x44
+	RETN            MiscOpcode = 0x45 // Return from NMI handler
+	IM0             MiscOpcode = 0x46 // Set interrupt mode to 0
+	LD_I_A          MiscOpcode = 0x47 // Load I register (used for IM2 or as a spare)
+
+	IN_C_PtrBC     MiscOpcode = 0x48
+	OUT_PtrBC_C    MiscOpcode = 0x49
+	ADC_HL_BC      MiscOpcode = 0x4a
+	LD_BC_PtrImm16 MiscOpcode = 0x4b
+
+	RETI   MiscOpcode = 0x4d // Return from interrupt handler
+	LD_R_A MiscOpcode = 0x4f // Load R register (used for memory refres, or more commonly as RNG)
+
+	IN_D_PtrBC     MiscOpcode = 0x50
+	OUT_PtrBC_D    MiscOpcode = 0x51
+	SBC_HL_DE      MiscOpcode = 0x52
+	LD_PtrImm16_DE MiscOpcode = 0x53
+	IM1            MiscOpcode = 0x56 // Set interrupt mode to 1
+	LD_A_I         MiscOpcode = 0x57 // Load from I register (used for IM2 or as a spare)
+
+	IN_E_PtrBC     MiscOpcode = 0x58
+	OUT_PtrBC_E    MiscOpcode = 0x59
+	ADC_HL_DE      MiscOpcode = 0x5a
+	LD_DE_PtrImm16 MiscOpcode = 0x5b
+
+	IM2    MiscOpcode = 0x5e // Set interrupt mode to 2
+	LD_A_R MiscOpcode = 0x5f // Load R register (used for memory refres, or more commonly as RNG)
+
+	IN_H_PtrBC       MiscOpcode = 0x60
+	OUT_PtrBC_H      MiscOpcode = 0x61
+	SBC_HL_HL        MiscOpcode = 0x62
+	LD_PtrImm16_HL_2 MiscOpcode = 0x63 // Undocumented
+	RRD              MiscOpcode = 0x67 // Rotate Right Decimal
+	IN_L_PtrBC       MiscOpcode = 0x68
+	OUT_PtrBC_L      MiscOpcode = 0x69
+	ADC_HL_HL        MiscOpcode = 0x6a
+	LD_HL_PtrImm16_2 MiscOpcode = 0x6b
+	RLD              MiscOpcode = 0x6f // Rotate Left Decimal
+
+	IN_PtrBC       MiscOpcode = 0x70 // undocumented and not very useful
+	OUT_PtrBC_0    MiscOpcode = 0x71 // undocumented and not very useful
+	SBC_HL_SP      MiscOpcode = 0x72
+	LD_PtrImm16_SP MiscOpcode = 0x73
+
+	IN_A_PtrBC     MiscOpcode = 0x78
+	OUT_PtrBC_A    MiscOpcode = 0x79
+	ADC_HL_SP      MiscOpcode = 0x7a
+	LD_SP_PtrImm16 MiscOpcode = 0x7b
+
+	LDI  MiscOpcode = 0xa0
+	CPI  MiscOpcode = 0xa1
+	INI  MiscOpcode = 0xa2
+	OUTI MiscOpcode = 0xa3
+	LDD  MiscOpcode = 0xa8
+	CPD  MiscOpcode = 0xa9
+	IND  MiscOpcode = 0xaa
+	OUTD MiscOpcode = 0xab
+
+	LDIR MiscOpcode = 0xb0
+	CPIR MiscOpcode = 0xb1
+	INIR MiscOpcode = 0xb2
+	OTIR MiscOpcode = 0xb3
+	LDDR MiscOpcode = 0xb8
+	CPDR MiscOpcode = 0xb9
+	INDR MiscOpcode = 0xba
+	OTDR MiscOpcode = 0xbb
+)
