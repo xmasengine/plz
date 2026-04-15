@@ -29,6 +29,16 @@ func AssembleBinary(rd io.Reader) []isa.Opcode {
 						break
 					}
 				}
+				for j := int(isa.IN_B_PtrBC); j < int(isa.OTDR); j++ {
+					o := isa.MiscOpcode(j)
+					if o.String() == ident {
+						res = append(res, isa.ED_Prefix)
+						res = append(res, isa.Opcode(o))
+						instruction = true
+						break
+					}
+				}
+
 				if !instruction {
 					if defLabel {
 						defLabel = false

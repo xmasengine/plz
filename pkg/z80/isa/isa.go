@@ -1205,3 +1205,140 @@ const (
 	INDR MiscOpcode = 0xba
 	OTDR MiscOpcode = 0xbb
 )
+
+func (m MiscOpcode) String() string {
+	switch m {
+	case IN_B_PtrBC:
+		return "IN_B_PtrBC"
+	case OUT_PtrBC_B:
+		return "OUT_PtrBC_B"
+	case SBC_HL_BC:
+		return "SBC_HL_BC"
+	case SBC_PtrImm16_BC:
+		return "SBC_PtrImm16_BC"
+	case NEG:
+		return "NEG"
+	case RETN:
+		return "RETN"
+	case IM0:
+		return "IM0"
+	case LD_I_A:
+		return "LD_I_A"
+
+	case IN_C_PtrBC:
+		return "IN_C_PtrBC"
+	case OUT_PtrBC_C:
+		return "OUT_PtrBC_C"
+	case ADC_HL_BC:
+		return "ADC_HL_BC"
+	case LD_BC_PtrImm16:
+		return "LD_BC_PtrImm16"
+
+	case RETI:
+		return "RETI"
+	case LD_R_A:
+		return "LD_R_A"
+
+	case IN_D_PtrBC:
+		return "IN_D_PtrBC"
+	case OUT_PtrBC_D:
+		return "OUT_PtrBC_D"
+	case SBC_HL_DE:
+		return "SBC_HL_DE"
+	case LD_PtrImm16_DE:
+		return "LD_PtrImm16_DE"
+	case IM1:
+		return "IM1"
+	case LD_A_I:
+		return "LD_A_I"
+
+	case IN_E_PtrBC:
+		return "IN_E_PtrBC"
+	case OUT_PtrBC_E:
+		return "OUT_PtrBC_E"
+	case ADC_HL_DE:
+		return "ADC_HL_DE"
+	case LD_DE_PtrImm16:
+		return "LD_DE_PtrImm16"
+
+	case IM2:
+		return "IM2"
+	case LD_A_R:
+		return "LD_A_R"
+
+	case IN_H_PtrBC:
+		return "IN_H_PtrBC"
+	case OUT_PtrBC_H:
+		return "OUT_PtrBC_H"
+	case SBC_HL_HL:
+		return "SBC_HL_HL"
+	case LD_PtrImm16_HL_2:
+		return "LD_PtrImm16_HL_2"
+	case RRD:
+		return "RRD"
+	case IN_L_PtrBC:
+		return "IN_L_PtrBC"
+	case OUT_PtrBC_L:
+		return "OUT_PtrBC_L"
+	case ADC_HL_HL:
+		return "ADC_HL_HL"
+	case LD_HL_PtrImm16_2:
+		return "LD_HL_PtrImm16_2"
+	case RLD:
+		return "RLD"
+
+	case IN_PtrBC:
+		return "IN_PtrBC"
+	case OUT_PtrBC_0:
+		return "OUT_PtrBC_0"
+	case SBC_HL_SP:
+		return "SBC_HL_SP"
+	case LD_PtrImm16_SP:
+		return "LD_PtrImm16_SP"
+
+	case IN_A_PtrBC:
+		return "IN_A_PtrBC"
+	case OUT_PtrBC_A:
+		return "OUT_PtrBC_A"
+	case ADC_HL_SP:
+		return "ADC_HL_SP"
+	case LD_SP_PtrImm16:
+		return "LD_SP_PtrImm16"
+
+	case LDI:
+		return "LDI"
+	case CPI:
+		return "CPI"
+	case INI:
+		return "INI"
+	case OUTI:
+		return "OUTI"
+	case LDD:
+		return "LDD"
+	case CPD:
+		return "CPD"
+	case IND:
+		return "IND"
+	case OUTD:
+		return "OUTD"
+
+	case LDIR:
+		return "LDIR"
+	case CPIR:
+		return "CPIR"
+	case INIR:
+		return "INIR"
+	case OTIR:
+		return "OTIR"
+	case LDDR:
+		return "LDDR"
+	case CPDR:
+		return "CPDR"
+	case INDR:
+		return "INDR"
+	case OTDR:
+		return "OTDR"
+	default:
+		return "" // possible as not all 256 possible values are defined.
+	}
+}
