@@ -77,13 +77,14 @@ type ImmediateWord uint16
 type Flag uint8
 
 const (
-	FlagSign      Flag = 1 << 7
-	FlagZero      Flag = 1 << 6
-	FlagHalfCarry Flag = 1 << 4
-	FlagParity    Flag = 1 << 2
-	FlagNegative  Flag = 1 << 1
 	FlagCarry     Flag = 1 << 0
+	FlagSubstract Flag = 1 << 1
+	FlagParity    Flag = 1 << 2
+	FlagHalfCarry Flag = 1 << 4
+	FlagZero      Flag = 1 << 6
+	FlagSign      Flag = 1 << 7
 	FlagOverflow       = FlagParity
+	FlagNegative       = FlagSubstract
 )
 
 func (f *Flag) SetFlag(bit Flag) Flag {
@@ -1134,14 +1135,14 @@ func (i Imm16) Bytes() []byte {
 type MiscOpcode Opcode
 
 const (
-	IN_B_PtrBC      MiscOpcode = 0x40
-	OUT_PtrBC_B     MiscOpcode = 0x41
-	SBC_HL_BC       MiscOpcode = 0x42
-	SBC_PtrImm16_BC MiscOpcode = 0x43
-	NEG             MiscOpcode = 0x44
-	RETN            MiscOpcode = 0x45 // Return from NMI handler
-	IM0             MiscOpcode = 0x46 // Set interrupt mode to 0
-	LD_I_A          MiscOpcode = 0x47 // Load I register (used for IM2 or as a spare)
+	IN_B_PtrBC     MiscOpcode = 0x40
+	OUT_PtrBC_B    MiscOpcode = 0x41
+	SBC_HL_BC      MiscOpcode = 0x42
+	LD_PtrImm16_BC MiscOpcode = 0x43
+	NEG            MiscOpcode = 0x44
+	RETN           MiscOpcode = 0x45 // Return from NMI handler
+	IM0            MiscOpcode = 0x46 // Set interrupt mode to 0
+	LD_I_A         MiscOpcode = 0x47 // Load I register (used for IM2 or as a spare)
 
 	IN_C_PtrBC     MiscOpcode = 0x48
 	OUT_PtrBC_C    MiscOpcode = 0x49
@@ -1214,8 +1215,8 @@ func (m MiscOpcode) String() string {
 		return "OUT_PtrBC_B"
 	case SBC_HL_BC:
 		return "SBC_HL_BC"
-	case SBC_PtrImm16_BC:
-		return "SBC_PtrImm16_BC"
+	case LD_PtrImm16_BC:
+		return "LD_PtrImm16_BC"
 	case NEG:
 		return "NEG"
 	case RETN:

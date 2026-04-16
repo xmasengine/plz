@@ -1,5 +1,6 @@
 package emu
 
+import "math/rand/v2"
 import "errors"
 import "log/slog"
 
@@ -14,11 +15,21 @@ type Registers struct {
 	F     isa.Flag
 	H     byte
 	L     byte
+	I     byte // interrupt register
 	UseIX bool
 	UseIY bool
 	IX    uint16
 	IY    uint16
 	Disp  int16
+}
+
+func (r *Registers) SetR(v uint8) {
+	// do nothing
+}
+
+func (r *Registers) R() uint8 {
+	// use it as an RNG
+	return uint8(rand.IntN(255))
 }
 
 func (r *Registers) SetBC(v uint16) {
@@ -106,6 +117,7 @@ type CPU struct {
 	Halted                   bool
 	IFF1                     bool
 	IFF2                     bool
+	IM                       byte
 	Interrupt                chan byte
 	NMI                      chan struct{}
 	Clock                    chan struct{}
@@ -115,6 +127,45 @@ type CPU struct {
 	StepsUntilError          int
 	Memory
 	IO
+}
+
+// flag lookup array.
+var flagLookup [256]isa.Flag
+
+func assert(b bool, msg string) {
+	if !b {
+		panic(msg)
+	}
+}
+
+func init() {
+	assert(byte(isa.FlagZero) == 0x40, "FlagZero")
+	assert(byte(isa.FlagSign) == 0x80, "FlagSign")
+	assert(byte(isa.FlagParity) == 0x04, "FlagParity")
+
+	for i := 0; i < 256; i++ {
+		var f byte
+		if i == 0 {
+			f |= 0x40 // Zero (Z) flag
+		}
+		if i&0x80 != 0 {
+			f |= 0x80 // Sign (S) flag
+		}
+		// Parity (P/V): even number of 1 bits
+		if parity(i) {
+			f |= 0x04 // P/V flag
+		}
+		flagLookup[i] = isa.Flag(f)
+	}
+}
+
+func parity(b int) bool {
+	p := 0
+	for b != 0 {
+		p ^= b & 1
+		b >>= 1
+	}
+	return p == 0
 }
 
 type cpuOption func(*CPU)
@@ -350,6 +401,41 @@ func (c *CPU) in(port uint8) uint8 {
 	return c.IO.Input(port)
 }
 
+// daa implementd decimal arithmetic adjust for 8 bits BCD.
+func (c *CPU) daa() {
+	a := c.A
+	cb := c.F.IsFlag(isa.FlagCarry)
+	hb := c.F.IsFlag(isa.FlagHalfCarry)
+	nb := c.F.IsFlag(isa.FlagSubstract)
+
+	adjust := 0
+	carry := false
+
+	if !nb { // Addition
+		if hb || (a&0x0F) > 9 {
+			adjust += 0x06
+		}
+		if cb || a > 0x99 {
+			adjust += 0x60
+			carry = true
+		}
+	} else { // Subtraction
+		if hb || (a&0x0F) > 9 {
+			adjust -= 0x06
+		}
+		if cb || a > 0x99 {
+			adjust -= 0x60
+			carry = true
+		}
+	}
+
+	a += uint8(adjust)
+	c.F = (c.F & (isa.FlagParity | isa.FlagSign)) | flagLookup[a]
+	if carry {
+		c.F = c.F | isa.FlagCarry
+	}
+}
+
 func (c *CPU) RunUntilHalted() error {
 	for !c.Halted {
 		err := c.Step()
@@ -371,9 +457,14 @@ func (c *CPU) Step() error {
 		c.Disp = c.GetDisp()
 	}
 
-	if c.PrefixCBBitInstructions || c.PrefixEDMiscInstructions {
-		// TODO, prefixed instructions
-		return InstructionNotImplemented
+	if c.PrefixEDMiscInstructions {
+		misc := isa.MiscOpcode(c.GetNext())
+		return c.StepMiscOpcode(misc)
+	}
+
+	if c.PrefixCBBitInstructions {
+		bins := isa.Opcode(c.GetNext())
+		return c.bitInstruction(bins)
 	}
 
 	opcode := isa.Opcode(c.GetNext())
@@ -519,9 +610,7 @@ func (c *CPU) Step() error {
 	case isa.LD_H_Imm8:
 		c.D = c.GetImm8()
 	case isa.DAA:
-		// Not sure what DAA is supposed to do.
-		return InstructionNotImplemented
-
+		c.daa() // decimal arthmetic adjust
 	case isa.JRZ_Disp:
 		if c.F.IsFlag(isa.FlagZero) {
 			c.jr()
@@ -1256,5 +1345,405 @@ func (c *CPU) bitInstructionClear(bit uint8, reg isa.RegisterIndex) error {
 	v := (getter() & ^flag)
 	setter(v)
 
+	return nil
+}
+
+func (c *CPU) sbcHL(value uint16) {
+	// TODO: set flags correctly
+
+	c.SetHL(c.HL() - value)
+	if c.F.IsFlag(isa.FlagCarry) {
+		c.SetHL(c.HL() - 1)
+		c.F.ClearFlag(isa.FlagCarry)
+	}
+}
+
+func (c *CPU) adcHL(value uint16) {
+	// TODO: set flags correctly
+
+	c.SetHL(c.HL() + value)
+	if c.F.IsFlag(isa.FlagCarry) {
+		c.SetHL(c.HL() + 1)
+		c.F.ClearFlag(isa.FlagCarry)
+	}
+}
+
+func (c *CPU) rld() {
+	val := c.PtrHL()
+	a := c.A
+
+	// Save lower nibble of A
+	lowerA := a & 0x0F
+	// Move lower nibble of (HL) to upper nibble of A
+	c.A = (a & 0xF0) | (val & 0x0F)
+	// Combine original upper nibble of (HL) with lowerA
+	c.SetPtrHL((val >> 4) | (lowerA << 4))
+
+	// Update flags: Z, S, P/V, H, N affected
+	c.F = c.F&0x01 | flagLookup[c.A] | isa.FlagHalfCarry | isa.FlagNegative
+}
+
+func (c *CPU) rrd() {
+	val := c.PtrHL()
+	a := c.A
+
+	// Save lower nibble of A
+	lowerA := a & 0x0F
+	// Move upper nibble of (HL) to lower nibble of A
+	c.A = (a & 0xF0) | (val >> 4)
+	// Combine lowerA with lower nibble of (HL) in upper part
+	c.SetPtrHL((val << 4) | lowerA)
+
+	// Update flags
+	c.F = c.F&0x01 | flagLookup[c.A] | isa.FlagHalfCarry | isa.FlagNegative
+}
+
+func (c *CPU) ldi() {
+	// Read byte from (HL), write to (DE)
+	val := c.Ptr(c.HL())
+	c.SetPtr(c.DE(), val)
+
+	// Increment HL and DE
+	c.SetHL(c.HL() + 1)
+	c.SetDE(c.DE() + 1)
+
+	// Decrement BC
+	c.SetBC(c.BC() - 1)
+
+	// Set flags: N=0, H=0, P/V = (BC != 0), Z unaffected, S unaffected
+	flags := c.F & (isa.FlagZero | isa.FlagSign) // Preserve S and Z
+	if c.BC() != 0 {
+		flags |= isa.FlagParity
+	}
+	c.F = flags
+}
+
+func (c *CPU) ldd() {
+	// Read byte from (HL), write to (DE)
+	val := c.Ptr(c.HL())
+	c.SetPtr(c.DE(), val)
+
+	// Decrement HL and DE
+	c.SetHL(c.HL() - 1)
+	c.SetDE(c.DE() - 1)
+
+	// Decrement BC
+	c.SetBC(c.BC() - 1)
+
+	// Set flags: N=0, H=0, P/V = (BC != 0), Z unaffected, S unaffected
+	flags := c.F & (isa.FlagZero | isa.FlagSign) // Preserve S and Z
+	if c.BC() != 0 {
+		flags |= isa.FlagParity
+	}
+	c.F = flags
+}
+
+func (c *CPU) cpi() {
+	val := c.Ptr(c.HL())
+	res := c.A - val
+
+	// Update flags
+	flags := c.F & isa.FlagCarry
+	flags |= isa.FlagSubstract
+	if res == 0 {
+		flags |= isa.FlagZero
+	}
+	if (c.A & 0x0F) < (val & 0x0F) {
+		flags |= isa.FlagHalfCarry
+	}
+
+	if c.BC() != 0 {
+		flags |= isa.FlagParity
+	}
+
+	c.SetHL(c.HL() + 1)
+	c.SetBC(c.BC() - 1)
+	c.F = flags
+}
+
+func (c *CPU) cpd() {
+	val := c.Ptr(c.HL())
+	res := c.A - val
+
+	// Update flags
+	flags := c.F & isa.FlagCarry
+	flags |= isa.FlagSubstract
+	if res == 0 {
+		flags |= isa.FlagZero
+	}
+	if (c.A & 0x0F) < (val & 0x0F) {
+		flags |= isa.FlagHalfCarry
+	}
+
+	if c.BC() != 0 {
+		flags |= isa.FlagParity
+	}
+
+	c.SetHL(c.HL() - 1)
+	c.SetBC(c.BC() - 1)
+	c.F = flags
+}
+
+func (c *CPU) ini() {
+	val := c.in(c.C) // Read from port C
+	hl := c.HL()
+	c.SetPtr(hl, val) // Write to (HL)
+	c.SetHL(hl + 1)   // Increment HL
+	b := c.B - 1
+	c.B = b // Decrement B
+
+	// Set flags
+	flags := c.F & isa.FlagCarry // Preserve Carry
+	flags |= isa.FlagSubstract   // Subtract flag set
+	if val&0x80 != 0 {
+		flags |= isa.FlagSign // Sign = bit 7
+	}
+	if val == 0 {
+		flags |= isa.FlagZero // Zero
+	}
+	if parity(int(b)) {
+		flags |= isa.FlagParity // P/V = parity of B
+	}
+	c.F = flags
+}
+
+func (c *CPU) ind() {
+	val := c.in(c.C) // Read from port C
+	hl := c.HL()
+	c.SetPtr(hl, val) // Write to (HL)
+	c.SetHL(hl - 1)   // Decrement HL
+	b := c.B - 1
+	c.B = b // Decrement B
+
+	// Set flags
+	flags := c.F & isa.FlagCarry // Preserve Carry
+	flags |= isa.FlagSubstract   // Subtract flag set
+	if val&0x80 != 0 {
+		flags |= isa.FlagSign // Sign = bit 7
+	}
+	if val == 0 {
+		flags |= isa.FlagZero // Zero
+	}
+	if parity(int(b)) {
+		flags |= isa.FlagParity // P/V = parity of B
+	}
+	c.F = flags
+}
+
+func (c *CPU) outi() {
+	val := c.Ptr(c.HL()) // Read from (HL)
+	b := c.B
+	c.out(c.C, val)     // Output to port C
+	c.SetHL(c.HL() + 1) // Increment HL
+	c.B = b - 1         // Decrement B
+
+	// Set flags
+	flags := c.F & isa.FlagCarry // Preserve Carry
+	flags |= isa.FlagSubstract   // Subtract flag set
+	if val&0x80 != 0 {
+		flags |= isa.FlagSign // Sign = bit 7
+	}
+	if val == 0 {
+		flags |= isa.FlagZero // Zero
+	}
+	if parity(int(b - 1)) {
+		flags |= isa.FlagParity // P/V = parity of B-1
+	}
+	c.F = flags
+}
+
+func (c *CPU) outd() {
+	val := c.Ptr(c.HL()) // Read from (HL)
+	b := c.B
+	c.out(c.C, val)     // Output to port C
+	c.SetHL(c.HL() - 1) // Decrement HL
+	c.B = b - 1         // Decrement B
+
+	// Set flags
+	flags := c.F & isa.FlagCarry // Preserve Carry
+	flags |= isa.FlagSubstract   // Subtract flag set
+	if val&0x80 != 0 {
+		flags |= isa.FlagSign // Sign = bit 7
+	}
+	if val == 0 {
+		flags |= isa.FlagZero // Zero
+	}
+	if parity(int(b - 1)) {
+		flags |= isa.FlagParity // P/V = parity of B-1
+	}
+	c.F = flags
+}
+
+func (c *CPU) repnz() {
+	// repeat if the zero flag is not set for the "block" instrctions.
+	if !c.F.IsFlag(isa.FlagZero) {
+		c.IP -= 2 // Jump back to repeat.
+	}
+}
+
+func (c *CPU) StepMiscOpcode(m isa.MiscOpcode) error {
+	switch m {
+	case isa.IN_B_PtrBC:
+		port := c.Ptr(c.BC())
+		c.B = c.in(port)
+	case isa.OUT_PtrBC_B:
+		port := c.Ptr(c.BC())
+		c.out(port, c.B)
+	case isa.SBC_HL_BC:
+		c.sbcHL(c.BC())
+	case isa.LD_PtrImm16_BC:
+		addr := c.GetImm16()
+		c.SetPtr16(addr, c.BC())
+	case isa.NEG:
+		c.A = uint8(int8(-c.A))
+	case isa.RETN:
+		c.IFF1 = c.IFF2
+		c.ret()
+	case isa.IM0:
+		c.IM = 0
+	case isa.LD_I_A:
+		c.I = c.A
+
+	case isa.IN_C_PtrBC:
+		port := c.Ptr(c.BC())
+		c.C = c.in(port)
+	case isa.OUT_PtrBC_C:
+		port := c.Ptr(c.BC())
+		c.out(port, c.C)
+	case isa.ADC_HL_BC:
+		c.adcHL(c.BC())
+	case isa.LD_BC_PtrImm16:
+		addr := c.GetImm16()
+		c.SetBC(c.GetPtr16(addr))
+	case isa.RETI:
+		c.ret()
+	case isa.LD_R_A:
+		c.SetR(c.A)
+
+	case isa.IN_D_PtrBC:
+		port := c.Ptr(c.BC())
+		c.D = c.in(port)
+	case isa.OUT_PtrBC_D:
+		port := c.Ptr(c.BC())
+		c.out(port, c.D)
+	case isa.SBC_HL_DE:
+		c.sbcHL(c.DE())
+	case isa.LD_PtrImm16_DE:
+		addr := c.GetImm16()
+		c.SetPtr16(addr, c.DE())
+	case isa.IM1:
+		c.IM = 1
+	case isa.LD_A_I:
+		c.A = c.I
+
+	case isa.IN_E_PtrBC:
+		port := c.Ptr(c.BC())
+		c.E = c.in(port)
+	case isa.OUT_PtrBC_E:
+		port := c.Ptr(c.BC())
+		c.out(port, c.E)
+	case isa.ADC_HL_DE:
+		c.adcHL(c.DE())
+	case isa.LD_DE_PtrImm16:
+		addr := c.GetImm16()
+		c.SetDE(c.GetPtr16(addr))
+	case isa.IM2:
+		c.IM = 2
+	case isa.LD_A_R:
+		c.A = c.R()
+
+	case isa.IN_H_PtrBC:
+		port := c.Ptr(c.BC())
+		c.H = c.in(port)
+
+	case isa.OUT_PtrBC_H:
+		port := c.Ptr(c.BC())
+		c.out(port, c.H)
+	case isa.SBC_HL_HL:
+		c.sbcHL(c.HL())
+	case isa.LD_PtrImm16_HL_2:
+		addr := c.GetImm16()
+		c.SetPtr16(addr, c.HL())
+	case isa.RRD:
+		c.rrd()
+	case isa.IN_L_PtrBC:
+		port := c.Ptr(c.BC())
+		c.L = c.in(port)
+	case isa.OUT_PtrBC_L:
+		port := c.Ptr(c.BC())
+		c.out(port, c.L)
+	case isa.ADC_HL_HL:
+		c.adcHL(c.HL())
+	case isa.LD_HL_PtrImm16_2:
+		addr := c.GetImm16()
+		c.SetHL(c.GetPtr16(addr))
+	case isa.RLD:
+		c.rld()
+	case isa.IN_PtrBC:
+		port := c.Ptr(c.BC())
+		c.B = c.in(port)
+	case isa.OUT_PtrBC_0:
+		port := c.Ptr(c.BC())
+		c.out(port, 0)
+	case isa.SBC_HL_SP:
+		c.sbcHL(c.SP)
+	case isa.LD_PtrImm16_SP:
+		addr := c.GetImm16()
+		c.SetPtr16(addr, c.SP)
+	case isa.IN_A_PtrBC:
+		port := c.Ptr(c.BC())
+		c.A = c.in(port)
+	case isa.OUT_PtrBC_A:
+		port := c.Ptr(c.BC())
+		c.out(port, c.A)
+	case isa.ADC_HL_SP:
+		c.adcHL(c.SP)
+	case isa.LD_SP_PtrImm16:
+		addr := c.GetImm16()
+		c.SP = c.GetPtr16(addr)
+
+	case isa.LDI:
+		c.ldi()
+	case isa.CPI:
+		c.cpi()
+	case isa.INI:
+		c.ini()
+	case isa.OUTI:
+		c.outi()
+	case isa.LDD:
+		c.ldd()
+	case isa.CPD:
+		c.cpd()
+	case isa.IND:
+		c.ind()
+	case isa.OUTD:
+		c.outd()
+	case isa.LDIR:
+		c.ldi()
+		c.repnz()
+	case isa.CPIR:
+		c.cpi()
+		c.repnz()
+	case isa.INIR:
+		c.ini()
+		c.repnz()
+	case isa.OTIR:
+		c.outi()
+		c.repnz()
+	case isa.LDDR:
+		c.ldd()
+		c.repnz()
+	case isa.CPDR:
+		c.cpd()
+		c.repnz()
+	case isa.INDR:
+		c.ind()
+		c.repnz()
+	case isa.OTDR:
+		c.outd()
+		c.repnz()
+	default:
+		return InstructionNotCorrect
+	}
 	return nil
 }
