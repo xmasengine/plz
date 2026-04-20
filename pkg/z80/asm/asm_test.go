@@ -10,8 +10,14 @@ import "time"
 func helperTestProgram(t *testing.T, inPort, outPort int, in, expected string, program string) {
 	t.Helper()
 	rd := strings.NewReader(program)
-	opcodes := AssembleBinary(rd)
+	opcodes, err := AssembleBinary(rd)
 	t.Logf("opcodes: %v", opcodes)
+	if err != nil {
+		if err.Error() != expected {
+			t.Fatalf("unexpected error: %s expecetd %s", err, expected)
+		}
+		return
+	}
 
 	cpu := emu.NewCPU(emu.Opcodes(opcodes...))
 	io := cpu.IO.(*emu.ByteIO)
@@ -19,7 +25,7 @@ func helperTestProgram(t *testing.T, inPort, outPort int, in, expected string, p
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second*10)
 	defer cancel()
 
-	err := cpu.Run(ctx)
+	err = cpu.Run(ctx)
 	if err != nil {
 		t.Fatalf("Run failed: %s", err)
 	}
@@ -90,6 +96,29 @@ func TestEmuRunUntilHalted(t *testing.T) {
 		RET
 		:start
 		CALL_Imm16 hello
+		HALT
+	`)
+	helperTestProgram(t, 0, 7, "", "error: undefined reference to start",
+		`JP_Imm16 start
+		:hello
+		LD_A_Imm8 'H' OUT_Port_A 7
+		LD_A_Imm8 'E' OUT_Port_A 7
+		LD_A_Imm8 'L' OUT_Port_A 7
+		LD_A_Imm8 'L' OUT_Port_A 7
+		LD_A_Imm8 'O' OUT_Port_A 7
+		RET
+		:startee_not_defined
+		CALL_Imm16 hello
+		HALT
+	`)
+	helperTestProgram(t, 0, 7, "", "+",
+		`XOR_A_A
+		SET_1_A
+		BIT_1_A
+		JPNZ_Imm16 ok
+		HALT
+		:ok
+		LD_A_Imm8 '+' OUT_Port_A 7
 		HALT
 	`)
 }

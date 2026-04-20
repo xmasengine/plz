@@ -8,7 +8,15 @@ import "text/scanner"
 
 import "github.com/xmasengine/plz/pkg/z80/isa"
 
-func AssembleBinary(rd io.Reader) []isa.Opcode {
+// Error is a type for assembler errors.
+type Error string
+
+// Error implements the error interface.
+func (e Error) Error() string {
+	return string(e)
+}
+
+func AssembleBinary(rd io.Reader) ([]isa.Opcode, error) {
 	scan := (&scanner.Scanner{}).Init(rd)
 	res := []isa.Opcode{}
 	labels := map[string]int{}
@@ -33,6 +41,17 @@ func AssembleBinary(rd io.Reader) []isa.Opcode {
 					o := isa.MiscOpcode(j)
 					if o.String() == ident {
 						res = append(res, isa.ED_Prefix)
+						res = append(res, isa.Opcode(o))
+						instruction = true
+						break
+					}
+				}
+
+				for k := 0; k < 255; k++ {
+					o := isa.BitOpcode(k)
+					if o.String() == ident {
+						println("Bit opcode", o.String())
+						res = append(res, isa.CB_Prefix)
 						res = append(res, isa.Opcode(o))
 						instruction = true
 						break
@@ -91,8 +110,8 @@ func AssembleBinary(rd io.Reader) []isa.Opcode {
 			res[at] = isa.Opcode(ptr & 255)
 			res[at+1] = isa.Opcode(ptr >> 8)
 		} else {
-			println("error: undefined reference to ", v)
+			return nil, Error("error: undefined reference to " + v)
 		}
 	}
-	return res
+	return res, nil
 }
