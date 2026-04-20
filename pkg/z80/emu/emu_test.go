@@ -3,18 +3,11 @@ package emu
 import "github.com/xmasengine/plz/pkg/z80/isa"
 
 import "testing"
+import "context"
+import "time"
 
 func TestNewCPU(t *testing.T) {
 	cpu := NewCPU()
-	if cpu.Interrupt == nil {
-		t.Fatalf("Interrupt is nil")
-	}
-	if cpu.NMI == nil {
-		t.Fatalf("NMI is nil")
-	}
-	if cpu.Clock == nil {
-		t.Fatalf("Clock is nil")
-	}
 	if lm, ok := cpu.Memory.(*LinearMemory); !ok || lm == nil {
 		t.Fatalf("Memory is nil or not linear memory")
 	}
@@ -29,14 +22,14 @@ func helperTestOpcodes(t *testing.T, inPort, outPort int, in, expected string, o
 	program := Opcodes(op...)
 	cpu := NewCPU(program)
 	io := cpu.IO.(*ByteIO)
-	io.In[inPort] = []byte(in)
-	cpu.StepsUntilError = 10000
-
-	err := cpu.RunUntilHalted()
+	io.InBytes[inPort] = []byte(in)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second*10)
+	defer cancel()
+	err := cpu.Run(ctx)
 	if err != nil {
 		t.Fatalf("Run failed: %s", err)
 	}
-	observed := string(io.Out[outPort])
+	observed := string(io.OutBytes[outPort])
 	if expected != observed {
 		t.Fatalf("Output not correct, expected >%s<, observed >%s<: >%v<, >%v<", expected, observed, []byte(expected), []byte(observed))
 	}
@@ -59,7 +52,7 @@ func TestEmuRunUntilHalted(t *testing.T) {
 		isa.LD_A_Imm8, isa.Opcode('D'), isa.OUT_Port_A, isa.Opcode(7),
 		isa.HALT)
 	helperTestOpcodes(t, 0, 7, "", "WORLD",
-		isa.JR_Disp, isa.Opcode(4*6+2),
+		isa.JR_Disp, isa.Opcode(4*6),
 		isa.LD_A_Imm8, isa.Opcode('H'), isa.OUT_Port_A, isa.Opcode(7),
 		isa.LD_A_Imm8, isa.Opcode('E'), isa.OUT_Port_A, isa.Opcode(7),
 		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
