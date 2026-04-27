@@ -3,6 +3,7 @@
 package asm
 
 import "io"
+import "os"
 import "strconv"
 import "text/scanner"
 
@@ -106,7 +107,7 @@ func AssembleBinary(rd io.Reader) ([]isa.Opcode, error) {
 		println("ref", at, v)
 		ptr, ok := labels[v]
 		if ok {
-			println("update reference", v, at, ptr)
+			println("updated reference", v, at, ptr)
 			res[at] = isa.Opcode(ptr & 255)
 			res[at+1] = isa.Opcode(ptr >> 8)
 		} else {
@@ -114,4 +115,33 @@ func AssembleBinary(rd io.Reader) ([]isa.Opcode, error) {
 		}
 	}
 	return res, nil
+}
+
+func AssembleFile(output string, sources []string) error {
+	bins := []isa.Opcode{}
+	fout, err := os.Create(output)
+	if err != nil {
+		return err
+	}
+	defer fout.Close()
+
+	for _, source := range sources {
+		fin, err := os.Open(source)
+		if err != nil {
+			return err
+		}
+		defer fin.Close()
+		bin, err := AssembleBinary(fin)
+		if err != nil {
+			return err
+		}
+		bins = append(bins, bin...)
+	}
+	for _, op := range bins {
+		_, err = fout.Write(op.Bytes())
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

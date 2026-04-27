@@ -48,7 +48,7 @@ type OpInfo struct {
 	OpCode []string
 }
 
-type OpCodeFunc func(operands ... byte) []byte
+type OpCodeFunc func(asm Asm) error
 
 var Ops = []OpInfo {
 

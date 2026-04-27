@@ -43,12 +43,13 @@ var opmap = map[string]string{
 	"IX":     "OpRegIX",
 	"IY":     "OpRegIY",
 	"L":      "OpRegL",
-	"M":      "OpFlag",
-	"N":      "OpFlag",
+	"CA":     "OpFlag",
+	"MI":     "OpFlag",
+	"N":      "OpImm8",
 	"NC":     "OpFlag",
 	"NN":     "OpImm16",
 	"NZ":     "OpFlag",
-	"P":      "OpFlag",
+	"PL":     "OpFlag",
 	"PE":     "OpFlag",
 	"PO":     "OpFlag",
 	"R":      "OpRegR",
@@ -63,7 +64,34 @@ const header = `
 //line cmd/gensym/gensym.go:63
 package asm
 
-type OpOperand int
+type OpOperand interface {
+	op()
+}
+
+type OpRegPair byte
+
+func (o OpRegPair) op {}
+const (
+	OpBC     OpRegPair = iota + 1
+	OpDE
+	OpHL
+	OpIX
+	OpIY
+)
+
+type OpReg
+func (o OpReg) op {}
+const (
+	OpB     OpReg = iota +
+	OpC
+	OpD
+	OpE
+	OpH
+	OpL
+	OpL
+)
+
+
 
 const (
 	OpPtrBC     OpOperand = (1<<17+iota)
@@ -109,7 +137,7 @@ type OpInfo struct {
 	OpCode []string
 }
 
-type OpCodeFunc func(operands ... byte) []byte
+type OpCodeFunc func(asm Asm) error
 
 var Ops = []OpInfo {
 

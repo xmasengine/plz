@@ -117,19 +117,19 @@ JP NN          3  C3 XX XX        10     ------  PC=NN
 JP (HL)        1  E9               4     ------  PC=HL
 JP (IX)        2  DD E9            8     ------  PC=IX
 JP (IY)        2  FD E9            8     ------  PC=IY
-JP C,NN        3  DA XX XX        10/10  ------  If CY then PC=NN
-JP M,NN        3  FA XX XX        10/10  ------  If S then PC=NN
+JP CA,NN       3  DA XX XX        10/10  ------  If CY then PC=NN
+JP MI,NN       3  FA XX XX        10/10  ------  If S then PC=NN
 JP NC,NN       3  D2 XX XX        10/10  ------  If !CY then PC=NN
 JP NZ,NN       3  C2 XX XX        10/10  ------  If !Z then PC=NN
-JP P,NN        3  F2 XX XX        10/10  ------  If !S then PC=NN
+JP PL,NN       3  F2 XX XX        10/10  ------  If !S then PC=NN
 JP PE,NN       3  EA XX XX        10/10  ------  If P then PC=NN
 JP PO,NN       3  E2 XX XX        10/10  ------  If !P then PC=NN
-JP Z,NN        3  CA XX XX        10/10  ------  If Z then PC=NN
+JP ZE,NN       3  CA XX XX        10/10  ------  If Z then PC=NN
 JR n           2  18 XX           12     ------  PC=PC+n
-JR C,n         2  38 XX           12/7   ------  If CY then PC=PC+n
+JR CA,n        2  38 XX           12/7   ------  If CY then PC=PC+n
 JR NC,n        2  30 XX           12/7   ------  If !CY then PC=PC+n
 JR NZ,n        2  20 XX           12/7   ------  If !Z then PC=PC+n
-JR Z,n         2  28 XX           12/7   ------  If Z then PC=PC+n
+JR ZE,n        2  28 XX           12/7   ------  If Z then PC=PC+n
 LD (BC),A      1  02               7     ------  [BC]=A
 LD (DE),A      1  12               7     ------  [DE]=A
 LD (HL),r      1  70+rb            7     ------  [HL]=r
@@ -243,14 +243,14 @@ RES b,(IX+n)   4  DD CB XX 86+8*b 23     ------  [IX+n]=[IX+n]&{~2^b}
 RES b,(IY+n)   4  FD CB XX 86+8*b 23     ------  [IY+n]=[IY+n]&{~2^b}
 RES b,r        2  CB 80+8*b+rb     8     ------  r=r&{~2^b}
 RET            1  C9              10     ------  PC=[SP,SP+1],SP+,SP+
-RET C          1  D8              11/5   ------  If CY then PC=[SP,SP+1],SP+=2
-RET M          1  F8              11/5   ------  If S then PC=[SP,SP+1],SP+=2
+RET CA         1  D8              11/5   ------  If CY then PC=[SP,SP+1],SP+=2
+RET MI         1  F8              11/5   ------  If S then PC=[SP,SP+1],SP+=2
 RET NC         1  D0              11/5   ------  If !CY then PC=[SP,SP+1],SP+=2
 RET NZ         1  C0              11/5   ------  If !Z then PC=[SP,SP+1],SP+=2
-RET P          1  F0              11/5   ------  If !S then PC=[SP,SP+1],SP+=2
+RET PL         1  F0              11/5   ------  If !S then PC=[SP,SP+1],SP+=2
 RET PE         1  E8              11/5   ------  If P then PC=[SP,SP+1],SP+=2
 RET PO         1  E0              11/5   ------  If !P then PC=[SP,SP+1],SP+=2
-RET Z          1  C8              11/5   ------  If Z then PC=[SP,SP+1],SP+=2
+RET ZE         1  C8              11/5   ------  If Z then PC=[SP,SP+1],SP+=2
 RETI           2  ED 4D           14     ------  PC=[SP,SP+1],SP+,SP+
 RETN           2  ED 45           14     ------  PC=[SP,SP+1],SP+,SP+
 RL (HL)        2  CB 16           15     **0P0*  [HL]={CY,[HL]}<<CY
