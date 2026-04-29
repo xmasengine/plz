@@ -118,13 +118,16 @@ func AssembleBinary(rd io.Reader) ([]isa.Opcode, error) {
 }
 
 func AssembleFile(output string, sources []string) error {
-	bins := []isa.Opcode{}
 	fout, err := os.Create(output)
 	if err != nil {
 		return err
 	}
 	defer fout.Close()
+	return AssembleWriter(fout, sources)
+}
 
+func AssembleWriter(fout io.Writer, sources []string) (err error) {
+	bins := []isa.Opcode{}
 	for _, source := range sources {
 		fin, err := os.Open(source)
 		if err != nil {

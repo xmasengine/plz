@@ -45,6 +45,7 @@ type ReaderWriterIO struct {
 }
 
 func (b *ReaderWriterIO) In(port byte) byte {
+	println("ReaderWriterIO In", port)
 	rd := b.Readers[port]
 	if rd == nil {
 		return 0
@@ -84,9 +85,9 @@ func Instructions(ins ...isa.Instruction) func(*CPU) {
 	}
 }
 
-type cpuOption func(c *CPU)
+type CPUOption func(c *CPU)
 
-func NewCPU(opts ...cpuOption) *CPU {
+func NewCPU(opts ...CPUOption) *CPU {
 	cpu := &CPU{}
 	cpu.Memory = &LinearMemory{}
 	cpu.IO = &ByteIO{}
@@ -100,9 +101,18 @@ func WithReaderWriterIO(c *CPU) {
 	c.IO = &ReaderWriterIO{}
 }
 
-func WithReader(c *CPU, port byte, rd io.Reader) {
-	rwi := c.IO.(*ReaderWriterIO)
-	rwi.Readers[port] = rd
+func WithReader(port byte, rd io.Reader) func(*CPU) {
+	return func(c *CPU) {
+		rwi := c.IO.(*ReaderWriterIO)
+		rwi.Readers[port] = rd
+	}
+}
+
+func WithWriter(port byte, wr io.Writer) func(*CPU) {
+	return func(c *CPU) {
+		rwi := c.IO.(*ReaderWriterIO)
+		rwi.Writers[port] = wr
+	}
 }
 
 func WithBinary(bin ...byte) func(*CPU) {
@@ -113,7 +123,7 @@ func WithBinary(bin ...byte) func(*CPU) {
 	}
 }
 
-func RunFile(ctx context.Context, name string, opts ...cpuOption) error {
+func RunFile(ctx context.Context, name string, opts ...CPUOption) error {
 	buf, err := os.ReadFile(name)
 	if err != nil {
 		return err
