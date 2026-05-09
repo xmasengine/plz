@@ -145,7 +145,11 @@ func main() {
 			defer args.Input.File.Close()
 		}
 
-		emu.RunFile(args.Ctx, args.Sources[0], opts...)
+		err := emu.RunFile(args.Ctx, args.Sources[0], opts...)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %s\n", err)
+			os.Exit(2)
+		}
 	}
 
 	os.Exit(0)

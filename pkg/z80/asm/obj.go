@@ -138,7 +138,7 @@ const (
 	OperandFlagZ
 	OperandFlagNZ
 	OperandFlagPO
-	OperandFLagPE
+	OperandFlagPE
 	OperandFlagM
 )
 

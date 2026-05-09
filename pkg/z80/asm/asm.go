@@ -17,6 +17,71 @@ func (e Error) Error() string {
 	return string(e)
 }
 
+type Assembler struct {
+	Offset     int
+	Binary     []byte
+	Labels     map[string]int
+	References map[int]string
+}
+
+type Instruction struct {
+	scanner.Position
+	Label    string
+	Opcode   string
+	Operands []operand
+}
+
+var registerNames = map[string]bool{
+	"B": true,
+	"C": true,
+	"D": true,
+	"E": true,
+	"H": true,
+	"L": true,
+	"A": true,
+
+	"BC": true,
+	"DE": true,
+	"HL": true,
+	"SP": true,
+	"AF": true,
+
+	"NZ": true,
+	"Z":  true,
+	"NC": true,
+	"CA": true,
+	"PO": true,
+	"PE": true,
+	"P":  true,
+	"M":  true,
+}
+
+type reg8 string
+
+func (reg8) operand() {}
+
+type reg16 string
+
+func (reg16) operand() {}
+
+type imm8 uint8
+
+func (imm8) operand() {}
+
+type off8 int8
+
+func (off8) operand() {}
+
+type imm16 uint16
+
+func (imm16) operand() {}
+
+type operand interface{ operand() }
+
+type ptr struct{ to operand }
+
+func (ptr) operand() {}
+
 func AssembleBinary(rd io.Reader) ([]isa.Opcode, error) {
 	scan := (&scanner.Scanner{}).Init(rd)
 	res := []isa.Opcode{}
