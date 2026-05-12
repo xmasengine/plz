@@ -14,9 +14,10 @@ const (
 	KindPtrReg8 // C can be contain pointer used for ports.
 	KindPtrReg16
 	KindRegSpc
-	KindFla // Flags
-	KindInt // Constant ints like for bit or imm, or for macros.
-	KindStr // For macros or other assembler instructions.
+	KindFla       // Flags
+	KindInt       // Constant ints like for bit or imm, or for macros.
+	KindStr       // For macros or other assembler instructions.
+	KindPtrRegIdx // Index registers when used as such (IX, IY)
 )
 
 type Operand interface {
@@ -170,10 +171,23 @@ var _ Operand = OperandInt(0)
 type OperandString string
 
 func (OperandString) OperandKind() OperandKind {
-	return KindString
+	return KindStr
 }
 
 var _ Operand = OperandString(0)
+
+type OperandPtrRegIdx OperandPtrReg16
+
+const (
+	OperandPtrRegIdxIX OperandPtrRegIdx = OperandPtrRegIdx(OperandPtrRegIX)
+	OperandPtrRegIdxIY OperandPtrRegIdx = OperandPtrRegIdx(OperandPtrRegIY)
+)
+
+func (OperandPtrRegIdx) OperandKind() OperandKind {
+	return KindPtrRegIdx
+}
+
+var _ Operand = OperandPtrRegIdxIX
 
 /*
 

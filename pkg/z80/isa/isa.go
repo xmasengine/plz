@@ -971,7 +971,7 @@ func (o Opcode) String() string {
 	}
 }
 
-type BitOpcode uint8
+type BitOpcode Opcode
 
 type BitOpcodeKind uint8
 

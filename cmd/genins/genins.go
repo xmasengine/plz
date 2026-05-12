@@ -61,7 +61,7 @@ var opmap = map[string]string{
 }
 
 const header = `
-//line cmd/gensym/gensym.go:64
+//line cmd/genins/genins.go:64
 package asm
 
 type OperandKind int
@@ -112,7 +112,7 @@ type OpInfo struct {
 
 type OpCodeFunc func(asm Asm) error
 
-var Ops = []OpInfo {
+func Ins(name string, operands...Operands) {
 
 `
 

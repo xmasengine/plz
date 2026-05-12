@@ -60,54 +60,73 @@ var opmap = map[string]string{
 	"r":      "KindReg",
 }
 
+var opkindmap = map[string]string{
+	"(BC)":   "KindPtrReg16",
+	"(C)":    "KindPtrReg8",
+	"(DE)":   "KindPtrReg16",
+	"(HL)":   "KindPtrReg16",
+	"(IX)":   "KindPtrReg16",
+	"(IX+n)": "KindPtrRegIdx, KindOff8",
+	"(IY)":   "KindPtrReg16",
+	"(IY+n)": "KindPtrRegIdx, KindOff8",
+	"(N)":    "KindPtrImm8",
+	"(NN)":   "KindPtrImm16",
+	"(SP)":   "KindPtrReg16",
+	"0":      "KindInt",
+	"1":      "KindInt",
+	"10H":    "KindInt",
+	"18H":    "KindInt",
+	"2":      "KindInt",
+	"20H":    "KindInt",
+	"28H":    "KindInt",
+	"30H":    "KindInt",
+	"38H":    "KindInt",
+	"8H":     "KindInt",
+	"A":      "KindReg8",
+	"AF":     "KindReg16",
+	"AF'":    "KindRegSpc",
+	"B":      "KindReg8",
+	"BC":     "KindReg16",
+	"C":      "KindReg8",
+	"D":      "KindReg8",
+	"DE":     "KindReg16",
+	"E":      "KindReg8",
+	"H":      "KindReg8",
+	"HL":     "KindReg16",
+	"I":      "KindRegSpc",
+	"IX":     "KindReg16",
+	"IY":     "KindReg16",
+	"L":      "KindReg8",
+	"CA":     "KindFla",
+	"MI":     "KindFla",
+	"N":      "KindImm8",
+	"NC":     "KindFla",
+	"NN":     "KindImm16",
+	"NZ":     "KindFla",
+	"PL":     "KindFla",
+	"PE":     "KindFla",
+	"PO":     "KindFla",
+	"R":      "KindRegSpc",
+	"SP":     "KindReg16",
+	"Z":      "KindFla",
+	"b":      "KindOff8",
+	"n":      "KindImm8",
+	"r":      "KindReg8",
+}
+
 const header = `
 //line cmd/gensym/gensym.go:64
 package asm
-
-type OperandKind int
-
-const (
-	KindPtrBC     OperandKind = (1+iota)
-	KindPortPtrC
-	KindPtrDE
-	KindPtrHL
-	KindPtrIX
-	KindPtrIY
-	KindPtrImm8
-	KindPtrImm16
-	KindPtrSP
-	KindRegA
-	KindRegAF
-	KindRegAFS
-	KindRegB
-	KindRegBC
-	KindRegC
-	KindRegD
-	KindRegDE
-	KindRegE
-	KindRegH
-	KindRegHL
-	KindRegI
-	KindRegIX
-	KindRegIY
-	KindRegL
-	KindRegR
-	KindRegSP
-	KindFlag
-	KindImm8
-	KindOffset
-	KindImm16
-	KindReg
-	KindInt
-	KindString
-)
-
 
 type OpInfo struct {
 	Name string
 	Size int
 	Operands []OperandKind
 	OpCode []string
+}
+
+type Asm interface {
+	Assemble(bytes []byte)
 }
 
 type OpCodeFunc func(asm Asm) error
@@ -155,9 +174,9 @@ func main() {
 			if top == "" {
 				continue
 			}
-			op := opmap[top]
-			if op != "" {
-				fmt.Fprintf(out, `%s%s`, sep, op)
+			kind := opkindmap[top]
+			if kind != "" {
+				fmt.Fprintf(out, `%s%s`, sep, kind)
 				sep = ", "
 				idx, found := slices.BinarySearch(knownOperands, top)
 				if !found {
