@@ -66,6 +66,12 @@ func (t tokenReg16) token() token {
 	return t
 }
 
+type tokenFlag string
+
+func (t tokenFlag) token() token {
+	return t
+}
+
 type tokenInt int
 
 func (t tokenInt) token() token {
@@ -106,10 +112,12 @@ const ErrorEmptyInstruction Error = "empty instruction not allowed"
 const ErrorMissingIdentifier Error = "missing identifier"
 const ErrorMissingMnemonic Error = "missing mnemonic"
 const ErrorUnknownInstruction Error = "unknown instruction"
+const ErrorNeedNoOperands Error = "need no operands"
 const ErrorNeedTwoOperands Error = "need two operands"
 const ErrorNeedOneOrTwoOperands Error = "need one or two operands"
 const ErrorUnexpectedType Error = "unexpected type"
 const ErrorUnexpectedRegister Error = "unexpected register"
+const ErrorUnknownFlag Error = "unknown flag"
 const ErrorBitOutOfRange Error = "bit index out of range"
 
 func (a *Assembler) parseInstruction(tokens ...token) error {
@@ -129,6 +137,26 @@ func (a *Assembler) parseInstruction(tokens ...token) error {
 		return a.parseADD(operands...)
 	case "AND":
 		return a.parseAND(operands...)
+	case "BIT":
+		return a.parseBIT(operands...)
+	case "CALL":
+		return a.parseCALL(operands...)
+	case "CCF":
+		return a.parseCCF(operands...)
+	case "CP": // Compare bit
+		return a.parseCP(operands...)
+	case "CPD":
+		return a.parseCPD(operands...)
+	case "CPDR":
+		return a.parseCPDR(operands...)
+	case "CPI":
+		return a.parseCPI(operands...)
+	case "CPIR":
+		return a.parseCPIR(operands...)
+	case "CPL":
+		return a.parseCPL(operands...)
+	case "DAA":
+		return a.parseDAA(operands...)
 	default:
 		return ErrorUnknownInstruction
 	}
@@ -366,7 +394,109 @@ func (a *Assembler) parseBIT(operands ...token) error {
 		return err
 	}
 
-	return bapBit(a.Binary, 0x46, 0x10, bit, op)
+	return bapBit(a.Binary, 0x46, 0x40, bit, op)
+}
+
+func flagOp(operands ...token) (flag tokenFlag, op token, err error) {
+	if len(operands) == 2 {
+		flag, ok := operands[0].(tokenFlag)
+		if !ok {
+			return "", nil, ErrorUnexpectedType
+		}
+		op = operands[1]
+		return flag, op, nil
+
+	} else if len(operands) == 1 {
+		op = operands[0]
+		return "", op, nil
+	} else {
+		return "", nil, ErrorNeedOneOrTwoOperands
+	}
+}
+
+func (a *Assembler) parseCALL(operands ...token) error {
+	flag, op, err := flagOp(operands...)
+	if err != nil {
+		return err
+	}
+	switch target := op.(type) {
+	case tokenImm16:
+		switch string(flag) {
+		case "C":
+			return bap(a.Binary, 0xDC, target)
+		case "M":
+			return bap(a.Binary, 0xFC, target)
+		case "NC":
+			return bap(a.Binary, 0xD4, target)
+		case "": // unconditional
+			return bap(a.Binary, 0xCD, target)
+		case "NZ":
+			return bap(a.Binary, 0xC4, target)
+		case "P":
+			return bap(a.Binary, 0xF4, target)
+		case "PE":
+			return bap(a.Binary, 0xEC, target)
+		case "PO":
+			return bap(a.Binary, 0xE4, target)
+		case "Z":
+			return bap(a.Binary, 0xCC, target)
+		default:
+			return ErrorUnknownFlag
+		}
+
+	// XXX how to handle labels? Will this parser only get Imm16 to fix up later?
+
+	default:
+		return ErrorUnexpectedType
+	}
+}
+
+func bapNoOps(buf []byte, operands []token, va ...any) error {
+	if len(operands) > 0 {
+		return ErrorNeedNoOperands
+	}
+	return bap(buf, va...)
+}
+
+func (a *Assembler) parseCCF(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0x3f)
+}
+
+func (a *Assembler) parseCP(operands ...token) error {
+	bit, op, err := bitOp(operands...)
+	if err != nil {
+		return err
+	}
+
+	if src, ok := op.(tokenImm8); ok {
+		return bap(a.Binary, 0xFE, src)
+	}
+
+	return bapBit(a.Binary, 0xBE, 0xB8, bit, op)
+}
+
+func (a *Assembler) parseCPD(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0xED, 0xA9)
+}
+
+func (a *Assembler) parseCPDR(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0xED, 0xB9)
+}
+
+func (a *Assembler) parseCPI(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0xED, 0xA1)
+}
+
+func (a *Assembler) parseCPIR(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0xED, 0xB1)
+}
+
+func (a *Assembler) parseCPL(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0x2F)
+}
+
+func (a *Assembler) parseDAA(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0x27)
 }
 
 /*
@@ -376,35 +506,6 @@ Mnemonic     Size OP-Code         Clock  SZHPNC  Effect
 
 
 
-
-
-
-BIT b,(HL)     2  CB 46+8*b       12     **1*0-  [HL]&{2^b}
-BIT b,(IX+n)   4  DD CB XX 46+8*b 20     **1*0-  [IX+n]&{2^b}
-BIT b,(IY+n)   4  FD CB XX 46+8*b 20     **1*0-  [IY+n]&{2^b}
-BIT b,r        2  CB 40+8*b+rb     8     **1*0-  r&{2^b}
-
-CALL C,NN      3  DC XX XX        17/10  ------  If CY then [SP-=2]=PC,PC=NN
-CALL M,NN      3  FC XX XX        17/10  ------  If S then [SP-=2]=PC,PC=NN
-CALL NC,NN     3  D4 XX XX        17/10  ------  If !CY then [SP-=2]=PC,PC=NN
-CALL NN        3  CD XX XX        17     ------  SP-=2,[SP+1,SP]=PC,PC=NN
-CALL NZ,NN     3  C4 XX XX        17/10  ------  If !Z then [SP-=2]=PC,PC=NN
-CALL P,NN      3  F4 XX XX        17/10  ------  If !S then [SP-=2]=PC,PC=NN
-CALL PE,NN     3  EC XX XX        17/10  ------  If P then [SP-=2]=PC,PC=NN
-CALL PO,NN     3  E4 XX XX        17/10  ------  If !P then [SP-=2]=PC,PC=NN
-CALL Z,NN      3  CC XX XX        17/10  ------  If Z then [SP-=2]=PC,PC=NN
-CCF            1  3F               4     --*-0*  CY=~CY
-CP (HL)        1  BE               7     ***V1*  A-[HL]
-CP (IX+n)      3  DD BE XX        19     ***V1*  A-[IX+n]
-CP (IY+n)      3  FD BE XX        19     ***V1*  A-[IY+n]
-CP r           1  B8+rb            4     ***V1*  A-r
-CP N           2  FE XX            7     ***V1*  A-N
-CPD            2  ED A9           16     ****1-  A-[HL],HL=HL-1,BC=BC-1
-CPDR           2  ED B9           21/16  ****1-  CPD until A=[HL] or BC=0
-CPI            2  ED A1           16     ****1-  A-[HL],HL=HL+1,BC=BC-1
-CPIR           2  ED B1           21/16  ****1-  CPI until A=[HL] or BC=0
-CPL            1  2F               4     --1-1-  A=~A
-DAA            1  27               4     ***P-*  A=adjust result to BCD-format
 DEC (HL)       1  35              11     ***V1-  [HL]=[HL]-1
 DEC (IX+n)     3  DD 35 XX        23     ***V1-  [IX+n]=[IX+n]-1
 DEC (IY+n)     3  FD 35 XX        23     ***V1-  [IY+n]=[IY+n]-1
@@ -706,6 +807,36 @@ AND (IX+n)     3  DD A6 XX        19     ***P00  A=A&[IX+n]
 AND (IY+n)     3  FD A6 XX        19     ***P00  A=A&[IY+n]
 AND r          1  A0+rb            4     ***P00  A=A&r
 AND N          2  E6 XX            7     ***P00  A=A&N
+
+BIT b,(HL)     2  CB 46+8*b       12     **1*0-  [HL]&{2^b}
+BIT b,(IX+n)   4  DD CB XX 46+8*b 20     **1*0-  [IX+n]&{2^b}
+BIT b,(IY+n)   4  FD CB XX 46+8*b 20     **1*0-  [IY+n]&{2^b}
+BIT b,r        2  CB 40+8*b+rb     8     **1*0-  r&{2^b}
+
+
+CALL C,NN      3  DC XX XX        17/10  ------  If CY then [SP-=2]=PC,PC=NN
+CALL M,NN      3  FC XX XX        17/10  ------  If S then [SP-=2]=PC,PC=NN
+CALL NC,NN     3  D4 XX XX        17/10  ------  If !CY then [SP-=2]=PC,PC=NN
+CALL NN        3  CD XX XX        17     ------  SP-=2,[SP+1,SP]=PC,PC=NN
+CALL NZ,NN     3  C4 XX XX        17/10  ------  If !Z then [SP-=2]=PC,PC=NN
+CALL P,NN      3  F4 XX XX        17/10  ------  If !S then [SP-=2]=PC,PC=NN
+CALL PE,NN     3  EC XX XX        17/10  ------  If P then [SP-=2]=PC,PC=NN
+CALL PO,NN     3  E4 XX XX        17/10  ------  If !P then [SP-=2]=PC,PC=NN
+CALL Z,NN      3  CC XX XX        17/10  ------  If Z then [SP-=2]=PC,PC=NN
+
+CP (HL)        1  BE               7     ***V1*  A-[HL]
+CP (IX+n)      3  DD BE XX        19     ***V1*  A-[IX+n]
+CP (IY+n)      3  FD BE XX        19     ***V1*  A-[IY+n]
+CP r           1  B8+rb            4     ***V1*  A-r
+CP N           2  FE XX            7     ***V1*  A-N
+
+CPD            2  ED A9           16     ****1-  A-[HL],HL=HL-1,BC=BC-1
+CPDR           2  ED B9           21/16  ****1-  CPD until A=[HL] or BC=0
+CPI            2  ED A1           16     ****1-  A-[HL],HL=HL+1,BC=BC-1
+CPIR           2  ED B1           21/16  ****1-  CPI until A=[HL] or BC=0
+CPL            1  2F               4     --1-1-  A=~A
+DAA            1  27               4     ***P-*  A=adjust result to BCD-format
+
 
 The flag field contains one of the following:
 
