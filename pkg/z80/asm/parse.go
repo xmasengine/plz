@@ -84,6 +84,12 @@ func (t tokenImm8) token() token {
 	return t
 }
 
+type tokenOff8 int8
+
+func (t tokenOff8) token() token {
+	return t
+}
+
 type tokenImm16 uint16
 
 func (t tokenImm16) token() token {
@@ -99,7 +105,7 @@ func (t tokenPtr) token() token {
 	return t
 }
 
-// regName returns the name of the register this pointer points to or empty if not a register.
+// regName returns the name of the register this pointer points to or empty if not a 16 bits register.
 func (t tokenPtr) regName() string {
 	reg, ok := t.to.(tokenReg16)
 	if !ok {
@@ -113,6 +119,7 @@ const ErrorMissingIdentifier Error = "missing identifier"
 const ErrorMissingMnemonic Error = "missing mnemonic"
 const ErrorUnknownInstruction Error = "unknown instruction"
 const ErrorNeedNoOperands Error = "need no operands"
+const ErrorNeedOneOperands Error = "need one operands"
 const ErrorNeedTwoOperands Error = "need two operands"
 const ErrorNeedOneOrTwoOperands Error = "need one or two operands"
 const ErrorUnexpectedType Error = "unexpected type"
@@ -157,6 +164,22 @@ func (a *Assembler) parseInstruction(tokens ...token) error {
 		return a.parseCPL(operands...)
 	case "DAA":
 		return a.parseDAA(operands...)
+	case "DEC":
+		return a.parseDEC(operands...)
+	case "DI":
+		return a.parseDI(operands...)
+	case "DJNZ":
+		return a.parseDJNZ(operands...)
+	case "EI":
+		return a.parseEI(operands...)
+	case "EX":
+		return a.parseEX(operands...)
+	case "EXX":
+		return a.parseEXX(operands...)
+	case "HALT":
+		return a.parseHALT(operands...)
+	case "IM":
+		return a.parseIM(operands...)
 	default:
 		return ErrorUnknownInstruction
 	}
@@ -499,39 +522,166 @@ func (a *Assembler) parseDAA(operands ...token) error {
 	return bapNoOps(a.Binary, operands, 0x27)
 }
 
+func (a *Assembler) parseDEC(operands ...token) error {
+	if len(operands) != 1 {
+		return ErrorNeedOneOperands
+	}
+	op := operands[0]
+	switch src := op.(type) {
+
+	case tokenPtr:
+		return bapPtr(a.Binary, 0x35, src)
+	case tokenReg8:
+		switch string(src) {
+		case "A":
+			return bap(a.Binary, 0x3D)
+		case "B":
+			return bap(a.Binary, 0x05)
+		case "C":
+			return bap(a.Binary, 0x0D)
+		case "D":
+			return bap(a.Binary, 0x15)
+		case "E":
+			return bap(a.Binary, 0x1D)
+		case "H":
+			return bap(a.Binary, 0x25)
+		case "L":
+			return bap(a.Binary, 0x2D)
+		default:
+			return ErrorUnexpectedRegister
+
+		}
+	case tokenReg16:
+		switch string(src) {
+		case "BC":
+			return bap(a.Binary, 0x0B)
+		case "DE":
+			return bap(a.Binary, 0x1B)
+		case "HL":
+			return bap(a.Binary, 0x2D)
+		case "IX":
+			return bap(a.Binary, 0xDD, 0x2B)
+		case "IY":
+			return bap(a.Binary, 0xFD, 0x2B)
+		case "SP":
+			return bap(a.Binary, 0x3B)
+		default:
+			return ErrorUnexpectedRegister
+		}
+
+	default:
+		return ErrorUnexpectedType
+	}
+
+}
+
+func (a *Assembler) parseDI(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0xF3)
+}
+
+func (a *Assembler) parseDJNZ(operands ...token) error {
+	if len(operands) != 1 {
+		return ErrorNeedOneOperands
+	}
+	op := operands[0]
+	off := op.(tokenOff8)
+	return bap(a.Binary, 0xF3, off)
+}
+
+func (a *Assembler) parseEI(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0xFB)
+}
+
+func (a *Assembler) parseEXX(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0xD9)
+}
+
+func (a *Assembler) parseEX(operands ...token) error {
+	if len(operands) != 3 {
+		return ErrorNeedTwoOperands
+	}
+	op1 := operands[0]
+	op2 := operands[1]
+
+	switch dest := op1.(type) {
+
+	case tokenPtr:
+		reg := dest.regName()
+		if reg != "SP" {
+			return ErrorUnexpectedRegister
+		}
+		src, ok := op2.(tokenReg16)
+		if !ok {
+			return ErrorUnexpectedRegister
+		}
+
+		switch src {
+		case "HL":
+			return bap(a.Binary, 0xE3)
+		case "IX":
+			return bap(a.Binary, 0xDD, 0xE3)
+		case "IY":
+			return bap(a.Binary, 0xDE, 0xE3)
+		default:
+			return ErrorUnexpectedRegister
+		}
+	case tokenReg16:
+		src, ok := op2.(tokenReg16)
+		if !ok {
+			return ErrorUnexpectedRegister
+		}
+
+		if dest == "AF" && src == "AFS" {
+			return bap(a.Binary, 0x08)
+		} else if dest == "DE" && src == "HL" {
+			return bap(a.Binary, 0xEB)
+		} else {
+			return ErrorUnexpectedRegister
+		}
+
+	default:
+		return ErrorUnexpectedType
+	}
+
+}
+
+func (a *Assembler) parseHALT(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0x76)
+}
+
+func (a *Assembler) parseIMM(operands ...token) error {
+	if len(operands) != 1 {
+		return ErrorNeedOneOperands
+	}
+	op := operands[0]
+	which, ok := op.(tokenInt)
+	if !ok {
+		return ErrorUnexpectedType
+	}
+	switch which {
+	case 0:
+		return bap(a.Binary, 0xED, 0x46)
+	case 1:
+		return bap(a.Binary, 0xED, 0x56)
+	case 2:
+		return bap(a.Binary, 0xED, 0x5E)
+	default:
+		return Error("Interrupt mode must be 0, 1 ot 2.")
+	}
+}
+
+/*
+
+
+ */
+
 /*
 
                                           Flags
 Mnemonic     Size OP-Code         Clock  SZHPNC  Effect
 
-
-
-DEC (HL)       1  35              11     ***V1-  [HL]=[HL]-1
-DEC (IX+n)     3  DD 35 XX        23     ***V1-  [IX+n]=[IX+n]-1
-DEC (IY+n)     3  FD 35 XX        23     ***V1-  [IY+n]=[IY+n]-1
-DEC A          1  3D               4     ***V1-  A=A-1
-DEC B          1  05               4     ***V1-  B=B-1
-DEC BC         1  0B               6     ------  BC=BC-1
-DEC C          1  0D               4     ***V1-  C=C-1
-DEC D          1  15               4     ***V1-  D=D-1
-DEC DE         1  1B               6     ------  DE=DE-1
-DEC E          1  1D               4     ***V1-  E=E-1
-DEC H          1  25               4     ***V1-  H=H-1
-DEC HL         1  2B               6     ------  HL=HL-1
-DEC IX         2  DD 2B           10     ------  IX=IX-1
-DEC IY         2  FD 2B           10     ------  IY=IY-1
-DEC L          1  2D               4     ***V1-  L=L-1
-DEC SP         1  3B               6     ------  SP=SP-1
-DI             1  F3               4     ------  disable interrupts
-DJNZ n         2  10 XX           13/8   ------  B=B-1, if B != 0 then PC+=n
-EI             1  FB               4     ------  enable interrupts
-EX (SP),HL     1  E3              19     ------  [SP]<->HL
-EX (SP),IX     2  DD E3           23     ------  [SP]<->IX
-EX (SP),IY     2  FD E3           23     ------  [SP]<->IY
-EX AF,AF'      1  08               4     ******  AF<->AF'
-EX DE,HL       1  EB               4     ------  DE<->HL
-EXX            1  D9               4     ------  BC<->BC',DE<->DE',HL<->HL'
 HALT           1  76               4     ------  repeat NOP until interrupt
+
 IM 0           2  ED 46            8     ------  set interrupt 0
 IM 1           2  ED 56            8     ------  set interrupt 1
 IM 2           2  ED 5E            8     ------  set interrupt 2
@@ -836,6 +986,36 @@ CPI            2  ED A1           16     ****1-  A-[HL],HL=HL+1,BC=BC-1
 CPIR           2  ED B1           21/16  ****1-  CPI until A=[HL] or BC=0
 CPL            1  2F               4     --1-1-  A=~A
 DAA            1  27               4     ***P-*  A=adjust result to BCD-format
+
+DEC (HL)       1  35              11     ***V1-  [HL]=[HL]-1
+DEC (IX+n)     3  DD 35 XX        23     ***V1-  [IX+n]=[IX+n]-1
+DEC (IY+n)     3  FD 35 XX        23     ***V1-  [IY+n]=[IY+n]-1
+DEC A          1  3D               4     ***V1-  A=A-1
+DEC B          1  05               4     ***V1-  B=B-1
+DEC BC         1  0B               6     ------  BC=BC-1
+DEC C          1  0D               4     ***V1-  C=C-1
+DEC D          1  15               4     ***V1-  D=D-1
+DEC DE         1  1B               6     ------  DE=DE-1
+DEC E          1  1D               4     ***V1-  E=E-1
+DEC H          1  25               4     ***V1-  H=H-1
+DEC HL         1  2B               6     ------  HL=HL-1
+DEC IX         2  DD 2B           10     ------  IX=IX-1
+DEC IY         2  FD 2B           10     ------  IY=IY-1
+DEC L          1  2D               4     ***V1-  L=L-1
+DEC SP         1  3B               6     ------  SP=SP-1
+
+DI             1  F3               4     ------  disable interrupts
+DJNZ n         2  10 XX           13/8   ------  B=B-1, if B != 0 then PC+=n
+EI             1  FB               4     ------  enable interrupts
+
+EX (SP),HL     1  E3              19     ------  [SP]<->HL
+EX (SP),IX     2  DD E3           23     ------  [SP]<->IX
+EX (SP),IY     2  FD E3           23     ------  [SP]<->IY
+EX AF,AF'      1  08               4     ******  AF<->AF'
+EX DE,HL       1  EB               4     ------  DE<->HL
+EXX            1  D9               4     ------  BC<->BC',DE<->DE',HL<->HL'
+
+
 
 
 The flag field contains one of the following:
