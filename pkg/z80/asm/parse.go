@@ -180,6 +180,10 @@ func (a *Assembler) parseInstruction(tokens ...token) error {
 		return a.parseHALT(operands...)
 	case "IM":
 		return a.parseIM(operands...)
+	case "IN":
+		return a.parseIN(operands...)
+	case "INC":
+		return a.parseINC(operands...)
 	default:
 		return ErrorUnknownInstruction
 	}
@@ -649,7 +653,7 @@ func (a *Assembler) parseHALT(operands ...token) error {
 	return bapNoOps(a.Binary, operands, 0x76)
 }
 
-func (a *Assembler) parseIMM(operands ...token) error {
+func (a *Assembler) parseIM(operands ...token) error {
 	if len(operands) != 1 {
 		return ErrorNeedOneOperands
 	}
@@ -666,12 +670,123 @@ func (a *Assembler) parseIMM(operands ...token) error {
 	case 2:
 		return bap(a.Binary, 0xED, 0x5E)
 	default:
-		return Error("Interrupt mode must be 0, 1 ot 2.")
+		return Error("Interrupt mode must be 0, 1, 2.")
 	}
 }
 
-/*
+func (a *Assembler) parseIN(operands ...token) error {
+	if len(operands) != 2 {
+		return ErrorNeedTwoOperands
+	}
+	op1, op2 := operands[0], operands[1]
+	dst, ok := op1.(tokenReg8)
+	if !ok {
+		return ErrorUnexpectedType
+	}
 
+	var srcToken token
+	if ptr, isPtr := op2.(tokenPtr); isPtr {
+		srcToken = ptr.to
+	} else {
+		srcToken = op2
+	}
+
+	switch src := srcToken.(type) {
+
+	case tokenImm8:
+		if dst != "A" {
+			return ErrorUnexpectedRegister
+		}
+		return bap(a.Binary, 0xDB, src)
+
+	case tokenInt:
+		if dst != "A" {
+			return ErrorUnexpectedRegister
+		}
+		return bap(a.Binary, 0xDB, uint8(src))
+
+	case tokenReg8:
+		if src != "C" {
+			return ErrorUnexpectedRegister
+		}
+		switch dst {
+		case "A":
+			return bap(a.Binary, 0xED, 0x78)
+		case "B":
+			return bap(a.Binary, 0xED, 0x40)
+		case "C":
+			return bap(a.Binary, 0xED, 0x48)
+		case "D":
+			return bap(a.Binary, 0xED, 0x50)
+		case "E":
+			return bap(a.Binary, 0xED, 0x58)
+		case "H":
+			return bap(a.Binary, 0xED, 0x60)
+		case "L":
+			return bap(a.Binary, 0xED, 0x68)
+		default:
+			return ErrorUnexpectedRegister
+		}
+
+	default:
+		return ErrorUnexpectedType
+	}
+}
+
+func (a *Assembler) parseINC(operands ...token) error {
+	if len(operands) != 1 {
+		return ErrorNeedOneOperands
+	}
+	op := operands[0]
+	switch src := op.(type) {
+
+	case tokenPtr:
+		return bapPtr(a.Binary, 0x34, src)
+	case tokenReg8:
+		switch string(src) {
+		case "A":
+			return bap(a.Binary, 0x3C)
+		case "B":
+			return bap(a.Binary, 0x04)
+		case "C":
+			return bap(a.Binary, 0x0C)
+		case "D":
+			return bap(a.Binary, 0x14)
+		case "E":
+			return bap(a.Binary, 0x1C)
+		case "H":
+			return bap(a.Binary, 0x24)
+		case "L":
+			return bap(a.Binary, 0x2C)
+		default:
+			return ErrorUnexpectedRegister
+
+		}
+	case tokenReg16:
+		switch string(src) {
+		case "BC":
+			return bap(a.Binary, 0x03)
+		case "DE":
+			return bap(a.Binary, 0x13)
+		case "HL":
+			return bap(a.Binary, 0x23)
+		case "IX":
+			return bap(a.Binary, 0xDD, 0x23)
+		case "IY":
+			return bap(a.Binary, 0xFD, 0x23)
+		case "SP":
+			return bap(a.Binary, 0x33)
+		default:
+			return ErrorUnexpectedRegister
+		}
+
+	default:
+		return ErrorUnexpectedType
+	}
+
+}
+
+/*
 
  */
 
@@ -680,35 +795,7 @@ func (a *Assembler) parseIMM(operands ...token) error {
                                           Flags
 Mnemonic     Size OP-Code         Clock  SZHPNC  Effect
 
-HALT           1  76               4     ------  repeat NOP until interrupt
 
-IM 0           2  ED 46            8     ------  set interrupt 0
-IM 1           2  ED 56            8     ------  set interrupt 1
-IM 2           2  ED 5E            8     ------  set interrupt 2
-IN A,(C)       2  ED 78           12     ***P0-  A=[C]
-IN A,(N)       2  DB XX           11     ------  A=[N]
-IN B,(C)       2  ED 40           12     ***P0-  B=[C]
-IN C,(C)       2  ED 48           12     ***P0-  C=[C]
-IN D,(C)       2  ED 50           12     ***P0-  D=[C]
-IN E,(C)       2  ED 58           12     ***P0-  E=[C]
-IN H,(C)       2  ED 60           12     ***P0-  H=[C]
-IN L,(C)       2  ED 68           12     ***P0-  L=[C]
-INC (HL)       1  34              11     ***V0-  [HL]=[HL]+1
-INC (IX+n)     3  DD 34 XX        23     ***V0-  [IY+n]=[IX+n]+1
-INC (IY+n)     3  FD 34 XX        23     ***V0-  [IY+n]=[IY+n]+1
-INC A          1  3C               4     ***V0-  A=A+1
-INC B          1  04               4     ***V0-  B=B+1
-INC BC         1  03               6     ------  BC=BC+1
-INC C          1  0C               4     ***V0-  C=C+1
-INC D          1  14               4     ***V0-  D=D+1
-INC DE         1  13               6     ------  DE=DE+1
-INC E          1  1C               4     ***V0-  E=E+1
-INC H          1  24               4     ***V0-  H=H+1
-INC HL         1  23               6     ------  HL=HL+1
-INC IX         2  DD 23           10     ------  IX=IX+1
-INC IY         2  FD 23           10     ------  IY=IY+1
-INC L          1  2C               4     ***V0-  L=L+1
-INC SP         1  33               6     ------  SP=SP+1
 IND            2  ED AA           16     ***?1-  [HL]=[C],HL=HL-1,B=B-1
 INDR           2  ED BA           21/16  01*?1-  IND until B=0
 INI            2  ED A2           16     ***?1-  [HL]=[C],HL=HL+1,B=B-1
@@ -1014,6 +1101,38 @@ EX (SP),IY     2  FD E3           23     ------  [SP]<->IY
 EX AF,AF'      1  08               4     ******  AF<->AF'
 EX DE,HL       1  EB               4     ------  DE<->HL
 EXX            1  D9               4     ------  BC<->BC',DE<->DE',HL<->HL'
+
+HALT           1  76               4     ------  repeat NOP until interrupt
+
+IM 0           2  ED 46            8     ------  set interrupt 0
+IM 1           2  ED 56            8     ------  set interrupt 1
+IM 2           2  ED 5E            8     ------  set interrupt 2
+
+IN A,(C)       2  ED 78           12     ***P0-  A=[C]
+IN A,(N)       2  DB XX           11     ------  A=[N]
+IN B,(C)       2  ED 40           12     ***P0-  B=[C]
+IN C,(C)       2  ED 48           12     ***P0-  C=[C]
+IN D,(C)       2  ED 50           12     ***P0-  D=[C]
+IN E,(C)       2  ED 58           12     ***P0-  E=[C]
+IN H,(C)       2  ED 60           12     ***P0-  H=[C]
+IN L,(C)       2  ED 68           12     ***P0-  L=[C]
+
+INC (HL)       1  34              11     ***V0-  [HL]=[HL]+1
+INC (IX+n)     3  DD 34 XX        23     ***V0-  [IY+n]=[IX+n]+1
+INC (IY+n)     3  FD 34 XX        23     ***V0-  [IY+n]=[IY+n]+1
+INC A          1  3C               4     ***V0-  A=A+1
+INC B          1  04               4     ***V0-  B=B+1
+INC BC         1  03               6     ------  BC=BC+1
+INC C          1  0C               4     ***V0-  C=C+1
+INC D          1  14               4     ***V0-  D=D+1
+INC DE         1  13               6     ------  DE=DE+1
+INC E          1  1C               4     ***V0-  E=E+1
+INC H          1  24               4     ***V0-  H=H+1
+INC HL         1  23               6     ------  HL=HL+1
+INC IX         2  DD 23           10     ------  IX=IX+1
+INC IY         2  FD 23           10     ------  IY=IY+1
+INC L          1  2C               4     ***V0-  L=L+1
+INC SP         1  33               6     ------  SP=SP+1
 
 
 
