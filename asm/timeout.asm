@@ -1,7 +1,11 @@
-		JP_Imm16 start
-		:loop
-		LD_A_Imm8 '+' OUT_Port_A 7
-		:start
-		JP_Imm16 loop
-		HALT
+		org 0
+		const outp = 7
+		jp start
+		org 1000
 
+		start:
+		.loop
+		ld a,'+'
+		out (outp), a
+		jp loop
+		halt

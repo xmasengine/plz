@@ -599,6 +599,8 @@ func (commandConst) W(asm *Assembler) error {
 
 type commandOrg struct{}
 
+const MaxTarget = 1024 * 1024 * 128
+
 func (commandOrg) W(asm *Assembler) error {
 	args, err := asm.parseArgs(true)
 	if err != nil {
@@ -629,8 +631,8 @@ func (commandOrg) W(asm *Assembler) error {
 	if !ok {
 		return asm.scanErrorf("org second (target) argument should be an address, found %s", arg1)
 	}
-	if t < 0 || t >= 1024*1024*2 {
-		return asm.scanErrorf("org second (target) argument %x out of range", t)
+	if t < 0 || t >= MaxTarget {
+		return asm.scanErrorf("org second (target) argument %x out of range, must be between 0 and %d", t, MaxTarget)
 	}
 
 	asm.pc = int(n)
@@ -696,7 +698,6 @@ func AssembleFiles(output string, sources []string) error {
 		if err != nil {
 			return err
 		}
-		println("AssembleFiles", source)
 		assemblies = append(assemblies, asm)
 	}
 
@@ -711,6 +712,90 @@ func AssembleWriter(fout io.Writer, assemblies []*Assembler) (err error) {
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func AssembleSMS(output string, sources []string) error {
+	fout, err := os.Create(output)
+	if err != nil {
+		return err
+	}
+	defer fout.Close()
+
+	assemblies := []*Assembler{}
+	for _, source := range sources {
+		asm, err := NewAssembler()
+		if err != nil {
+			return err
+		}
+		println("AssembleSMS", source)
+		err = asm.AssembleFile(source)
+		if err != nil {
+			return err
+		}
+		assemblies = append(assemblies, asm)
+	}
+
+	return AssembleSMSWriter(fout, assemblies)
+}
+
+func injectSMSChecksumAndHeader(rom []byte, headerOffset int) {
+	// Ensure the ROM is large enough for the header
+	if len(rom) < headerOffset+16 {
+		// Pad the ROM if necessary
+		padding := make([]byte, headerOffset+16-len(rom))
+		rom = append(rom, padding...)
+	}
+
+	// Calculate the checksum range based on the ROM size
+	var checksumEnd int
+	switch {
+	case len(rom) <= 0x4000: // 16KB
+		checksumEnd = 0x3FF0
+	case len(rom) <= 0x8000: // 32KB
+		checksumEnd = 0x7FEF
+	default: // 128KB, 256KB, etc.
+		checksumEnd = 0x7FEF
+	}
+
+	// Calculate the checksum
+	var checksum uint16 = 0
+	for i := 0; i < checksumEnd; i++ {
+		checksum += uint16(rom[i])
+	}
+
+	// Write the "TMR SEGA" string
+	copy(rom[headerOffset:], "TMR SEGA")
+
+	// Write the 16-bit checksum in little-endian format
+	checksumOffset := headerOffset + 0x0A
+	rom[checksumOffset] = byte(checksum & 0xFF)          // Low byte
+	rom[checksumOffset+1] = byte((checksum >> 8) & 0xFF) // High byte
+
+	// Set the region code (4 = SMS Export) and ROM size code
+	rom[headerOffset+0x0F] = 0x40 // High nibble = 4, low nibble (size) can be set based on actual size
+}
+
+func AssembleSMSWriter(fout io.Writer, assemblies []*Assembler) (err error) {
+	var rom []byte
+	for _, asm := range assemblies {
+		// Concatenate the assemblies.
+		rom = append(rom, asm.RAM()...)
+	}
+
+	location := 0x7FF0
+	if len(rom) < 0x8000 {
+		location = 0x3FF0
+	}
+	if len(rom) < 0x400 {
+		location = 0x1FF0
+	}
+	injectSMSChecksumAndHeader(rom, location)
+
+	_, err = fout.Write(rom)
+	if err != nil {
+		return err
 	}
 	return nil
 }

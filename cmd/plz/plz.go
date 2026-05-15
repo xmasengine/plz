@@ -13,77 +13,14 @@ import (
 )
 
 import (
-	"github.com/xmasengine/plz/pkg/z80/asm"
 	"github.com/xmasengine/plz/pkg/z80/emu"
+	asm "github.com/xmasengine/plz/pkg/z80asm"
 )
 
-type InputFileValue struct {
-	File *os.File
-}
-
-func (f *InputFileValue) Set(name string) (err error) {
-	if f.File != nil {
-		if f.File != os.Stdin {
-			f.File.Close()
-		}
-		f.File = nil
-	}
-	if name == "-" {
-		f.File = os.Stdin
-		return nil
-	}
-	if name != "" {
-		f.File, err = os.Open(name)
-		return err
-	}
-	return nil
-}
-
-func (f *InputFileValue) String() string {
-	if f.File == nil {
-		return ""
-	}
-	if f.File == os.Stdin {
-		return "-"
-	}
-	return f.File.Name()
-}
-
-type OutputFileValue struct {
-	File *os.File
-}
-
-func (f *OutputFileValue) Set(name string) (err error) {
-	if f.File != nil {
-		if f.File != os.Stdout {
-			f.File.Close()
-		}
-		f.File = nil
-	}
-	if name == "-" {
-		f.File = os.Stdout
-		return nil
-	}
-	if name != "" {
-		f.File, err = os.Create(name)
-		return err
-	}
-	return nil
-}
-
-func (f *OutputFileValue) String() string {
-	if f.File == nil {
-		return ""
-	}
-	if f.File == os.Stdout {
-		return "-"
-	}
-	return f.File.Name()
-}
-
 type arguments struct {
-	Output     OutputFileValue
-	Input      InputFileValue
+	Output     string
+	Input      string
+	Format     string
 	OutputPort int
 	InputPort  int
 	Mode       struct {
@@ -107,9 +44,10 @@ func main() {
 	flag.BoolVar(&args.Mode.Emulator, "E", false, "Switch to emulator mode")
 	flag.BoolVar(&args.Mode.Help, "h", false, "Display help")
 	flag.DurationVar(&args.Timeout, "t", 0, "Emulation timeout")
-	flag.Var(&args.Output, "o", "output file name")
+	flag.StringVar(&args.Output, "o", "", "output file name")
 	flag.IntVar(&args.OutputPort, "p", 0, "output port for emulation")
-	flag.Var(&args.Input, "i", "input file name")
+	flag.StringVar(&args.Input, "i", "", "input file name")
+	flag.StringVar(&args.Format, "f", "bin", "output file format")
 	flag.IntVar(&args.InputPort, "q", 0, "input port for emulation")
 	flag.Parse()
 	if args.Mode.Help {
@@ -125,7 +63,18 @@ func main() {
 
 	args.Sources = flag.Args()
 	if args.Mode.Assembler {
-		err := asm.AssembleWriter(args.Output.File, args.Sources)
+		var err error
+		if args.Output == "" {
+			fmt.Fprintln(os.Stderr, "error: please specify output file with -o")
+			os.Exit(2)
+		}
+		if args.Format == "bin" {
+			err = asm.AssembleFiles(args.Output, args.Sources)
+		} else if args.Format == "sms" {
+			err = asm.AssembleSMS(args.Output, args.Sources)
+		} else {
+			err = fmt.Errorf("unknown output format: %s", args.Format)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %s\n", err)
 			os.Exit(2)
@@ -136,13 +85,29 @@ func main() {
 			os.Exit(2)
 		}
 		opts := []emu.CPUOption{emu.WithReaderWriterIO}
-		if args.Input.File != nil {
-			opts = append(opts, emu.WithReader(byte(args.InputPort), args.Input.File))
-			defer args.Input.File.Close()
+		if args.Input != "" {
+			input, err := os.Open(args.Input)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: cannot open input %s: %s", args.Input, err)
+				os.Exit(2)
+			}
+			defer input.Close()
+			opts = append(opts, emu.WithReader(byte(args.InputPort), input))
 		}
-		if args.Output.File != nil {
-			opts = append(opts, emu.WithWriter(byte(args.OutputPort), args.Output.File))
-			defer args.Input.File.Close()
+		if args.Output != "" {
+			var output *os.File
+			if args.Output == "-" {
+				output = os.Stdout
+			} else {
+				output, err := os.Create(args.Output)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error: cannot open output %s: %s", args.Output, err)
+					os.Exit(2)
+				}
+				defer output.Close()
+			}
+
+			opts = append(opts, emu.WithWriter(byte(args.OutputPort), output))
 		}
 
 		err := emu.RunFile(args.Ctx, args.Sources[0], opts...)
