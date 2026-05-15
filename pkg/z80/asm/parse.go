@@ -66,6 +66,23 @@ func (t tokenReg16) token() token {
 	return t
 }
 
+const ddErr = 123
+
+func (t tokenReg16) dd() uint8 {
+	switch string(t) {
+	case "BC":
+		return 0b00
+	case "DE":
+		return 0b01
+	case "HL":
+		return 0b10
+	case "SP":
+		return 0b11
+	default:
+		return ddErr
+	}
+}
+
 type tokenFlag string
 
 func (t tokenFlag) token() token {
@@ -184,6 +201,19 @@ func (a *Assembler) parseInstruction(tokens ...token) error {
 		return a.parseIN(operands...)
 	case "INC":
 		return a.parseINC(operands...)
+	case "IND":
+		return a.parseIND(operands...)
+	case "INDR":
+		return a.parseINDR(operands...)
+	case "INI":
+		return a.parseINI(operands...)
+	case "INIR":
+		return a.parseINIR(operands...)
+	case "JP":
+		return a.parseJP(operands...)
+	case "JR":
+		return a.parseJR(operands...)
+
 	default:
 		return ErrorUnknownInstruction
 	}
@@ -222,6 +252,20 @@ func bapPtr(buf []byte, base uint8, ptr tokenPtr) error {
 		return bap(buf, 0xDD, base, ptr.offset)
 	case "IY":
 		return bap(buf, 0xFD, base, ptr.offset)
+	default:
+		return ErrorUnexpectedRegister
+	}
+}
+
+func bapPtrImm8(buf []byte, base uint8, ptr tokenPtr, imm8 tokenImm8) error {
+	regName := ptr.regName()
+	switch regName {
+	case "HL":
+		return bap(buf, base, imm8)
+	case "IX":
+		return bap(buf, 0xDD, base, ptr.offset, imm8)
+	case "IY":
+		return bap(buf, 0xFD, base, ptr.offset, imm8)
 	default:
 		return ErrorUnexpectedRegister
 	}
@@ -786,9 +830,139 @@ func (a *Assembler) parseINC(operands ...token) error {
 
 }
 
-/*
+func (a *Assembler) parseIND(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0xED, 0xAA)
+}
 
- */
+func (a *Assembler) parseINDR(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0xED, 0xBA)
+}
+
+func (a *Assembler) parseINI(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0xED, 0xA2)
+}
+
+func (a *Assembler) parseINIR(operands ...token) error {
+	return bapNoOps(a.Binary, operands, 0xED, 0xB2)
+}
+
+func (a *Assembler) parseJP(operands ...token) error {
+	flag, op, err := flagOp(operands...)
+	if err != nil {
+		return err
+	}
+	switch target := op.(type) {
+	case tokenImm16:
+		switch string(flag) {
+		case "C":
+			return bap(a.Binary, 0xDA, target)
+		case "M":
+			return bap(a.Binary, 0xFA, target)
+		case "NC":
+			return bap(a.Binary, 0xD2, target)
+		case "": // unconditional
+			return bap(a.Binary, 0xC3, target)
+		case "NZ":
+			return bap(a.Binary, 0xC2, target)
+		case "P":
+			return bap(a.Binary, 0xF2, target)
+		case "PE":
+			return bap(a.Binary, 0xEA, target)
+		case "PO":
+			return bap(a.Binary, 0xE2, target)
+		case "Z":
+			return bap(a.Binary, 0xCA, target)
+		default:
+			return ErrorUnknownFlag
+		}
+
+	case tokenPtr:
+		return bapPtr(a.Binary, 0xE9, target)
+
+	// XXX how to handle labels? Will this parser only get Imm16 to fix up later?
+
+	default:
+		return ErrorUnexpectedType
+	}
+}
+
+func (a *Assembler) parseJR(operands ...token) error {
+	flag, op, err := flagOp(operands...)
+	if err != nil {
+		return err
+	}
+	switch target := op.(type) {
+	case tokenOff8:
+		switch string(flag) {
+		case "C":
+			return bap(a.Binary, 0x38, target)
+		case "NC":
+			return bap(a.Binary, 0x30, target)
+		case "": // unconditional
+			return bap(a.Binary, 0x18, target)
+		case "NZ":
+			return bap(a.Binary, 0x20, target)
+		case "Z":
+			return bap(a.Binary, 0x28, target)
+		default:
+			return ErrorUnknownFlag
+		}
+
+	// XXX how to handle labels? Will this parser only get Imm8 to fix up later?
+
+	default:
+		return ErrorUnexpectedType
+	}
+}
+
+func (a *Assembler) parseLD(operands ...token) error {
+	if len(operands) != 2 {
+		return ErrorNeedTwoOperands
+	}
+	op1, op2 := operands[0], operands[1]
+
+	switch dst := op1.(type) {
+	case tokenReg8:
+		switch src := op2.(type) {
+		case tokenReg8:
+			code := 0b1000000 | dst.rb()<<3 | src.rb()
+			return bap(a.Binary, code)
+		case tokenImm8:
+			code := dst.rb()<<3 | 0b110
+			return bap(a.Binary, code, src)
+		default:
+			return ErrorUnexpectedType
+		}
+
+	case tokenReg16:
+		switch src := op2.(type) {
+		case tokenReg16:
+			code := 0b00100011 | (src.dd() << 3)
+			return bap(a.Binary, code, dst)
+		case tokenImm16:
+			code := 0b00100011 | (src.dd() << 3)
+			return bap(a.Binary, code, src)
+		default:
+			return ErrorUnexpectedType
+		}
+
+
+	case tokenPtr:
+		switch src := op2.(type) {
+		case tokenReg8:
+			code := 0b1_110_000 | src.rb()
+			return bapPtr(a.Binary, code, dst)
+		case tokenImm8:
+			code := uint8(0b0_110_110)
+			return bapPtrImm8(a.Binary, code, dst, src)
+		default:
+			return ErrorUnexpectedType
+		}
+	default:
+		return ErrorUnexpectedType
+	}
+	return ErrorUnexpectedType
+}
 
 /*
 
@@ -796,28 +970,10 @@ func (a *Assembler) parseINC(operands ...token) error {
 Mnemonic     Size OP-Code         Clock  SZHPNC  Effect
 
 
-IND            2  ED AA           16     ***?1-  [HL]=[C],HL=HL-1,B=B-1
-INDR           2  ED BA           21/16  01*?1-  IND until B=0
-INI            2  ED A2           16     ***?1-  [HL]=[C],HL=HL+1,B=B-1
-INIR           2  ED B2           21/16  01*?1-  INI until B=0
-JP NN          3  C3 XX XX        10     ------  PC=NN
-JP (HL)        1  E9               4     ------  PC=HL
-JP (IX)        2  DD E9            8     ------  PC=IX
-JP (IY)        2  FD E9            8     ------  PC=IY
-JP C,NN        3  DA XX XX        10/10  ------  If CY then PC=NN
-JP M,NN        3  FA XX XX        10/10  ------  If S then PC=NN
-JP NC,NN       3  D2 XX XX        10/10  ------  If !CY then PC=NN
-JP NZ,NN       3  C2 XX XX        10/10  ------  If !Z then PC=NN
-JP P,NN        3  F2 XX XX        10/10  ------  If !S then PC=NN
-JP PE,NN       3  EA XX XX        10/10  ------  If P then PC=NN
-JP PO,NN       3  E2 XX XX        10/10  ------  If !P then PC=NN
-JP Z,NN        3  CA XX XX        10/10  ------  If Z then PC=NN
-JR n           2  18 XX           12     ------  PC=PC+n
-JR C,n         2  38 XX           12/7   ------  If CY then PC=PC+n
-JR NC,n        2  30 XX           12/7   ------  If !CY then PC=PC+n
-JR NZ,n        2  20 XX           12/7   ------  If !Z then PC=PC+n
-JR Z,n         2  28 XX           12/7   ------  If Z then PC=PC+n
+
+
 LD (BC),A      1  02               7     ------  [BC]=A
+LD (DE),A      1  12               7     ------  [DE]=A
 LD (DE),A      1  12               7     ------  [DE]=A
 LD (HL),r      1  70+rb            7     ------  [HL]=r
 LD (HL),N      2  36 XX           10     ------  [HL]=N
@@ -832,6 +988,7 @@ LD (NN),HL     3  22 XX XX        16     ------  [NN]=L, (NN+1)=H
 LD (NN),IX     4  DD 22 XX XX     20     ------  [NN,NN+1]=IX
 LD (NN),IY     4  FD 22 XX XX     20     ------  [NN,NN+1]=IY
 LD (NN),SP     4  ED 73 XX XX     20     ------  [NN,NN+1]=SP
+
 LD A,(BC)      1  0A               7     ------  A=[BC]
 LD A,(DE)      1  1A               7     ------  A=[DE]
 LD A,(HL)      1  7E               7     ------  A=[HL]
@@ -842,6 +999,7 @@ LD A,r         1  78+rb            4     ------  A=r
 LD A,I         2  ED 57            9     **0*0-  A=I
 LD A,N         2  3E XX            7     ------  A=N
 LD A,R         2  ED 5F            9     **0*0-  A=R
+
 LD B,(HL)      1  46               7     ------  B=[HL]
 LD B,(IX+n)    3  DD 46 XX        19     ------  B=[IX+n]
 LD B,(IY+n)    3  FD 46 XX        19     ------  B=[IY+n]
@@ -849,6 +1007,7 @@ LD B,r         1  40+rb            4     ------  B=r
 LD B,N         2  06 XX            7     ------  B=N
 LD BC,(NN)     4  ED 4B XX XX     20     ------  C=[NN],B=[NN+1]
 LD BC,NN       3  01 XX XX        10     ------  BC=NN
+
 LD C,(HL)      1  4E               7     ------  C=[HL]
 LD C,(IX+n)    3  DD 4E XX        19     ------  C=[IX+n]
 LD C,(IY+n)    3  FD 4E XX        19     ------  C=[IY+n]
@@ -859,6 +1018,7 @@ LD D,(IX+n)    3  DD 56 XX        19     ------  D=[IX+n]
 LD D,(IY+n)    3  FD 56 XX        19     ------  D=[IY+n]
 LD D,r         1  50+rb            4     ------  D=r
 LD D,N         2  16 XX            7     ------  D=N
+
 LD DE,(NN)     4  ED 5B XX XX     20     ------  E=[NN],D=[NN+1]
 LD DE,NN       3  11 XX XX        10     ------  DE=NN
 LD E,(HL)      1  5E               7     ------  E=[HL]
@@ -866,6 +1026,7 @@ LD E,(IX+n)    3  DD 5E XX        19     ------  E=[IX+n]
 LD E,(IY+n)    3  FD 5E XX        19     ------  E=[IY+n]
 LD E,r         1  58+rb            4     ------  E=r
 LD E,N         2  1E XX            7     ------  E=N
+
 LD H,(HL)      1  66               7     ------  H=[HL]
 LD H,(IX+n)    3  DD 66 XX        19     ------  H=[IX+n]
 LD H,(IY+n)    3  FD 66 XX        19     ------  H=[IY+n]
@@ -874,22 +1035,28 @@ LD H,N         2  26 XX            7     ------  H=N
 LD HL,(NN)     3  2A XX XX        16     ------  L=[NN],H=[NN+1]
 LD HL,(NN)     4  ED 6B XX XX     20     ------  L=[NN],H=[NN+1]
 LD HL,NN       3  21 XX XX        10     ------  HL=NN
+
 LD I,A         2  ED 47            9     ------  I=A
 LD IX,(NN)     4  DD 2A XX XX     20     ------  IX=[NN,NN+1]
 LD IX,NN       4  DD 21 XX XX     14     ------  IX=NN
 LD IY,(NN)     4  FD 2A XX XX     20     ------  IY=[NN,NN+1]
 LD IY,NN       4  FD 21 XX XX     14     ------  IY=NN
+
 LD L,(HL)      1  6E               7     ------  L=[HL]
 LD L,(IX+n)    3  DD 6E XX        19     ------  L=[IX+n]
 LD L,(IY+n)    3  FD 6E XX        19     ------  L=[IY+n]
 LD L,r         1  68+rb            4     ------  L=r
 LD L,N         2  2E XX            7     ------  L=N
 LD R,A         2  ED 4F            9     ------  R=A
+
 LD SP,(NN)     4  ED 7B XX XX     20     ------  SP=[NN,NN+1]
 LD SP,HL       1  F9               6     ------  SP=HL
 LD SP,IX       2  DD F9           10     ------  SP=IX
 LD SP,IY       2  FD F9           10     ------  SP=IY
 LD SP,NN       3  31 XX XX        10     ------  SP=NN
+
+
+
 LDD            2  ED A8           16     --0*0-  [DE]=[HL],HL-=1,DE-=1,BC-=1
 LDDR           2  ED B8           21/16  --000-  LDD until BC=0
 LDI            2  ED A0           16     --0*0-  [DE]=[HL],HL+=1,DE+=1,BC=-1
@@ -1134,6 +1301,29 @@ INC IY         2  FD 23           10     ------  IY=IY+1
 INC L          1  2C               4     ***V0-  L=L+1
 INC SP         1  33               6     ------  SP=SP+1
 
+IND            2  ED AA           16     ***?1-  [HL]=[C],HL=HL-1,B=B-1
+INDR           2  ED BA           21/16  01*?1-  IND until B=0
+INI            2  ED A2           16     ***?1-  [HL]=[C],HL=HL+1,B=B-1
+INIR           2  ED B2           21/16  01*?1-  INI until B=0
+
+JP NN          3  C3 XX XX        10     ------  PC=NN
+JP (HL)        1  E9               4     ------  PC=HL
+JP (IX)        2  DD E9            8     ------  PC=IX
+JP (IY)        2  FD E9            8     ------  PC=IY
+JP C,NN        3  DA XX XX        10/10  ------  If CY then PC=NN
+JP M,NN        3  FA XX XX        10/10  ------  If S then PC=NN
+JP NC,NN       3  D2 XX XX        10/10  ------  If !CY then PC=NN
+JP NZ,NN       3  C2 XX XX        10/10  ------  If !Z then PC=NN
+JP P,NN        3  F2 XX XX        10/10  ------  If !S then PC=NN
+JP PE,NN       3  EA XX XX        10/10  ------  If P then PC=NN
+JP PO,NN       3  E2 XX XX        10/10  ------  If !P then PC=NN
+JP Z,NN        3  CA XX XX        10/10  ------  If Z then PC=NN
+
+JR n           2  18 XX           12     ------  PC=PC+n
+JR C,n         2  38 XX           12/7   ------  If CY then PC=PC+n
+JR NC,n        2  30 XX           12/7   ------  If !CY then PC=PC+n
+JR NZ,n        2  20 XX           12/7   ------  If !Z then PC=PC+n
+JR Z,n         2  28 XX           12/7   ------  If Z then PC=PC+n
 
 
 
