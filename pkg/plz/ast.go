@@ -8,11 +8,11 @@ type Program struct {
 }
 
 type Statement struct {
-	Basic *BasicStatement
-	If    *IfStatement
+	*Basic
+	*If
 }
 
-type BasicStatement struct {
+type Basic struct {
 	Assignment      *Assignment
 	Group           *Group
 	Procedure       *Procedure
@@ -52,7 +52,6 @@ type Declarations struct {
 }
 type Halt struct{}
 type LabelDefinition struct{ Label }
-type Variable struct{ Name string }
 
 type Group struct {
 	While      *While
@@ -72,11 +71,11 @@ type For struct {
 
 type Case struct{ Expression }
 
-type IfStatement struct {
+type If struct {
 	Label     *Label
-	Condition Expression     // IF expression confition
-	Then      BasicStatement // Executed if TRUE
-	Else      *Statement     // Executed if false, optionally
+	Condition Expression // If expression condition
+	Then      Basic      // Executed if TRUE
+	Else      *Statement // Executed if false, optionally
 }
 
 type Label struct {
@@ -92,7 +91,7 @@ type Declaration struct {
 
 type LiteralDeclaration struct {
 	Identifier
-	Litterally string
+	Literally string
 }
 
 type TypeDeclaration struct {
@@ -110,4 +109,43 @@ type DataDeclaration struct {
 type Constant struct{}
 
 type Expression struct {
+	*Operation
+	*Variable
+}
+
+type Operation struct {
+	Operands []Expression
+	Operator
+}
+
+type Operand struct {
+	Expression
+}
+
+type Operator int
+
+const (
+	OperatorNone Operator = 0
+	OperatorADD
+	OperatorSUB
+	OperatorNEG
+	OperatorGT
+	OperatorLT
+	OperatorGTE
+	OperatorLTE
+	OperatorNEQ
+	OperatorEQU
+	OperatorMOD
+	OperatorDIV
+	OperatorNOT
+	OperatorMUL
+	OperatorAND
+	OperatorOR
+	OperatorXOR
+)
+
+type Variable struct {
+	Identifier
+	Reference bool
+	Subscript *Expression
 }
