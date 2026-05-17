@@ -1,90 +1,93 @@
-// Define VDP control and data ports
-const VDP_CONTROL = 0xBF
-const VDP_DATA = 0xBE
+// SDSC tag and SMS rom header
+// sdsctag 1.10,"Background Color","SMS Color Tutorial","Stan"
 
-// Define VDP register settings
-const VDP_REG_0 = 0b00100000 // Enable display, sprites use first 256 tiles
-const VDP_REG_1 = 0b11100000 // Enable display, 32x28 screen, sprites 8x8
+const vdp = 0xbf
 
-// A 8x8 tile pattern (a simple white square)
-TilePattern:
-    db 0b11111111
-    db 0b11111111
-    db 0b11111111
-    db 0b11111111
-    db 0b11111111
-    db 0b11111111
-    db 0b11111111
-    db 0b11111111
-
-// Sprite Attribute Table (SAT)
-SpriteTable:
-    db 96        // Y position (centered)
-    db 0         // Tile index (0)
-    db 0         // Attributes (palette 0)
-    db 96        // X position (centered)
-
+// Boot section
 org 0x0000
-Init:
-	// no interrupts
-	di
-    // Initialize stack
-    ld sp, 0xDFF0
-    // im 1
-    im 1
-	jmp Start
+    di              // disable interrupts
+    im 1            // Interrupt mode 1
+    jp main         // jump to main program
 
-org 0x80
-Start:
-    // Turn off the screen
-    call WaitVBlank
-    ld a, VDP_REG_0
-    out (VDP_CONTROL), a
-    ld a, VDP_REG_1
-    out (VDP_CONTROL), a
+org 0x0066
+	// Pause button handler
+	// Do nothing
+    retn
 
-    // Load the tile into pattern table 0 (VRAM 0x0000-0x1FFF)
-    ld hl, TilePattern
-    ld de, 0x4000 // VDP write command for VRAM 0x0000
-    ld bc, 8     // 8 bytes for one tile
-    call LoadDataToVRAM
 
-    // Set the Sprite Attribute Table (SAT) address
-    ld de, SpriteTable
-    ld hl, 0x8300 // VDP command to set SAT to 0x300
-    ld a, l
-    out (VDP_CONTROL), a
-    ld a, h
-    out (VDP_CONTROL), a
+// Main program
+main:
+    ld sp, 0xdff0
 
-    // Turn on the screen
-    ld a, VDP_REG_1 | 0b00010000 // Turn display on
-    out (VDP_CONTROL), a
+    // Set up VDP registers
 
-MainLoop:
-    halt         // Wait for VBlank interrupt
-    jr MainLoop
+    ld hl, VdpData
+    ld b, VdpDataEnd-VdpData
+    ld c, vdp
+    otir
 
-// Subroutine to load data from CPU memory to VRAM
-LoadDataToVRAM:
-	ld a, e
-    out (VDP_CONTROL), a
-    ld a, d
-    out (VDP_CONTROL), a
-LoadDataLoop:
-    ld a, (hl)
-    out (VDP_DATA), a
-    inc hl
-    dec bc
-    ld a, b
-    or c
-    jr nz, LoadDataLoop
-    ret
+    // Clear VRAM
 
-// Subroutine to wait for VBlank
-WaitVBlank:
-	ei
-    in a, (VDP_CONTROL)
-    bit 7, a
-    jr nz, WaitVBlank
-    ret
+    // 1. Set VRAM write address to 0 by outputting 0x4000 ORed with 0x0000
+    ld a,0x00
+    out (vdp),a
+    ld a, 0x40
+    out (vdp),a
+    // 2. Output 16KB of zeroes to clear the VRAM.
+    ld bc, 0x4000    // Counter for 16KB of VRAM
+    ld a, 0x00        // Value to write
+    ClearVRAMLoop:
+        out (0xbe),a // Output to VRAM address, which is auto-incremented after each write
+        dec c
+        jp nz,ClearVRAMLoop
+        dec b
+        jp nz,ClearVRAMLoop
+
+
+    // Load palette
+
+    // 1. Set VRAM write address to CRAM (palette) address 0 (for palette index 0)
+    // by outputting 0xC000 ORed with 0x0000
+    ld a, 0x00
+    out (vdp), a
+    ld a, 0xc0
+    out (vdp), a
+    // 2. Output color data
+    ld hl, PaletteData
+    ld b, PaletteDataEnd-PaletteData
+    ld c, 0xbe
+    otir
+
+    // Background Color
+    // THIS IS OUR ACTUAL BACKGROUND COLOR PROGRAM
+
+Background:
+    ld a,0x00
+    out (vdp),a
+    ld a,0x00
+    out (vdp),a
+    ld a,0xc4       // Turn on the screen
+    out (vdp),a
+    ld a,0x81
+    out (vdp),a
+
+// Data for our program to use
+
+
+PaletteData:
+db 0x19
+PaletteDataEnd:
+
+// VDP initialisation data
+VdpData:
+db 0x04,0x80,0x84,0x81,0xff,0x82,0xff,0x85,0xff,0x86,0xff,0x87,0x00,0x88,0x00,0x89,0xff,0x8a
+VdpDataEnd:
+
+// This background color program was built using information found
+// in Maxim of SMS Power fame's original programming tutorial.
+// All information concerning the setting up of the VDP before the
+// actual background code is his creation and the author owes him a
+// great deal of gratitude for writing it.
+// Background Color Demo Copyright Stan 2009.
+// THIS IS THE ABSOLUTE END OF OUR PROGRAM DEMO
+
