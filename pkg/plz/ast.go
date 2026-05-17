@@ -19,19 +19,40 @@ type BasicStatement struct {
 	Return          *Return
 	Call            *Call
 	GoTo            *GoTo
-	Declaration     *Declaration
+	Declarations    *Declarations
 	Halt            *Halt
 	LabelDefinition *LabelDefinition
 }
 
 type Assignment struct{}
-type Procedure struct{}
+type Procedure struct {
+	Name       Label
+	Type       Type
+	Parameters []Identifier
+	Statements []Statement
+}
+
+type Identifier string
+type Type int
+
+const (
+	TypeNone Type = iota
+	TypeByte
+	TypeAddress
+	TypeLabel
+	TypeData
+	TypeConstant
+)
+
 type Return struct{}
-type Call struct{ Name string }
+type Call struct{ Variable }
 type GoTo struct{ Label }
-type Declaration struct{}
+type Declarations struct {
+	Declarations []Declaration
+}
 type Halt struct{}
 type LabelDefinition struct{ Label }
+type Variable struct{ Name string }
 
 type Group struct {
 	While      *While
@@ -62,6 +83,31 @@ type Label struct {
 	Name     string
 	Location int
 }
+
+type Declaration struct {
+	Type    *TypeDeclaration
+	Literal *LiteralDeclaration
+	Data    *DataDeclaration
+}
+
+type LiteralDeclaration struct {
+	Identifier
+	Litterally string
+}
+
+type TypeDeclaration struct {
+	*Initializer
+}
+
+type Initializer struct {
+}
+
+type DataDeclaration struct {
+	Identifier
+	Constants []Constant
+}
+
+type Constant struct{}
 
 type Expression struct {
 }
