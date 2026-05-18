@@ -20,10 +20,18 @@ func (p Parser) Peek() Token {
 	return p.Tokens[p.Current]
 }
 
+func (p Parser) PeekAt(offset int) Token {
+	return p.Tokens[p.Current+offset]
+}
+
 func (p *Parser) Next() Token {
 	res := p.Peek()
 	p.Current++
 	return res
+}
+
+func (p *Parser) End() bool {
+	return p.Current >= len(p.Tokens)
 }
 
 func (p *Parser) Accept(kinds ...TokenKind) (*Token, error) {
@@ -34,6 +42,18 @@ func (p *Parser) Accept(kinds ...TokenKind) (*Token, error) {
 		}
 	}
 	return nil, Error{token.Position, "Unexpected token kind"}
+}
+
+func (p Parser) Have(kinds ...TokenKind) bool {
+	offset := 0
+	for _, kind := range kinds {
+		token := p.PeekAt(offset)
+		if kind == token.TokenKind {
+			return true
+		}
+		offset++
+	}
+	return false
 }
 
 func ParseFile(name string) (*Program, error) {
@@ -51,7 +71,7 @@ func ParseFile(name string) (*Program, error) {
 }
 
 func (p *Program) Parse(parser *Parser) error {
-	for parser.Current < len(parser.Tokens) {
+	for !parser.End() {
 		var s Statement
 		err := s.Parse(parser)
 		if err != nil {
@@ -62,7 +82,54 @@ func (p *Program) Parse(parser *Parser) error {
 	return nil
 }
 
-func (s Statement) Parse(parser *Parser) error {
+func (s *Statement) Parse(parser *Parser) error {
+	var l Label
+	// allow two labels , numeric and name
+	for i := 0; i < 2; i++ {
+		if l.Have(*parser) {
+			err := l.Parse(parser)
+			if err != nil {
+				return nil
+			}
+			s.Label = &l
+		}
+	}
+	tok := parser.Peek()
+	switch tok.TokenKind {
+	case KeywordOutput:
+		s.Output = &Output{}
+		return s.Output.Parse(parser)
+	default:
+		return Error{Position: tok.Position, Message: "Unknown statement type"}
+	}
+
+	return nil
+}
+
+func (o *Output) Parse(parser *Parser) error {
+	return nil
+}
+
+// Returns true if we have a label false if not. May only peek, peekAt or Have.
+func (l *Label) Have(parser Parser) bool {
+	if parser.Have(TokenInt, ':') {
+		return true
+	}
+	if parser.Have(TokenIdent, ':') {
+		return true
+	}
+	return false
+}
+
+func (l *Label) Parse(parser *Parser) error {
+	tok, err := parser.Accept(TokenInt, TokenIdent)
+	if err != nil {
+		return err
+	} else if tok.TokenKind == TokenInt {
+		l.Location = tok.Number
+	} else if tok.TokenKind == TokenIdent {
+		l.Name = tok.Text
+	}
 	return nil
 }
 

@@ -8,12 +8,8 @@ type Program struct {
 }
 
 type Statement struct {
-	*Basic
-	*If
-}
-
-type Basic struct {
 	Label        *Label
+	If           *If
 	Assignment   *Assignment
 	Group        *Group
 	Procedure    *Procedure
@@ -24,12 +20,18 @@ type Basic struct {
 	Halt         *Halt
 	Enable       *Enable
 	Disable      *Disable
+	Output       *Output
 }
 
 type Enable struct {
 }
 
 type Disable struct {
+}
+
+type Output struct {
+	Port  int
+	Value byte
 }
 
 type Assignment struct {
@@ -66,7 +68,10 @@ type Return struct {
 	*Expression
 }
 
-type Call struct{ Variable }
+type Call struct {
+	Variable
+	Arguments []Expression
+}
 type GoTo struct{ Label }
 type Declarations struct {
 	Declarations []Declaration
@@ -94,7 +99,7 @@ type Case struct{ Expression }
 type If struct {
 	Label     *Label
 	Condition Expression // If expression condition
-	Then      Basic      // Executed if TRUE
+	Then      Statement  // Executed if TRUE
 	Else      *Statement // Executed if false, optionally
 }
 
@@ -143,6 +148,7 @@ type Constant struct{}
 
 type Expression struct {
 	*Operation
+	*Call // inline function call
 	*Variable
 }
 
