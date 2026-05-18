@@ -13,23 +13,41 @@ type Statement struct {
 }
 
 type Basic struct {
-	Assignment      *Assignment
-	Group           *Group
-	Procedure       *Procedure
-	Return          *Return
-	Call            *Call
-	GoTo            *GoTo
-	Declarations    *Declarations
-	Halt            *Halt
-	LabelDefinition *LabelDefinition
+	Label        *Label
+	Assignment   *Assignment
+	Group        *Group
+	Procedure    *Procedure
+	Return       *Return
+	Call         *Call
+	GoTo         *GoTo
+	Declarations *Declarations
+	Halt         *Halt
+	Enable       *Enable
+	Disable      *Disable
 }
 
-type Assignment struct{}
+type Enable struct {
+}
+
+type Disable struct {
+}
+
+type Assignment struct {
+	Variable
+	Expression
+}
+
 type Procedure struct {
 	Name       Label
 	Type       Type
 	Parameters []Identifier
 	Statements []Statement
+	Interrupt  *Interrupt
+}
+
+type Interrupt struct {
+	Interrupt int
+	NMI       bool
 }
 
 type Identifier string
@@ -44,14 +62,16 @@ const (
 	TypeConstant
 )
 
-type Return struct{}
+type Return struct {
+	*Expression
+}
+
 type Call struct{ Variable }
 type GoTo struct{ Label }
 type Declarations struct {
 	Declarations []Declaration
 }
 type Halt struct{}
-type LabelDefinition struct{ Label }
 
 type Group struct {
 	While      *While
@@ -84,7 +104,7 @@ type Label struct {
 }
 
 type Declaration struct {
-	Type    *TypeDeclaration
+	Type    *TypeDeclarations
 	Literal *LiteralDeclaration
 	Data    *DataDeclaration
 }
@@ -94,11 +114,24 @@ type LiteralDeclaration struct {
 	Literally string
 }
 
+type VariableDeclaration struct {
+	Identifier
+	Based Variable
+}
+
+type TypeDeclarations struct {
+	Declarations []TypeDeclaration
+}
+
 type TypeDeclaration struct {
+	VariableDeclaration
+	Type
+	Dimension int
 	*Initializer
 }
 
 type Initializer struct {
+	Constant
 }
 
 type DataDeclaration struct {
@@ -148,4 +181,8 @@ type Variable struct {
 	Identifier
 	Reference bool
 	Subscript *Expression
+}
+
+type LogicalExpression struct {
+	*Variable
 }
