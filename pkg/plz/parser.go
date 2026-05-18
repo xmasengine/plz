@@ -1,8 +1,39 @@
 package plz
 
+import "fmt"
+
+type Error struct {
+	Position
+	Message string
+}
+
+func (e Error) Error() string {
+	return fmt.Sprintf("%s: %s", e.Position, e.Message)
+}
+
 type Parser struct {
 	Tokens  []Token
 	Current int
+}
+
+func (p Parser) Peek() Token {
+	return p.Tokens[p.Current]
+}
+
+func (p *Parser) Next() Token {
+	res := p.Peek()
+	p.Current++
+	return res
+}
+
+func (p *Parser) Accept(kinds ...TokenKind) (*Token, error) {
+	token := p.Next()
+	for _, kind := range kinds {
+		if kind == token.TokenKind {
+			return &token, nil
+		}
+	}
+	return nil, Error{token.Position, "Unexpected token kind"}
 }
 
 func ParseFile(name string) (*Program, error) {
