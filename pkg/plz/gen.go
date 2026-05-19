@@ -51,6 +51,10 @@ org 0x0000
     im 1            // Interrupt mode 1
     jp main         // Jump to main program
 
+// Interrupt handler
+org 0x0038
+	reti // do nothing for now
+
 // NMI or pause button handler
 org 0x0066
     retn // Do nothing
