@@ -13,6 +13,7 @@ import (
 )
 
 import (
+	plz "github.com/xmasengine/plz/pkg/plz"
 	"github.com/xmasengine/plz/pkg/z80/emu"
 	asm "github.com/xmasengine/plz/pkg/z80asm"
 )
@@ -38,10 +39,19 @@ type arguments struct {
 const defaultInputPort = 60
 const defaultOutputPort = 61
 
+func ExitIfError(form string, err error, args ...any) {
+	if err != nil {
+		args = append(args, err)
+		fmt.Fprintf(os.Stderr, "error: "+form+" %s\n", args...)
+		os.Exit(2)
+	}
+}
+
 func main() {
 	args := arguments{Ctx: context.Background()}
 	flag.BoolVar(&args.Mode.Assembler, "A", false, "Switch to assembler mode")
 	flag.BoolVar(&args.Mode.Emulator, "E", false, "Switch to emulator mode")
+	flag.BoolVar(&args.Mode.Compiler, "C", true, "Switch to compiler mode")
 	flag.BoolVar(&args.Mode.Help, "h", false, "Display help")
 	flag.DurationVar(&args.Timeout, "t", 0, "Emulation timeout")
 	flag.StringVar(&args.Output, "o", "", "output file name")
@@ -115,7 +125,39 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %s\n", err)
 			os.Exit(2)
 		}
-	}
+	} else if args.Mode.Compiler {
+		if args.Output == "" {
+			fmt.Fprintln(os.Stderr, "error: please specify output file with -o")
+			os.Exit(2)
+		}
+		if len(args.Sources) < 1 {
+			fmt.Fprintln(os.Stderr, "error: please specify one source file")
+			os.Exit(2)
+		}
+		src := args.Sources[0]
+		tokens, err := plz.ScanFile(src)
+		ExitIfError("scanner", err)
+		for _, token := range tokens {
+			fmt.Printf("token: %v\n", token)
+		}
 
+		parser := plz.NewParser(tokens)
+		program := plz.Program{}
+		err = program.Parse(parser)
+		ExitIfError("parser", err)
+
+		gen, err := plz.NewGenFile(args.Output + ".asm")
+		ExitIfError("generator", err)
+
+		err = program.Gen(gen)
+		ExitIfError("gen", err)
+
+		if args.Format == "bin" {
+			err = asm.AssembleFiles(args.Output, []string{gen.File.Name()})
+		} else if args.Format == "sms" {
+			err = asm.AssembleSMS(args.Output, []string{gen.File.Name()})
+		}
+		ExitIfError("asm", err)
+	}
 	os.Exit(0)
 }

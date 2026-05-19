@@ -1,6 +1,9 @@
 package plz
 
-type AST interface {
+type Node interface {
+	Parse(*Parser) error
+	Gen(*Gen) error
+	Nodes() []Node
 }
 
 type Program struct {
@@ -72,7 +75,12 @@ type Call struct {
 	Variable
 	Arguments []Expression
 }
-type GoTo struct{ Label }
+
+type GoTo struct {
+	Name     string
+	Location int
+}
+
 type Declarations struct {
 	Declarations []Declaration
 }

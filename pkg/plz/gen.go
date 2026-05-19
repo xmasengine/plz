@@ -1,0 +1,159 @@
+package plz
+
+import "fmt"
+import "os"
+
+type Gen struct {
+	*os.File
+}
+
+func NewGenFile(name string) (*Gen, error) {
+	fout, err := os.Create(name)
+	if err != nil {
+		return nil, err
+	}
+	return NewGen(fout), nil
+}
+
+func NewGenTmp() (*Gen, error) {
+	fout, err := os.CreateTemp("", "plz_*.asm")
+	if err != nil {
+		return nil, err
+	}
+	return NewGen(fout), nil
+}
+
+func NewGen(fout *os.File) *Gen {
+	res := &Gen{File: fout}
+	return res
+}
+
+func (g *Gen) Close() error {
+	return g.File.Close()
+}
+
+func (g *Gen) Emitf(form string, args ...any) (int, error) {
+	return fmt.Fprintf(g.File, form, args...)
+}
+
+func (g *Gen) Emitln(args ...any) (int, error) {
+	return fmt.Fprintln(g.File, args...)
+}
+
+func (g *Gen) Emit(args ...any) (int, error) {
+	return fmt.Fprint(g.File, args...)
+}
+
+const ProgramHeader = `org 0x0000
+// Boot section
+org 0x0000
+    di              // Disable interrupts
+    im 1            // Interrupt mode 1
+    jp main         // Jump to main program
+
+// NMI or pause button handler
+org 0x0066
+    retn // Do nothing
+
+// Main program
+main:
+    ld sp, 0xdff0 // Set up stack pointer at end of RAM.
+`
+
+func (p Program) Gen(g *Gen) error {
+	g.Emit(ProgramHeader)
+	for _, statement := range p.Statements {
+		err := statement.Gen(g)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s Statement) Gen(g *Gen) error {
+	if s.Label != nil {
+		s.Label.Gen(g)
+	}
+	switch {
+	case s.If != nil:
+		return s.If.Gen(g)
+	case s.Assignment != nil:
+		return s.Assignment.Gen(g)
+	case s.Group != nil:
+		return s.Group.Gen(g)
+	case s.Procedure != nil:
+		return s.Procedure.Gen(g)
+	case s.Return != nil:
+		return s.Return.Gen(g)
+	case s.Call != nil:
+		return s.Call.Gen(g)
+	case s.GoTo != nil:
+		return s.GoTo.Gen(g)
+	case s.Declarations != nil:
+		return s.Declarations.Gen(g)
+	case s.Halt != nil:
+		return s.Halt.Gen(g)
+	case s.Enable != nil:
+		return s.Enable.Gen(g)
+	case s.Disable != nil:
+		return s.Disable.Gen(g)
+	case s.Output != nil:
+		return s.Output.Gen(g)
+	default:
+		g.Emitf("// statement not implemented: %v\n", s)
+	}
+	return nil
+}
+
+const maxUint16 = 1 << 16
+
+func (l Label) Gen(g *Gen) error {
+	if l.Location > 0 {
+		org := l.Location % maxUint16
+		target := l.Location / maxUint16
+		if target > 0 {
+			g.Emitf("org %x, %x\n", org, target)
+		} else {
+			g.Emitf("org %x, %x\n", org)
+		}
+	}
+	if l.Name != "" {
+		g.Emitf("%s:", l.Name)
+	}
+	return nil
+}
+
+func (s If) Gen(g *Gen) error {
+	g.Emitf("// statement not yet implemented: %v\n", s)
+	return nil
+}
+
+func (s Assignment) Gen(g *Gen) error   { return nil }
+func (s Group) Gen(g *Gen) error        { return nil }
+func (s Procedure) Gen(g *Gen) error    { return nil }
+func (s Return) Gen(g *Gen) error       { return nil }
+func (s Call) Gen(g *Gen) error         { return nil }
+func (s GoTo) Gen(g *Gen) error         { return nil }
+func (s Declarations) Gen(g *Gen) error { return nil }
+
+func (s Halt) Gen(g *Gen) error {
+	g.Emitln("halt")
+	return nil
+}
+
+func (s Enable) Gen(g *Gen) error {
+	g.Emitln("ei")
+	return nil
+}
+
+func (s Disable) Gen(g *Gen) error {
+	g.Emitln("di")
+	return nil
+}
+
+func (s Output) Gen(g *Gen) error {
+	g.Emitf("ld a, %d\n", s.Value)
+	g.Emitf("out (%d), a\n", s.Port)
+	return nil
+}

@@ -21,22 +21,26 @@ const (
 	TokenComment
 	KeywordDo
 	KeywordEnd
+	KeywordHalt
+	KeywordGoTo
 	KeywordInput
 	KeywordOutput
 )
 
 var Keywords = map[string]TokenKind{
 	"DO":     KeywordDo,
+	"GOTO":   KeywordGoTo,
 	"END":    KeywordEnd,
+	"HALT":   KeywordHalt,
 	"INPUT":  KeywordInput,
 	"OUTPUT": KeywordOutput,
 }
 
 type Token struct {
-	TokenKind
-	Position
-	Text   string
-	Number int
+	TokenKind TokenKind
+	Position  Position
+	Text      string
+	Number    int
 }
 
 func Scan(rd io.Reader) ([]Token, error) {
@@ -44,21 +48,40 @@ func Scan(rd io.Reader) ([]Token, error) {
 	var res []Token
 	s := &scanner.Scanner{}
 	s.Init(rd)
-	s.Mode = scanner.ScanIdents | scanner.ScanInts | scanner.ScanStrings | scanner.ScanRawStrings | scanner.ScanComments | scanner.SkipComments
+	s.Mode = scanner.ScanIdents |
+		scanner.ScanInts |
+		scanner.ScanChars |
+		scanner.ScanStrings |
+		scanner.ScanRawStrings |
+		scanner.ScanComments |
+		scanner.SkipComments
+
 	s.Error = func(s2 *scanner.Scanner, msg string) {
-		err = errors.New(s2.Pos().String() + ":" + msg)
+		err = errors.New("scan error:" + s2.Pos().String() + ":" + msg)
 	}
-	for kind := TokenKind(s.Next()); kind != TokenEOF; kind = TokenKind(s.Next()) {
+
+	for kind := TokenKind(s.Scan()); kind != TokenEOF; kind = TokenKind(s.Scan()) {
 		if err != nil {
 			return nil, err
 		}
-		tok := Token{TokenKind: kind, Text: s.TokenText()}
+		tok := Token{TokenKind: kind, Text: s.TokenText(), Position: s.Pos()}
 		if kind == TokenInt {
 			tok.Number, err = strconv.Atoi(tok.Text)
+			if err != nil {
+				return nil, tok.Errorf("int %s %s", tok.Text, err.Error())
+			}
+		} else if kind == TokenChar {
+			r, _, _, err := strconv.UnquoteChar(tok.Text[1:len(tok.Text)], '\'')
+			tok.Number = int(r)
+			if err != nil {
+				return nil, tok.Errorf("char %s %s", tok.Text, err.Error())
+			}
 		} else if kind == TokenRawString {
 			tok.TokenKind = TokenString
-		} else if kw, ok := Keywords[tok.Text]; ok {
-			tok.TokenKind = kw
+		} else if kind == TokenIdent {
+			if kw, ok := Keywords[tok.Text]; ok {
+				tok.TokenKind = kw
+			}
 		}
 		res = append(res, tok)
 	}

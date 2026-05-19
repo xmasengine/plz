@@ -11,20 +11,39 @@ func (e Error) Error() string {
 	return fmt.Sprintf("%s: %s", e.Position, e.Message)
 }
 
+func (t Token) Errorf(form string, args ...any) Error {
+	return Error{Position: t.Position, Message: fmt.Sprintf(form, args...)}
+}
+
 type Parser struct {
 	Tokens  []Token
 	Current int
 }
 
+func NewParser(tokens []Token) *Parser {
+	return &Parser{Tokens: tokens}
+}
+
 func (p Parser) Peek() Token {
+	if p.Current >= len(p.Tokens) {
+		return Token{TokenKind: TokenEOF}
+	}
+
 	return p.Tokens[p.Current]
 }
 
 func (p Parser) PeekAt(offset int) Token {
+	if p.Current+offset >= len(p.Tokens) {
+		return Token{TokenKind: TokenEOF}
+	}
 	return p.Tokens[p.Current+offset]
 }
 
 func (p *Parser) Next() Token {
+	if p.Current >= len(p.Tokens) {
+		return Token{TokenKind: TokenEOF}
+	}
+
 	res := p.Peek()
 	p.Current++
 	return res
@@ -41,17 +60,15 @@ func (p *Parser) Accept(kinds ...TokenKind) (*Token, error) {
 			return &token, nil
 		}
 	}
-	return nil, Error{token.Position, "Unexpected token kind"}
+	return nil, token.Errorf("Accept: unexpected token, not in %v", kinds)
 }
 
 func (p Parser) Have(kinds ...TokenKind) bool {
-	offset := 0
-	for _, kind := range kinds {
+	for offset, kind := range kinds {
 		token := p.PeekAt(offset)
 		if kind == token.TokenKind {
 			return true
 		}
-		offset++
 	}
 	return false
 }
@@ -96,26 +113,30 @@ func (s *Statement) Parse(parser *Parser) error {
 	}
 	tok := parser.Peek()
 	switch tok.TokenKind {
+	case KeywordHalt:
+		s.Halt = &Halt{}
+		return s.Halt.Parse(parser)
 	case KeywordOutput:
 		s.Output = &Output{}
 		return s.Output.Parse(parser)
+	case KeywordGoTo:
+		s.GoTo = &GoTo{}
+		return s.GoTo.Parse(parser)
 	default:
-		return Error{Position: tok.Position, Message: "Unknown statement type"}
+		return tok.Errorf("Statement: unexpected token %v", tok)
 	}
 
-	return nil
-}
-
-func (o *Output) Parse(parser *Parser) error {
 	return nil
 }
 
 // Returns true if we have a label false if not. May only peek, peekAt or Have.
 func (l *Label) Have(parser Parser) bool {
 	if parser.Have(TokenInt, ':') {
+		println("found int label")
 		return true
 	}
 	if parser.Have(TokenIdent, ':') {
+		println("found named label")
 		return true
 	}
 	return false
@@ -130,6 +151,46 @@ func (l *Label) Parse(parser *Parser) error {
 	} else if tok.TokenKind == TokenIdent {
 		l.Name = tok.Text
 	}
+	_, err = parser.Accept(TokenKind(':'))
+	return err
+}
+
+func (g *Halt) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordHalt)
+	return err
+}
+
+func (g *GoTo) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordGoTo)
+	if err != nil {
+		return err
+	}
+	tok, err := parser.Accept(TokenInt, TokenIdent)
+	if err != nil {
+		return err
+	} else if tok.TokenKind == TokenInt {
+		g.Location = tok.Number
+	} else if tok.TokenKind == TokenIdent {
+		g.Name = tok.Text
+	}
+	return nil
+}
+
+func (g *Output) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordOutput)
+	if err != nil {
+		return err
+	}
+	tok, err := parser.Accept(TokenInt)
+	if err != nil {
+		return err
+	}
+	g.Port = tok.Number
+	tok, err = parser.Accept(TokenInt, TokenChar)
+	if err != nil {
+		return err
+	}
+	g.Value = byte(tok.Number & 0xff)
 	return nil
 }
 
