@@ -135,29 +135,8 @@ func main() {
 			os.Exit(2)
 		}
 		src := args.Sources[0]
-		tokens, err := plz.ScanFile(src)
-		ExitIfError("scanner", err)
-		for _, token := range tokens {
-			fmt.Printf("token: %v\n", token)
-		}
-
-		parser := plz.NewParser(tokens)
-		program := plz.Program{}
-		err = program.Parse(parser)
-		ExitIfError("parser", err)
-
-		gen, err := plz.NewGenFile(args.Output + ".asm")
-		ExitIfError("generator", err)
-
-		err = program.Gen(gen)
-		ExitIfError("gen", err)
-
-		if args.Format == "bin" {
-			err = asm.AssembleFiles(args.Output, []string{gen.File.Name()})
-		} else if args.Format == "sms" {
-			err = asm.AssembleSMS(args.Output, []string{gen.File.Name()})
-		}
-		ExitIfError("asm", err)
+		err := plz.Compile(args.Output, args.Format, src)
+		ExitIfError("compiler", err)
 	}
 	os.Exit(0)
 }

@@ -132,11 +132,9 @@ func (s *Statement) Parse(parser *Parser) error {
 // Returns true if we have a label false if not. May only peek, peekAt or Have.
 func (l *Label) Have(parser Parser) bool {
 	if parser.Have(TokenInt, ':') {
-		println("found int label")
 		return true
 	}
 	if parser.Have(TokenIdent, ':') {
-		println("found named label")
 		return true
 	}
 	return false
