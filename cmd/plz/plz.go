@@ -29,11 +29,41 @@ type arguments struct {
 		Compiler  bool
 		Emulator  bool
 		Linker    bool
+		Run       bool
 		Help      bool
 	}
 	Sources []string
 	Timeout time.Duration
 	Ctx     context.Context
+}
+
+func (args arguments) emuOpts() []emu.CPUOption {
+	opts := []emu.CPUOption{emu.WithReaderWriterIO}
+	if args.Input != "" {
+		input, err := os.Open(args.Input)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: cannot open input %s: %s", args.Input, err)
+			os.Exit(2)
+		}
+		defer input.Close()
+		opts = append(opts, emu.WithReader(byte(args.InputPort), input))
+	}
+	if args.Output != "" {
+		var output *os.File
+		if args.Output == "-" {
+			output = os.Stdout
+		} else {
+			output, err := os.Create(args.Output)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: cannot open output %s: %s", args.Output, err)
+				os.Exit(2)
+			}
+			defer output.Close()
+		}
+
+		opts = append(opts, emu.WithWriter(byte(args.OutputPort), output))
+	}
+	return opts
 }
 
 const defaultInputPort = 60
@@ -52,6 +82,7 @@ func main() {
 	flag.BoolVar(&args.Mode.Assembler, "A", false, "Switch to assembler mode")
 	flag.BoolVar(&args.Mode.Emulator, "E", false, "Switch to emulator mode")
 	flag.BoolVar(&args.Mode.Compiler, "C", true, "Switch to compiler mode")
+	flag.BoolVar(&args.Mode.Run, "R", false, "Switch to run mode, compile and emulate.")
 	flag.BoolVar(&args.Mode.Help, "h", false, "Display help")
 	flag.DurationVar(&args.Timeout, "t", 0, "Emulation timeout")
 	flag.StringVar(&args.Output, "o", "", "output file name")
@@ -69,6 +100,10 @@ func main() {
 		ctx, cancel := context.WithTimeout(args.Ctx, args.Timeout)
 		defer cancel()
 		args.Ctx = ctx
+	}
+
+	if args.Mode.Run {
+		args.Mode.Compiler = false
 	}
 
 	args.Sources = flag.Args()
@@ -94,37 +129,9 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: need one file to emulate")
 			os.Exit(2)
 		}
-		opts := []emu.CPUOption{emu.WithReaderWriterIO}
-		if args.Input != "" {
-			input, err := os.Open(args.Input)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: cannot open input %s: %s", args.Input, err)
-				os.Exit(2)
-			}
-			defer input.Close()
-			opts = append(opts, emu.WithReader(byte(args.InputPort), input))
-		}
-		if args.Output != "" {
-			var output *os.File
-			if args.Output == "-" {
-				output = os.Stdout
-			} else {
-				output, err := os.Create(args.Output)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "error: cannot open output %s: %s", args.Output, err)
-					os.Exit(2)
-				}
-				defer output.Close()
-			}
-
-			opts = append(opts, emu.WithWriter(byte(args.OutputPort), output))
-		}
-
+		opts := args.emuOpts()
 		err := emu.RunFile(args.Ctx, args.Sources[0], opts...)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %s\n", err)
-			os.Exit(2)
-		}
+		ExitIfError("emulator", err)
 	} else if args.Mode.Compiler {
 		if args.Output == "" {
 			fmt.Fprintln(os.Stderr, "error: please specify output file with -o")
@@ -137,6 +144,23 @@ func main() {
 		src := args.Sources[0]
 		err := plz.Compile(args.Output, args.Format, src)
 		ExitIfError("compiler", err)
+	} else if args.Mode.Run {
+		output, err := os.CreateTemp("", "plz_*."+args.Format)
+		ExitIfError("run", err)
+		defer os.Remove(output.Name())
+
+		if len(args.Sources) < 1 {
+			fmt.Fprintln(os.Stderr, "error: please specify one source file")
+			os.Exit(2)
+		}
+		src := args.Sources[0]
+		err = plz.Compile(output.Name(), args.Format, src)
+		ExitIfError("run", err)
+
+		opts := args.emuOpts()
+		err = emu.RunFile(args.Ctx, output.Name(), opts...)
+		ExitIfError("run", err)
+
 	}
 	os.Exit(0)
 }
