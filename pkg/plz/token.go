@@ -19,6 +19,7 @@ const (
 	TokenString
 	TokenRawString // to match Scanner token kinds
 	TokenComment
+	KeywordCall
 	KeywordDisable
 	KeywordDo
 	KeywordEnable
@@ -26,10 +27,21 @@ const (
 	KeywordHalt
 	KeywordGoTo
 	KeywordInput
+	KeywordReturn
 	KeywordOutput
 )
 
+func (t TokenKind) String() string {
+	for k, v := range Keywords {
+		if t == v {
+			return k
+		}
+	}
+	return scanner.TokenString(rune(t))
+}
+
 var Keywords = map[string]TokenKind{
+	"CALL":    KeywordCall,
 	"DISABLE": KeywordDisable,
 	"DO":      KeywordDo,
 	"ENABLE":  KeywordEnable,
@@ -37,6 +49,7 @@ var Keywords = map[string]TokenKind{
 	"END":     KeywordEnd,
 	"HALT":    KeywordHalt,
 	"INPUT":   KeywordInput,
+	"RETURN":  KeywordReturn,
 	"OUTPUT":  KeywordOutput,
 }
 
@@ -45,6 +58,10 @@ type Token struct {
 	Position  Position
 	Text      string
 	Number    int
+}
+
+func (t Token) String() string {
+	return t.Position.String() + " " + t.TokenKind.String() + " " + t.Text
 }
 
 func Scan(rd io.Reader) ([]Token, error) {

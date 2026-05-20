@@ -113,21 +113,27 @@ func (s *Statement) Parse(parser *Parser) error {
 	}
 	tok := parser.Peek()
 	switch tok.TokenKind {
+	case KeywordCall:
+		s.Call = &Call{}
+		return s.Call.Parse(parser)
+	case KeywordDisable:
+		s.Disable = &Disable{}
+		return s.Disable.Parse(parser)
+	case KeywordEnable:
+		s.Enable = &Enable{}
+		return s.Enable.Parse(parser)
+	case KeywordGoTo:
+		s.GoTo = &GoTo{}
+		return s.GoTo.Parse(parser)
 	case KeywordHalt:
 		s.Halt = &Halt{}
 		return s.Halt.Parse(parser)
 	case KeywordOutput:
 		s.Output = &Output{}
 		return s.Output.Parse(parser)
-	case KeywordGoTo:
-		s.GoTo = &GoTo{}
-		return s.GoTo.Parse(parser)
-	case KeywordEnable:
-		s.Enable = &Enable{}
-		return s.Enable.Parse(parser)
-	case KeywordDisable:
-		s.Disable = &Disable{}
-		return s.Disable.Parse(parser)
+	case KeywordReturn:
+		s.Return = &Return{}
+		return s.Return.Parse(parser)
 	default:
 		return tok.Errorf("Statement: unexpected token %v", tok)
 	}
@@ -188,6 +194,27 @@ func (g *GoTo) Parse(parser *Parser) error {
 		g.Name = tok.Text
 	}
 	return nil
+}
+
+func (g *Call) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordCall)
+	if err != nil {
+		return err
+	}
+	tok, err := parser.Accept(TokenInt, TokenIdent)
+	if err != nil {
+		return err
+	} else if tok.TokenKind == TokenInt {
+		g.Location = tok.Number
+	} else if tok.TokenKind == TokenIdent {
+		g.Name = tok.Text
+	}
+	return nil
+}
+
+func (g *Return) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordReturn)
+	return err
 }
 
 func (g *Output) Parse(parser *Parser) error {

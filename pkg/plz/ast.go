@@ -72,6 +72,8 @@ type Return struct {
 }
 
 type Call struct {
+	Location int    // temporary until Variable parsing is implemented
+	Name     string // temporary until Variable parsing is implemented
 	Variable
 	Arguments []Expression
 }
