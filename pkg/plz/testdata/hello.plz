@@ -1,4 +1,6 @@
 
+GOTO start
+
 // Hello world for z80 and PL/Z
 hello : OUTPUT 7 'H'
 OUTPUT 7 'E'
@@ -6,6 +8,10 @@ OUTPUT 7 'L'
 OUTPUT 7 'L'
 OUTPUT 7 'O'
 OUTPUT 7 '\n'
+ENABLE
 HALT
 
+start:
+	DISABLE
+	GOTO hello
 

@@ -133,13 +133,23 @@ func (s If) Gen(g *Gen) error {
 	return nil
 }
 
-func (s Assignment) Gen(g *Gen) error   { return nil }
-func (s Group) Gen(g *Gen) error        { return nil }
-func (s Procedure) Gen(g *Gen) error    { return nil }
-func (s Return) Gen(g *Gen) error       { return nil }
-func (s Call) Gen(g *Gen) error         { return nil }
-func (s GoTo) Gen(g *Gen) error         { return nil }
-func (s Declarations) Gen(g *Gen) error { return nil }
+func (s Assignment) Gen(g *Gen) error { return nil }
+func (s Group) Gen(g *Gen) error      { return nil }
+func (s Procedure) Gen(g *Gen) error  { return nil }
+func (s Return) Gen(g *Gen) error     { return nil }
+func (s Call) Gen(g *Gen) error       { return nil }
+func (s GoTo) Gen(g *Gen) error {
+	if s.Name != "" {
+		g.Emitln("jp ", s.Name)
+	} else {
+		g.Emitln("jp ", s.Location)
+	}
+	return nil
+}
+
+func (s Declarations) Gen(g *Gen) error {
+	return nil
+}
 
 func (s Halt) Gen(g *Gen) error {
 	g.Emitln("halt")

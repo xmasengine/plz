@@ -19,7 +19,9 @@ const (
 	TokenString
 	TokenRawString // to match Scanner token kinds
 	TokenComment
+	KeywordDisable
 	KeywordDo
+	KeywordEnable
 	KeywordEnd
 	KeywordHalt
 	KeywordGoTo
@@ -28,12 +30,14 @@ const (
 )
 
 var Keywords = map[string]TokenKind{
-	"DO":     KeywordDo,
-	"GOTO":   KeywordGoTo,
-	"END":    KeywordEnd,
-	"HALT":   KeywordHalt,
-	"INPUT":  KeywordInput,
-	"OUTPUT": KeywordOutput,
+	"DISABLE": KeywordDisable,
+	"DO":      KeywordDo,
+	"ENABLE":  KeywordEnable,
+	"GOTO":    KeywordGoTo,
+	"END":     KeywordEnd,
+	"HALT":    KeywordHalt,
+	"INPUT":   KeywordInput,
+	"OUTPUT":  KeywordOutput,
 }
 
 type Token struct {

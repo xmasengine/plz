@@ -122,6 +122,12 @@ func (s *Statement) Parse(parser *Parser) error {
 	case KeywordGoTo:
 		s.GoTo = &GoTo{}
 		return s.GoTo.Parse(parser)
+	case KeywordEnable:
+		s.Enable = &Enable{}
+		return s.Enable.Parse(parser)
+	case KeywordDisable:
+		s.Disable = &Disable{}
+		return s.Disable.Parse(parser)
 	default:
 		return tok.Errorf("Statement: unexpected token %v", tok)
 	}
@@ -155,6 +161,16 @@ func (l *Label) Parse(parser *Parser) error {
 
 func (g *Halt) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordHalt)
+	return err
+}
+
+func (g *Disable) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordDisable)
+	return err
+}
+
+func (g *Enable) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordEnable)
 	return err
 }
 
