@@ -2,6 +2,7 @@
 GOTO start
 
 palette: DATA 0x19
+CONSTANT HI 'H'
 
 // Hello world for z80 and PL/Z
 hello:

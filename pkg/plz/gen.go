@@ -85,6 +85,8 @@ func (s Statement) Gen(g *Gen) error {
 		return s.If.Gen(g)
 	case s.Assignment != nil:
 		return s.Assignment.Gen(g)
+	case s.Constant != nil:
+		return s.Constant.Gen(g)
 	case s.Group != nil:
 		return s.Group.Gen(g)
 	case s.Procedure != nil:
@@ -193,6 +195,15 @@ func (s Data) Gen(g *Gen) error {
 		g.Emitf("db %x\n", *s.Literal.Number)
 	} else if s.Literal.Text != nil {
 		g.Emitf("ds %s\n", strconv.Quote(*s.Literal.Text))
+	}
+	return nil
+}
+
+func (s Constant) Gen(g *Gen) error {
+	if s.Literal.Number != nil {
+		g.Emitf("const %s = %x\n", s.Name, *s.Literal.Number)
+	} else if s.Literal.Text != nil {
+		g.Emitf("const %s = %s\n", s.Name, strconv.Quote(*s.Literal.Text))
 	}
 	return nil
 }

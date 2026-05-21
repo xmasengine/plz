@@ -20,6 +20,7 @@ const (
 	TokenRawString // to match Scanner token kinds
 	TokenComment
 	KeywordCall
+	KeywordConstant
 	KeywordData
 	KeywordDisable
 	KeywordDo
@@ -42,17 +43,18 @@ func (t TokenKind) String() string {
 }
 
 var Keywords = map[string]TokenKind{
-	"CALL":    KeywordCall,
-	"DATA":    KeywordData,
-	"DISABLE": KeywordDisable,
-	"DO":      KeywordDo,
-	"ENABLE":  KeywordEnable,
-	"GOTO":    KeywordGoTo,
-	"END":     KeywordEnd,
-	"HALT":    KeywordHalt,
-	"INPUT":   KeywordInput,
-	"RETURN":  KeywordReturn,
-	"OUTPUT":  KeywordOutput,
+	"CALL":     KeywordCall,
+	"CONSTANT": KeywordConstant,
+	"DATA":     KeywordData,
+	"DISABLE":  KeywordDisable,
+	"DO":       KeywordDo,
+	"ENABLE":   KeywordEnable,
+	"GOTO":     KeywordGoTo,
+	"END":      KeywordEnd,
+	"HALT":     KeywordHalt,
+	"INPUT":    KeywordInput,
+	"RETURN":   KeywordReturn,
+	"OUTPUT":   KeywordOutput,
 }
 
 type Token struct {
@@ -96,12 +98,23 @@ func Scan(rd io.Reader) ([]Token, error) {
 			tok.Number = int(num)
 		} else if kind == TokenChar {
 			r, _, _, err := strconv.UnquoteChar(tok.Text[1:len(tok.Text)], '\'')
-			tok.Number = int(r)
 			if err != nil {
 				return nil, tok.Errorf("char %s %s", tok.Text, err.Error())
 			}
+			tok.Number = int(r)
 		} else if kind == TokenRawString {
 			tok.TokenKind = TokenString
+			r, err := strconv.Unquote(tok.Text)
+			if err != nil {
+				return nil, tok.Errorf("raw string %s %s", tok.Text, err.Error())
+			}
+			tok.Text = r
+		} else if kind == TokenString {
+			r, err := strconv.Unquote(tok.Text)
+			if err != nil {
+				return nil, tok.Errorf("string %s %s", tok.Text, err.Error())
+			}
+			tok.Text = r
 		} else if kind == TokenIdent {
 			if kw, ok := Keywords[tok.Text]; ok {
 				tok.TokenKind = kw

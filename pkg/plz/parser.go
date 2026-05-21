@@ -122,6 +122,9 @@ func (s *Statement) Parse(parser *Parser) error {
 	case KeywordCall:
 		s.Call = &Call{}
 		return s.Call.Parse(parser)
+	case KeywordConstant:
+		s.Constant = &Constant{}
+		return s.Constant.Parse(parser)
 	case KeywordData:
 		s.Data = &Data{}
 		return s.Data.Parse(parser)
@@ -179,6 +182,20 @@ func (g *Halt) Parse(parser *Parser) error {
 	return err
 }
 
+func (g *Constant) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordConstant)
+	if err != nil {
+		return nil
+	}
+	name, err := parser.Accept(TokenIdent)
+	if err != nil {
+		return nil
+	}
+	g.Name = name.Text
+
+	return g.Literal.Parse(parser)
+}
+
 func (g *Data) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordData)
 	if err != nil {
@@ -197,6 +214,7 @@ func (g *Literal) Parse(parser *Parser) error {
 		g.Number = &tok.Number
 	} else if tok.TokenKind == TokenString {
 		g.Text = &tok.Text
+		println("string literal", *g.Text)
 	} else if tok.TokenKind == TokenIdent {
 		ref := &Reference{Identifier: Identifier(tok.Text)}
 		g.Reference = ref

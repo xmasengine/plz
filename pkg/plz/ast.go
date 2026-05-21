@@ -88,6 +88,7 @@ type GoTo struct {
 type Declarations struct {
 	Declarations []Declaration
 }
+
 type Halt struct{}
 
 type Group struct {
@@ -161,6 +162,7 @@ type Literal struct {
 }
 
 type Constant struct {
+	Name string
 	Literal
 }
 
