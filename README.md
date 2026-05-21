@@ -9,7 +9,9 @@ Although PLZ is inspired by PL/M as a high level syntax low level
 effect language, and uses similar syntax, if differs in the following
 points:
 
-* PLZ uses CONST, VAR, DATA in stead of the convoluted PL/M DECLARE syntax.
+
+* PLZ uses CONSTANT, DATA as head keywords in stead of the convoluted
+  PL/M DECLARE syntax. It will still use DECLARE for variable definitions.
 * PLZ uses the types BYTE and WORD in stead of BYTE and ADDRESS.
 
 
