@@ -1,6 +1,8 @@
 
 GOTO start
 
+palette: DATA 0x19
+
 // Hello world for z80 and PL/Z
 hello:
 	OUTPUT 7 'H'

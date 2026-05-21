@@ -2,6 +2,7 @@ package plz
 
 import "fmt"
 import "os"
+import "strconv"
 
 type Gen struct {
 	*os.File
@@ -182,5 +183,14 @@ func (s Disable) Gen(g *Gen) error {
 func (s Output) Gen(g *Gen) error {
 	g.Emitf("ld a, %d\n", s.Value)
 	g.Emitf("out (%d), a\n", s.Port)
+	return nil
+}
+
+func (s Data) Gen(g *Gen) error {
+	if s.Literal.Number != nil {
+		g.Emitf("db %x\n", *s.Literal.Number)
+	} else if s.Literal.Text != nil {
+		g.Emitf("ds %s\n", strconv.Quote(*s.Literal.Text))
+	}
 	return nil
 }

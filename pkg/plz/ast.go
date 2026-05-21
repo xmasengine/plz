@@ -13,6 +13,8 @@ type Program struct {
 type Statement struct {
 	Label        *Label
 	If           *If
+	Constant     *Constant
+	Data         *Data
 	Assignment   *Assignment
 	Group        *Group
 	Procedure    *Procedure
@@ -38,7 +40,7 @@ type Output struct {
 }
 
 type Assignment struct {
-	Variable
+	Reference
 	Expression
 }
 
@@ -72,9 +74,9 @@ type Return struct {
 }
 
 type Call struct {
-	Location int    // temporary until Variable parsing is implemented
-	Name     string // temporary until Variable parsing is implemented
-	Variable
+	Location int    // temporary until Reference parsing is implemented
+	Name     string // temporary until Reference parsing is implemented
+	Reference
 	Arguments []Expression
 }
 
@@ -98,10 +100,10 @@ type Group struct {
 type While struct{ Expression }
 
 type For struct {
-	Variable string
-	Start    Expression
-	To       Expression
-	By       *Expression
+	Reference
+	Start Expression
+	To    Expression
+	By    *Expression
 }
 
 type Case struct{ Expression }
@@ -118,10 +120,13 @@ type Label struct {
 	Location int
 }
 
+type Data struct {
+	Literal
+}
+
 type Declaration struct {
 	Type    *TypeDeclarations
 	Literal *LiteralDeclaration
-	Data    *DataDeclaration
 }
 
 type LiteralDeclaration struct {
@@ -129,9 +134,9 @@ type LiteralDeclaration struct {
 	Literally string
 }
 
-type VariableDeclaration struct {
+type Variable struct {
 	Identifier
-	Based Variable
+	Based *Variable
 }
 
 type TypeDeclarations struct {
@@ -139,22 +144,25 @@ type TypeDeclarations struct {
 }
 
 type TypeDeclaration struct {
-	VariableDeclaration
+	Variable
 	Type
 	Dimension int
 	*Initializer
 }
 
 type Initializer struct {
-	Constant
+	Literal
 }
 
-type DataDeclaration struct {
-	Identifier
-	Constants []Constant
+type Literal struct {
+	Text      *string
+	Number    *int
+	Reference *Reference
 }
 
-type Constant struct{}
+type Constant struct {
+	Literal
+}
 
 type Expression struct {
 	*Operation
@@ -193,9 +201,9 @@ const (
 	OperatorXOR
 )
 
-type Variable struct {
+type Reference struct {
 	Identifier
-	Reference bool
+	Address   bool
 	Subscript *Expression
 }
 

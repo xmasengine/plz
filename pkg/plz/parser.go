@@ -15,6 +15,12 @@ func (t Token) Errorf(form string, args ...any) Error {
 	return Error{Position: t.Position, Message: fmt.Sprintf(form, args...)}
 }
 
+// Parser for PL?Z.
+// The design is a peek/parse parser with unlimited lookahead.
+// Each AST node parses itself using the parser and a Parse method.
+// For child nodes each AST node has has to peek which child node it is,
+// It is an error to call Parse on a AST node that is not currently available
+// in the parser.
 type Parser struct {
 	Tokens  []Token
 	Current int
@@ -116,6 +122,9 @@ func (s *Statement) Parse(parser *Parser) error {
 	case KeywordCall:
 		s.Call = &Call{}
 		return s.Call.Parse(parser)
+	case KeywordData:
+		s.Data = &Data{}
+		return s.Data.Parse(parser)
 	case KeywordDisable:
 		s.Disable = &Disable{}
 		return s.Disable.Parse(parser)
@@ -168,6 +177,31 @@ func (l *Label) Parse(parser *Parser) error {
 func (g *Halt) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordHalt)
 	return err
+}
+
+func (g *Data) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordData)
+	if err != nil {
+		return nil
+	}
+	return g.Literal.Parse(parser)
+}
+
+func (g *Literal) Parse(parser *Parser) error {
+	tok, err := parser.Accept(TokenInt, TokenString, TokenIdent)
+	if err != nil {
+		return nil
+	}
+
+	if tok.TokenKind == TokenInt {
+		g.Number = &tok.Number
+	} else if tok.TokenKind == TokenString {
+		g.Text = &tok.Text
+	} else if tok.TokenKind == TokenIdent {
+		ref := &Reference{Identifier: Identifier(tok.Text)}
+		g.Reference = ref
+	}
+	return nil
 }
 
 func (g *Disable) Parse(parser *Parser) error {

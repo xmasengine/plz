@@ -20,6 +20,7 @@ const (
 	TokenRawString // to match Scanner token kinds
 	TokenComment
 	KeywordCall
+	KeywordData
 	KeywordDisable
 	KeywordDo
 	KeywordEnable
@@ -42,6 +43,7 @@ func (t TokenKind) String() string {
 
 var Keywords = map[string]TokenKind{
 	"CALL":    KeywordCall,
+	"DATA":    KeywordData,
 	"DISABLE": KeywordDisable,
 	"DO":      KeywordDo,
 	"ENABLE":  KeywordEnable,
@@ -87,10 +89,11 @@ func Scan(rd io.Reader) ([]Token, error) {
 		}
 		tok := Token{TokenKind: kind, Text: s.TokenText(), Position: s.Pos()}
 		if kind == TokenInt {
-			tok.Number, err = strconv.Atoi(tok.Text)
+			num, err := strconv.ParseInt(tok.Text, 0, 0)
 			if err != nil {
 				return nil, tok.Errorf("int %s %s", tok.Text, err.Error())
 			}
+			tok.Number = int(num)
 		} else if kind == TokenChar {
 			r, _, _, err := strconv.UnquoteChar(tok.Text[1:len(tok.Text)], '\'')
 			tok.Number = int(r)
