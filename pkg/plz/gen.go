@@ -101,6 +101,8 @@ func (s Statement) Gen(g *Gen) error {
 		return s.Halt.Gen(g)
 	case s.Enable != nil:
 		return s.Enable.Gen(g)
+	case s.Data != nil:
+		return s.Data.Gen(g)
 	case s.Disable != nil:
 		return s.Disable.Gen(g)
 	case s.Output != nil:
