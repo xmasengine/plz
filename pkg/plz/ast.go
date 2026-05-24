@@ -11,21 +11,21 @@ type Program struct {
 }
 
 type Statement struct {
-	Label        *Label
-	If           *If
-	Constant     *Constant
-	Data         *Data
-	Assignment   *Assignment
-	Group        *Group
-	Procedure    *Procedure
-	Return       *Return
-	Call         *Call
-	GoTo         *GoTo
-	Declarations *Declarations
-	Halt         *Halt
-	Enable       *Enable
-	Disable      *Disable
-	Output       *Output
+	Label     *Label
+	If        *If
+	Constant  *Constant
+	Data      *Data
+	Declare   *Declare
+	Group     *Group
+	Let       *Let
+	Procedure *Procedure
+	Return    *Return
+	Call      *Call
+	GoTo      *GoTo
+	Halt      *Halt
+	Enable    *Enable
+	Disable   *Disable
+	Output    *Output
 }
 
 type Enable struct {
@@ -39,7 +39,7 @@ type Output struct {
 	Value byte
 }
 
-type Assignment struct {
+type Let struct {
 	Reference
 	Expression
 }
@@ -58,16 +58,30 @@ type Interrupt struct {
 }
 
 type Identifier string
-type Type int
+type Predeclared int
+
+type Type struct {
+	Predeclared
+	*Struct
+}
 
 const (
-	TypeNone Type = iota
-	TypeByte
-	TypeAddress
-	TypeLabel
-	TypeData
-	TypeConstant
+	PredeclaredNone Predeclared = iota
+	PredeclaredByte
+	PredeclaredWord
+	PredeclaredLabel
+	PredeclaredData
+	PredeclaredConstant
 )
+
+type Struct struct {
+	Fields []Field
+}
+
+type Field struct {
+	Identifier
+	Type
+}
 
 type Return struct {
 	*Expression
@@ -83,10 +97,6 @@ type Call struct {
 type GoTo struct {
 	Name     string
 	Location int
-}
-
-type Declarations struct {
-	Declarations []Declaration
 }
 
 type Halt struct{}
@@ -125,30 +135,18 @@ type Data struct {
 	Literal
 }
 
-type Declaration struct {
-	Type    *TypeDeclarations
-	Literal *LiteralDeclaration
-}
-
-type LiteralDeclaration struct {
+type Literally struct {
 	Identifier
 	Literally string
 }
 
-type Variable struct {
-	Identifier
-	Based *Variable
-}
-
-type TypeDeclarations struct {
-	Declarations []TypeDeclaration
-}
-
-type TypeDeclaration struct {
-	Variable
-	Type
-	Dimension int
-	*Initializer
+type Declare struct {
+	Identifier  Identifier
+	Based       *Reference
+	Type        Type
+	Size        int
+	Dimension   int
+	Initializer *Initializer
 }
 
 type Initializer struct {
@@ -169,9 +167,8 @@ type Constant struct {
 type Expression struct {
 	*Operation
 	*Call // inline function call
-	*Variable
+	*Reference
 }
-
 type Operation struct {
 	Operands []Expression
 	Operator
@@ -210,5 +207,5 @@ type Reference struct {
 }
 
 type LogicalExpression struct {
-	*Variable
+	*Reference
 }

@@ -19,9 +19,11 @@ const (
 	TokenString
 	TokenRawString // to match Scanner token kinds
 	TokenComment
+	KeywordByte
 	KeywordCall
 	KeywordConstant
 	KeywordData
+	KeywordDeclare
 	KeywordDisable
 	KeywordDo
 	KeywordEnable
@@ -29,8 +31,11 @@ const (
 	KeywordHalt
 	KeywordGoTo
 	KeywordInput
+	KeywordLet
 	KeywordReturn
+	KeywordStruct
 	KeywordOutput
+	KeywordWord
 )
 
 func (t TokenKind) String() string {
@@ -43,9 +48,11 @@ func (t TokenKind) String() string {
 }
 
 var Keywords = map[string]TokenKind{
+	"BYTE":     KeywordByte,
 	"CALL":     KeywordCall,
 	"CONSTANT": KeywordConstant,
 	"DATA":     KeywordData,
+	"DECLARE":  KeywordDeclare,
 	"DISABLE":  KeywordDisable,
 	"DO":       KeywordDo,
 	"ENABLE":   KeywordEnable,
@@ -53,8 +60,11 @@ var Keywords = map[string]TokenKind{
 	"END":      KeywordEnd,
 	"HALT":     KeywordHalt,
 	"INPUT":    KeywordInput,
+	"LET":      KeywordLet,
 	"RETURN":   KeywordReturn,
 	"OUTPUT":   KeywordOutput,
+	"STRUCT":   KeywordStruct,
+	"WORD":     KeywordWord,
 }
 
 type Token struct {

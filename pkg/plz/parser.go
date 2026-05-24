@@ -79,6 +79,15 @@ func (p Parser) Have(kinds ...TokenKind) bool {
 	return false
 }
 
+func (p Parser) Skip(kind TokenKind) *Token {
+	t := p.Peek()
+	if t.TokenKind == kind {
+		p.Next()
+		return &t
+	}
+	return nil
+}
+
 func ParseFile(name string) (*Program, error) {
 	tokens, err := ScanFile(name)
 	if err != nil {
@@ -101,6 +110,7 @@ func (p *Program) Parse(parser *Parser) error {
 			return err
 		}
 		p.Statements = append(p.Statements, s)
+		parser.Skip(TokenKind(';'))
 	}
 	return nil
 }
@@ -128,6 +138,9 @@ func (s *Statement) Parse(parser *Parser) error {
 	case KeywordData:
 		s.Data = &Data{}
 		return s.Data.Parse(parser)
+	case KeywordDeclare:
+		s.Declare = &Declare{}
+		return s.Declare.Parse(parser)
 	case KeywordDisable:
 		s.Disable = &Disable{}
 		return s.Disable.Parse(parser)
@@ -140,6 +153,9 @@ func (s *Statement) Parse(parser *Parser) error {
 	case KeywordHalt:
 		s.Halt = &Halt{}
 		return s.Halt.Parse(parser)
+	case KeywordLet:
+		s.Let = &Let{}
+		return s.Let.Parse(parser)
 	case KeywordOutput:
 		s.Output = &Output{}
 		return s.Output.Parse(parser)
@@ -187,11 +203,14 @@ func (g *Constant) Parse(parser *Parser) error {
 	if err != nil {
 		return nil
 	}
+
 	name, err := parser.Accept(TokenIdent)
 	if err != nil {
 		return nil
 	}
 	g.Name = name.Text
+
+	parser.Skip(TokenKind('=')) // Skip optional =
 
 	return g.Literal.Parse(parser)
 }
@@ -202,6 +221,23 @@ func (g *Data) Parse(parser *Parser) error {
 		return nil
 	}
 	return g.Literal.Parse(parser)
+}
+
+func (i *Identifier) Parse(parser *Parser) error {
+	tok, err := parser.Accept(TokenIdent)
+	if err != nil {
+		return err
+	}
+	*i = Identifier(tok.Text)
+	return nil
+}
+
+func (r *Reference) Parse(parser *Parser) error {
+	err := r.Identifier.Parse(parser)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (g *Literal) Parse(parser *Parser) error {
@@ -287,6 +323,37 @@ func (g *Output) Parse(parser *Parser) error {
 	return nil
 }
 
+func (t *Type) Parse(parser *Parser) error {
+	tok, err := parser.Accept(KeywordByte, KeywordWord)
+	if err != nil {
+		return err
+	}
+	switch tok.TokenKind {
+	case KeywordByte:
+		t.Predeclared = PredeclaredByte
+	case KeywordWord:
+		t.Predeclared = PredeclaredWord
+	}
+	return nil
+}
+
+func (g *Declare) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordDeclare)
+	if err != nil {
+		return err
+	}
+	err = g.Identifier.Parse(parser)
+	if err != nil {
+		return err
+	}
+	err = g.Type.Parse(parser)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 /*
 
 
@@ -304,7 +371,7 @@ func (g *Output) Parse(parser *Parser) error {
 	| HALT i ;
 	| ;
 	| <LABEL DEFINITION> <BASIC STATEMENT>
-
+s
 
 
 <IF STATEMENT> := <IF CLAUSE> <STATEMENT>

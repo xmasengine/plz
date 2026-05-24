@@ -3,6 +3,11 @@ GOTO start
 
 palette: DATA 0x19
 CONSTANT HI 'H'
+CONSTANT HE 'E'
+
+DECLARE player_x BYTE
+DECLARE player_y BYTE
+DECLARE player_sprite WORD
 
 // Hello world for z80 and PL/Z
 hello:

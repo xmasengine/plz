@@ -4,8 +4,11 @@ import "fmt"
 import "os"
 import "strconv"
 
+const HeapBase = 0xC000 // RAM memory.
+
 type Gen struct {
 	*os.File
+	Heap int // Pointer to last allocated heap RAM memory.
 }
 
 func NewGenFile(name string) (*Gen, error) {
@@ -25,7 +28,7 @@ func NewGenTmp() (*Gen, error) {
 }
 
 func NewGen(fout *os.File) *Gen {
-	res := &Gen{File: fout}
+	res := &Gen{File: fout, Heap: HeapBase}
 	return res
 }
 
@@ -48,8 +51,6 @@ func (g *Gen) Emit(args ...any) (int, error) {
 const ProgramHeader = `org 0x0000
 // Boot section
 org 0x0000
-    di              // Disable interrupts
-    im 1            // Interrupt mode 1
     jp main         // Jump to main program
 
 // Interrupt handler
@@ -62,7 +63,13 @@ org 0x0066
 
 // Main program
 main:
+    di            // Disable interrupts
+    im 1          // Interrupt mode 1
     ld sp, 0xdff0 // Set up stack pointer at end of RAM.
+`
+
+const ProgramFooter = `
+org 0xC000 // RAM memory.
 `
 
 func (p Program) Gen(g *Gen) error {
@@ -83,10 +90,12 @@ func (s Statement) Gen(g *Gen) error {
 	switch {
 	case s.If != nil:
 		return s.If.Gen(g)
-	case s.Assignment != nil:
-		return s.Assignment.Gen(g)
+	case s.Let != nil:
+		return s.Let.Gen(g)
 	case s.Constant != nil:
 		return s.Constant.Gen(g)
+	case s.Declare != nil:
+		return s.Declare.Gen(g)
 	case s.Group != nil:
 		return s.Group.Gen(g)
 	case s.Procedure != nil:
@@ -97,8 +106,6 @@ func (s Statement) Gen(g *Gen) error {
 		return s.Call.Gen(g)
 	case s.GoTo != nil:
 		return s.GoTo.Gen(g)
-	case s.Declarations != nil:
-		return s.Declarations.Gen(g)
 	case s.Halt != nil:
 		return s.Halt.Gen(g)
 	case s.Enable != nil:
@@ -138,9 +145,9 @@ func (s If) Gen(g *Gen) error {
 	return nil
 }
 
-func (s Assignment) Gen(g *Gen) error { return nil }
-func (s Group) Gen(g *Gen) error      { return nil }
-func (s Procedure) Gen(g *Gen) error  { return nil }
+func (s Let) Gen(g *Gen) error       { return nil }
+func (s Group) Gen(g *Gen) error     { return nil }
+func (s Procedure) Gen(g *Gen) error { return nil }
 
 func (s Return) Gen(g *Gen) error {
 	g.Emitln("ret")
@@ -165,7 +172,14 @@ func (s GoTo) Gen(g *Gen) error {
 	return nil
 }
 
-func (s Declarations) Gen(g *Gen) error {
+func (s Declare) Gen(g *Gen) error {
+	if s.Type.Predeclared == PredeclaredByte {
+		g.Emitf("org 0x%x\n%s: db 0\n", g.Heap, s.Identifier)
+		g.Heap += 1
+	} else if s.Type.Predeclared == PredeclaredWord {
+		g.Emitf("org 0x%x\n%s: db 0,0\n", g.Heap, s.Identifier)
+		g.Heap += 2
+	}
 	return nil
 }
 
