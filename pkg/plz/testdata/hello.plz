@@ -26,6 +26,8 @@ HALT
 
 start:
 	DISABLE
+	LET player_x = 10
+	LET player_y = 20
 	CALL hello
 	HALT
 

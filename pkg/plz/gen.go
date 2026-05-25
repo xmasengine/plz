@@ -145,7 +145,14 @@ func (s If) Gen(g *Gen) error {
 	return nil
 }
 
-func (s Let) Gen(g *Gen) error       { return nil }
+func (s Let) Gen(g *Gen) error {
+	if s.Literal.Number != nil {
+		g.Emitf("ld hl, %d\n", *s.Literal.Number)
+		g.Emitf("ld (%s),hl\n", s.Identifier)
+	}
+	return nil
+}
+
 func (s Group) Gen(g *Gen) error     { return nil }
 func (s Procedure) Gen(g *Gen) error { return nil }
 

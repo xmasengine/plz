@@ -354,6 +354,24 @@ func (g *Declare) Parse(parser *Parser) error {
 	return nil
 }
 
+func (g *Let) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordLet)
+	if err != nil {
+		return err
+	}
+	err = g.Reference.Parse(parser)
+	if err != nil {
+		return err
+	}
+	_, err = parser.Accept(TokenKind('='))
+	if err != nil {
+		return err
+	}
+	return g.Literal.Parse(parser)
+
+	return nil
+}
+
 /*
 
 

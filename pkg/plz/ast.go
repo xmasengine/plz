@@ -42,6 +42,7 @@ type Output struct {
 type Let struct {
 	Reference
 	Expression
+	Literal // provisonally
 }
 
 type Procedure struct {
@@ -178,26 +179,27 @@ type Operand struct {
 	Expression
 }
 
-type Operator int
+// An operator can be up to 3 bytes long, shift the chars into the int.
+type Operator TokenKind
 
 const (
 	OperatorNone Operator = 0
-	OperatorADD
-	OperatorSUB
-	OperatorNEG
-	OperatorGT
-	OperatorLT
-	OperatorGTE
-	OperatorLTE
-	OperatorNEQ
-	OperatorEQU
-	OperatorMOD
-	OperatorDIV
-	OperatorNOT
-	OperatorMUL
-	OperatorAND
-	OperatorOR
-	OperatorXOR
+	OperatorADD  Operator = '+'
+	OperatorSUB  Operator = '-'
+	OperatorNEG  Operator = '-' + '@'<<8
+	OperatorGT   Operator = '>'
+	OperatorLT   Operator = '<'
+	OperatorGTE  Operator = '>' + '='<<8
+	OperatorLTE  Operator = '<' + '='<<8
+	OperatorNEQ  Operator = '!' + '='<<8
+	OperatorEQU  Operator = '=' + '='<<8
+	OperatorMOD  Operator = '%'
+	OperatorDIV  Operator = '/'
+	OperatorNOT  Operator = '!'
+	OperatorMUL  Operator = '*'
+	OperatorAND  Operator = '&'
+	OperatorOR   Operator = '|'
+	OperatorXOR  Operator = '^'
 )
 
 type Reference struct {
