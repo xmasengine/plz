@@ -166,17 +166,30 @@ type Constant struct {
 }
 
 type Expression struct {
-	*Operation
-	*Call // inline function call
-	*Reference
+	*Prefix
+	*Infix
+	*Suffix
 }
-type Operation struct {
-	Operands []Expression
+
+type Prefix struct {
 	Operator
+	Operand Operand
+}
+
+type Infix struct {
+	Operator
+	Operands [2]Operand
+}
+
+type Suffix struct {
+	Operator
+	Operands []Operand
 }
 
 type Operand struct {
-	Expression
+	*Call
+	*Reference
+	*Expression
 }
 
 // An operator can be up to 3 bytes long, shift the chars into the int.
@@ -201,6 +214,50 @@ const (
 	OperatorOR   Operator = '|'
 	OperatorXOR  Operator = '^'
 )
+
+// Priority returns the piority of the operator, mostly for Pratt parsing.
+func (o Operator) Priority() int {
+	switch o {
+	case OperatorEQU:
+		return 100
+	case OperatorGT:
+		return 110
+	case OperatorLT:
+		return 120
+	case OperatorGTE:
+		return 130
+	case OperatorLTE:
+		return 140
+	case OperatorNEQ:
+		return 150
+
+	case OperatorSUB:
+		return 200
+	case OperatorADD:
+		return 210
+
+	case OperatorDIV:
+		return 310
+	case OperatorMOD:
+		return 320
+	case OperatorMUL:
+		return 330
+
+	case OperatorOR:
+		return 410
+	case OperatorXOR:
+		return 420
+	case OperatorAND:
+		return 430
+
+	case OperatorNOT:
+		return 500
+	case OperatorNEG:
+		return 510
+	default:
+		return 0
+	}
+}
 
 type Reference struct {
 	Identifier
