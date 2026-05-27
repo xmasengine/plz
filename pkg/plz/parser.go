@@ -153,6 +153,12 @@ func (s *Statement) Parse(parser *Parser) error {
 	case KeywordHalt:
 		s.Halt = &Halt{}
 		return s.Halt.Parse(parser)
+	case KeywordIf:
+		s.If = &If{}
+		return s.If.Parse(parser)
+	case KeywordDo, KeywordWhile, KeywordFor, KeywordCase:
+		s.Group = &Group{}
+		return s.Group.Parse(parser)
 	case KeywordLet:
 		s.Let = &Let{}
 		return s.Let.Parse(parser)
@@ -614,6 +620,99 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 		}
 	}
 
+	return nil
+}
+
+func (s *If) Parse(parser *Parser) error {
+	if _, err := parser.Accept(KeywordIf); err != nil {
+		return err
+	}
+	if err := s.Condition.Parse(parser); err != nil {
+		return err
+	}
+	if _, err := parser.Accept(KeywordThen); err != nil {
+		return err
+	}
+	if err := s.Then.Parse(parser); err != nil {
+		return err
+	}
+	parser.Skip(TokenKind(';'))
+	if parser.Skip(KeywordElse) != nil {
+		s.Else = &Statement{}
+		if err := s.Else.Parse(parser); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (g *Group) Parse(parser *Parser) error {
+	tok := parser.Peek()
+	switch tok.TokenKind {
+	case KeywordWhile:
+		parser.Next()
+		g.While = &While{}
+		if err := g.While.Expression.Parse(parser); err != nil {
+			return err
+		}
+		parser.Skip(KeywordDo)
+	case KeywordFor:
+		parser.Next()
+		g.For = &For{}
+		if err := g.For.Parse(parser); err != nil {
+			return err
+		}
+		parser.Skip(KeywordDo)
+	case KeywordCase:
+		parser.Next()
+		g.Case = &Case{}
+		if err := g.Case.Expression.Parse(parser); err != nil {
+			return err
+		}
+		parser.Skip(KeywordOf)
+		parser.Skip(KeywordDo)
+	default:
+		if _, err := parser.Accept(KeywordDo); err != nil {
+			return err
+		}
+	}
+	for !parser.End() && parser.Peek().TokenKind != KeywordEnd {
+		var s Statement
+		if err := s.Parse(parser); err != nil {
+			return err
+		}
+		g.Statements = append(g.Statements, s)
+		parser.Skip(TokenKind(';'))
+	}
+	if _, err := parser.Accept(KeywordEnd); err != nil {
+		return err
+	}
+	parser.Skip(TokenIdent) // optional label after END
+	return nil
+}
+
+func (f *For) Parse(parser *Parser) error {
+	if err := f.Reference.Parse(parser); err != nil {
+		return err
+	}
+	if _, err := parser.Accept(TokenKind('=')); err != nil {
+		return err
+	}
+	if err := f.Start.Parse(parser); err != nil {
+		return err
+	}
+	if _, err := parser.Accept(KeywordTo); err != nil {
+		return err
+	}
+	if err := f.To.Parse(parser); err != nil {
+		return err
+	}
+	if parser.Skip(KeywordBy) != nil {
+		f.By = &Expression{}
+		if err := f.By.Parse(parser); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

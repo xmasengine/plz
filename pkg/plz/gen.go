@@ -142,6 +142,65 @@ _plz_div_skip:
 	dec a
 	jr nz, _plz_div_loop
 	ret
+
+; _plz_eq: HL = (HL == DE) ? 1 : 0
+_plz_eq:
+	or a
+	sbc hl, de
+	ld hl, 0
+	ret nz
+	inc l
+	ret
+
+; _plz_ne: HL = (HL != DE) ? 1 : 0
+_plz_ne:
+	or a
+	sbc hl, de
+	ld hl, 0
+	ret z
+	inc l
+	ret
+
+; _plz_gt: HL = (HL > DE) ? 1 : 0 (unsigned)
+_plz_gt:
+	or a
+	sbc hl, de
+	jr c, _plz_cmp_false
+	jr z, _plz_cmp_false
+	ld hl, 1
+	ret
+
+; _plz_lt: HL = (HL < DE) ? 1 : 0 (unsigned)
+_plz_lt:
+	or a
+	sbc hl, de
+	jr nc, _plz_cmp_false
+	ld hl, 1
+	ret
+
+; _plz_gte: HL = (HL >= DE) ? 1 : 0 (unsigned)
+_plz_gte:
+	or a
+	sbc hl, de
+	jr c, _plz_cmp_false
+	ld hl, 1
+	ret
+
+; _plz_lte: HL = (HL <= DE) ? 1 : 0 (unsigned)
+_plz_lte:
+	or a
+	sbc hl, de
+	jr nz, _plz_lte_gt
+	ld hl, 1
+	ret
+_plz_lte_gt:
+	jr nc, _plz_cmp_false
+	ld hl, 1
+	ret
+
+_plz_cmp_false:
+	ld hl, 0
+	ret
 `
 
 func (p Program) Gen(g *Gen) error {
@@ -214,7 +273,28 @@ func (l Label) Gen(g *Gen) error {
 }
 
 func (s If) Gen(g *Gen) error {
-	g.Emitf("// statement not yet implemented: %v\n", s)
+	if err := s.Condition.Gen(g); err != nil {
+		return err
+	}
+	n := g.nextLabel()
+	g.Emitln("\tld a, h")
+	g.Emitln("\tor l")
+	g.Emitf("\tjr z, _else_%d\n", n)
+	if err := s.Then.Gen(g); err != nil {
+		return err
+	}
+	if s.Else != nil {
+		g.Emitf("\tjr _end_%d\n", n)
+	}
+	g.Emitf("_else_%d:\n", n)
+	if s.Else != nil {
+		if err := s.Else.Gen(g); err != nil {
+			return err
+		}
+	}
+	if s.Else != nil {
+		g.Emitf("_end_%d:\n", n)
+	}
 	return nil
 }
 
@@ -332,63 +412,20 @@ func (i Infix) Gen(g *Gen) error {
 		g.Emitln("\tcall _plz_mod")
 
 	case OperatorEQU:
-		g.genCmp("nz")
-
+		g.Emitln("\tcall _plz_eq")
 	case OperatorNEQ:
-		g.genCmp("z")
-
+		g.Emitln("\tcall _plz_ne")
 	case OperatorGT:
-		// hl > de  (unsigned)
-		n := g.nextLabel()
-		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")
-		g.Emitf("\tjr c, _lbl_%d\n", n)
-		g.Emitf("\tjr z, _lbl_%d\n", n)
-		g.Emitln("\tld hl, 1")
-		g.Emitf("_lbl_%d:\n", n)
-
+		g.Emitln("\tcall _plz_gt")
 	case OperatorLT:
-		n := g.nextLabel()
-		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")
-		g.Emitf("\tjr nc, _lbl_%d\n", n)
-		g.Emitln("\tld hl, 1")
-		g.Emitf("_lbl_%d:\n", n)
-
+		g.Emitln("\tcall _plz_lt")
 	case OperatorGTE:
-		n := g.nextLabel()
-		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")
-		g.Emitf("\tjr c, _lbl_%d\n", n)
-		g.Emitln("\tld hl, 1")
-		g.Emitf("_lbl_%d:\n", n)
-
+		g.Emitln("\tcall _plz_gte")
 	case OperatorLTE:
-		n := g.nextLabel()
-		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")
-		g.Emitf("\tld hl, 0\n")
-		g.Emitf("\tjr nz, _lbl_%d\n", n)
-		g.Emitln("\tinc l") // hl == de → true
-		g.Emitf("_lbl_%d:\n", n)
-		g.Emitf("\tjr nc, _lbl_%d\n", n+1)
-		g.Emitln("\tinc l") // hl < de (carry) → true
-		g.Emitf("_lbl_%d:\n", n+1)
+		g.Emitln("\tcall _plz_lte")
 	}
 
 	return nil
-}
-
-// genCmp generates code for EQU / NEQ: compares hl with de, sets hl = 0 or 1.
-// jmpCond is the condition to SKIP setting hl=1 (jr <jmpCond> skips the inc l).
-func (g *Gen) genCmp(jmpCond string) {
-	n := g.nextLabel()
-	g.Emitln("\tor a")
-	g.Emitln("\tsbc hl, de")
-	g.Emitf("\tld hl, 0\n")
-	g.Emitf("\tjr %s, _lbl_%d\n", jmpCond, n)
-	g.Emitln("\tinc l")
-	g.Emitf("_lbl_%d:\n", n)
 }
 
 func (s *Suffix) Gen(g *Gen) error {
@@ -487,7 +524,84 @@ func (s Let) Gen(g *Gen) error {
 	return nil
 }
 
-func (s Group) Gen(g *Gen) error     { return nil }
+func (s Group) Gen(g *Gen) error {
+	switch {
+	case s.While != nil:
+		n := g.nextLabel()
+		g.Emitf("_while_%d:\n", n)
+		if err := s.While.Expression.Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tld a, h")
+		g.Emitln("\tor l")
+		g.Emitf("\tjr z, _end_%d\n", n)
+		for _, stmt := range s.Statements {
+			if err := stmt.Gen(g); err != nil {
+				return err
+			}
+		}
+		g.Emitf("\tjr _while_%d\n", n)
+		g.Emitf("_end_%d:\n", n)
+
+	case s.For != nil:
+		// Push end value on stack
+		if err := s.For.To.Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tpush hl")
+
+		// Evaluate step (default 1), store in IX for preservation
+		if s.For.By != nil {
+			if err := s.For.By.Gen(g); err != nil {
+				return err
+			}
+		} else {
+			g.Emitln("\tld hl, 1")
+		}
+		g.Emitln("\tpush hl")
+		g.Emitln("\tpop ix")
+
+		// Initialize var = start
+		if err := s.For.Start.Gen(g); err != nil {
+			return err
+		}
+		g.Emitf("\tld (%s), hl\n", s.For.Reference.Identifier)
+
+		n := g.nextLabel()
+		g.Emitf("_for_%d:\n", n)
+		// Compare var with end (hl = end from stack)
+		g.Emitln("\tpop hl")
+		g.Emitln("\tpush hl")
+		g.Emitf("\tld de, (%s)\n", s.For.Reference.Identifier)
+		g.Emitln("\tor a")
+		g.Emitln("\tsbc hl, de")
+		g.Emitf("\tjr c, _end_%d\n", n) // end < var → exit
+
+		// Body
+		for _, stmt := range s.Statements {
+			if err := stmt.Gen(g); err != nil {
+				return err
+			}
+		}
+
+		// var += ix (step)
+		g.Emitf("\tld hl, (%s)\n", s.For.Reference.Identifier)
+		g.Emitln("\tadd hl, ix")
+		g.Emitf("\tld (%s), hl\n", s.For.Reference.Identifier)
+		g.Emitf("\tjr _for_%d\n", n)
+		g.Emitf("_end_%d:\n", n)
+		g.Emitln("\tpop hl") // discard end
+
+	default:
+		// Bare DO...END: just emit statements
+		for _, stmt := range s.Statements {
+			if err := stmt.Gen(g); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 func (s Procedure) Gen(g *Gen) error { return nil }
 
 func (s Return) Gen(g *Gen) error {

@@ -30,12 +30,21 @@ const (
 	KeywordEnd
 	KeywordHalt
 	KeywordGoTo
+	KeywordIf
+	KeywordThen
+	KeywordElse
 	KeywordInput
 	KeywordLet
 	KeywordReturn
 	KeywordStruct
 	KeywordOutput
 	KeywordWord
+	KeywordWhile
+	KeywordFor
+	KeywordTo
+	KeywordBy
+	KeywordCase
+	KeywordOf
 )
 
 func (t TokenKind) String() string {
@@ -58,12 +67,21 @@ var Keywords = map[string]TokenKind{
 	"ENABLE":   KeywordEnable,
 	"GOTO":     KeywordGoTo,
 	"END":      KeywordEnd,
+	"IF":       KeywordIf,
+	"THEN":     KeywordThen,
+	"ELSE":     KeywordElse,
 	"HALT":     KeywordHalt,
 	"INPUT":    KeywordInput,
 	"LET":      KeywordLet,
 	"RETURN":   KeywordReturn,
 	"OUTPUT":   KeywordOutput,
 	"STRUCT":   KeywordStruct,
+	"WHILE":    KeywordWhile,
+	"FOR":      KeywordFor,
+	"TO":       KeywordTo,
+	"BY":       KeywordBy,
+	"CASE":     KeywordCase,
+	"OF":       KeywordOf,
 	"WORD":     KeywordWord,
 }
 
