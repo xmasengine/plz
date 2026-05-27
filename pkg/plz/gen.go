@@ -155,22 +155,22 @@ func (s If) Gen(g *Gen) error {
 // Expression code generator
 // ---------------------------------------------------------------------------
 
-// genExpr evaluates the expression and leaves the result in hl.
-func (g *Gen) genExpr(e *Expression) error {
+// Gen evaluates the expression and leaves the result in hl.
+func (e Expression) Gen(g *Gen) error {
 	switch {
 	case e.Operand != nil:
-		return g.genOperand(e.Operand)
+		return e.Operand.Gen(g)
 	case e.Prefix != nil:
-		return g.genPrefix(e.Prefix)
+		return e.Prefix.Gen(g)
 	case e.Infix != nil:
-		return g.genInfix(e.Infix)
+		return e.Infix.Gen(g)
 	case e.Suffix != nil:
-		return g.genSuffix(e.Suffix)
+		return e.Suffix.Gen(g)
 	}
 	return nil
 }
 
-func (g *Gen) genOperand(o *Operand) error {
+func (o Operand) Gen(g *Gen) error {
 	switch {
 	case o.Literal != nil:
 		if o.Literal.Number != nil {
@@ -179,15 +179,15 @@ func (g *Gen) genOperand(o *Operand) error {
 	case o.Reference != nil:
 		g.Emitf("\tld hl, (%s)\n", o.Reference.Identifier)
 	case o.Expression != nil:
-		return g.genExpr(o.Expression)
+		return o.Expression.Gen(g)
 	}
 	return nil
 }
 
-func (g *Gen) genPrefix(p *Prefix) error {
+func (p Prefix) Gen(g *Gen) error {
 	switch p.Operator {
 	case OperatorNEG:
-		if err := g.genOperand(&p.Operand); err != nil {
+		if err := p.Operand.Gen(g); err != nil {
 			return err
 		}
 		g.Emitln("\tex de, hl")
@@ -196,7 +196,7 @@ func (g *Gen) genPrefix(p *Prefix) error {
 		g.Emitln("\tsbc hl, de")
 
 	case OperatorNOT:
-		if err := g.genOperand(&p.Operand); err != nil {
+		if err := p.Operand.Gen(g); err != nil {
 			return err
 		}
 		n := g.nextLabel()
@@ -210,15 +210,15 @@ func (g *Gen) genPrefix(p *Prefix) error {
 	return nil
 }
 
-func (g *Gen) genInfix(i *Infix) error {
+func (i Infix) Gen(g *Gen) error {
 	// Left operand
-	if err := g.genOperand(&i.Operands[0]); err != nil {
+	if err := i.Operands[0].Gen(g); err != nil {
 		return err
 	}
 	g.Emitln("\tpush hl")
 
 	// Right operand
-	if err := g.genOperand(&i.Operands[1]); err != nil {
+	if err := i.Operands[1].Gen(g); err != nil {
 		return err
 	}
 
@@ -320,7 +320,7 @@ func (g *Gen) genCmp(jmpCond string) {
 	g.Emitf("_lbl_%d:\n", n)
 }
 
-func (g *Gen) genSuffix(s *Suffix) error {
+func (s *Suffix) Gen(g *Gen) error {
 	switch s.Operator {
 	case OperatorINDEX:
 		return g.genIndexRead(s.Operands)
@@ -344,7 +344,7 @@ func (g *Gen) genIndexRead(operands []Operand) error {
 	// If there's an index, add it (scaled by 2 for word-size).
 	if len(operands) >= 2 {
 		g.Emitln("\tpush hl")
-		if err := g.genExpr(operands[1].Expression); err != nil {
+		if err := operands[1].Expression.Gen(g); err != nil {
 			return err
 		}
 		g.Emitln("\tadd hl, hl") // index * 2 (word)
@@ -381,7 +381,7 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 
 func (s Let) Gen(g *Gen) error {
 	// Evaluate RHS into hl.
-	if err := g.genExpr(&s.Expression); err != nil {
+	if err := s.Expression.Gen(g); err != nil {
 		return err
 	}
 
@@ -399,7 +399,7 @@ func (s Let) Gen(g *Gen) error {
 	g.Emitf("\tld hl, %s\n", s.Identifier)
 	for i := range s.Subscripts {
 		g.Emitln("\tpush hl")
-		if err := g.genExpr(&s.Subscripts[i]); err != nil {
+		if err := s.Subscripts[i].Gen(g); err != nil {
 			return err
 		}
 		g.Emitln("\tadd hl, hl") // * 2 (word)
