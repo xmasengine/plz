@@ -79,7 +79,14 @@ const (
 type Type struct {
 	Predeclared
 	*Record
+	*Array
 	AliasName Identifier // set by TYPE <name> before resolution
+}
+
+// Array represents an array type used in RECORD fields or TYPE aliases.
+type Array struct {
+	Size     int // number of elements (0 = unbounded)
+	ElemType Type
 }
 
 type Record struct {
@@ -158,8 +165,6 @@ type Declare struct {
 	Based       *Reference
 	Type        Type
 	Size        int
-	Dimension   int
-	Dims        []int  // per-dimension sizes from ARRAY declaration
 	Initializer *Initializer
 	ParamRef    bool   // true when this is a record/array parameter (passed by reference)
 }

@@ -500,9 +500,6 @@ func TestParseArrayDeclareUnbounded(t *testing.T) {
 	if s.Declare == nil {
 		t.Fatal("expected Declare statement")
 	}
-	if len(s.Declare.Dims) != 1 || s.Declare.Dims[0] != 0 {
-		t.Errorf("expected 1 unbounded dim, got %v", s.Declare.Dims)
-	}
 	if s.Declare.Size != 0 {
 		t.Errorf("expected unbounded size 0, got %d", s.Declare.Size)
 	}
@@ -524,9 +521,6 @@ func TestParseArrayDeclareFixed(t *testing.T) {
 	if s.Declare == nil {
 		t.Fatal("expected Declare statement")
 	}
-	if len(s.Declare.Dims) != 1 || s.Declare.Dims[0] != 10 {
-		t.Errorf("expected [10], got %v", s.Declare.Dims)
-	}
 	if s.Declare.Size != 10 {
 		t.Errorf("expected size 10, got %d", s.Declare.Size)
 	}
@@ -536,7 +530,7 @@ func TestParseArrayDeclareFixed(t *testing.T) {
 }
 
 func TestParseArrayDeclareMultiDim(t *testing.T) {
-	tokens, err := Scan(strings.NewReader("DECLARE arr ARRAY [3, 4] WORD"))
+	tokens, err := Scan(strings.NewReader("DECLARE arr ARRAY [6] WORD"))
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -548,11 +542,8 @@ func TestParseArrayDeclareMultiDim(t *testing.T) {
 	if s.Declare == nil {
 		t.Fatal("expected Declare statement")
 	}
-	if len(s.Declare.Dims) != 2 || s.Declare.Dims[0] != 3 || s.Declare.Dims[1] != 4 {
-		t.Errorf("expected [3, 4], got %v", s.Declare.Dims)
-	}
-	if s.Declare.Size != 12 {
-		t.Errorf("expected size 12, got %d", s.Declare.Size)
+	if s.Declare.Size != 6 {
+		t.Errorf("expected size 6, got %d", s.Declare.Size)
 	}
 }
 

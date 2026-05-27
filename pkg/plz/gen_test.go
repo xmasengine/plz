@@ -347,10 +347,10 @@ func TestGenArrayDeclareWord(t *testing.T) {
 }
 
 func TestGenArrayDeclareMultiDim(t *testing.T) {
-	asm := genTest(t, "DECLARE arr ARRAY [3, 4] BYTE")
-	// 3 * 4 = 12 bytes: arr: db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+	asm := genTest(t, "DECLARE arr ARRAY [12] BYTE")
+	// 12 bytes
 	if !strings.Contains(asm, "db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0") {
-		t.Error("expected 12 zero bytes for 3x4 byte array")
+		t.Error("expected 12 zero bytes for 12-element byte array")
 	}
 }
 
@@ -486,5 +486,63 @@ func TestGenDefineWordAlias(t *testing.T) {
 	}
 	if !strings.Contains(asm, "ld (w), hl") {
 		t.Error("expected word store")
+	}
+}
+
+func TestGenArrayOfRecordsFieldRead(t *testing.T) {
+	asm := genTest(t, "DECLARE arr ARRAY [10] RECORD x WORD, y BYTE END\nDECLARE i WORD\nLET v = arr[i].y")
+	if !strings.Contains(asm, "ld hl, arr") {
+		t.Error("expected array base")
+	}
+	if !strings.Contains(asm, "add hl, hl") {
+		t.Error("expected index * 4 (record size)")
+	}
+	if !strings.Contains(asm, "ld de, 2") {
+		t.Error("expected field offset 2")
+	}
+	if !strings.Contains(asm, "ld h, 0") {
+		t.Error("expected zero-extension for byte field")
+	}
+}
+
+func TestGenArrayOfRecordsFieldWrite(t *testing.T) {
+	asm := genTest(t, "DECLARE arr ARRAY [10] RECORD x WORD, y BYTE END\nDECLARE i WORD\nLET arr[i].x = 42")
+	if !strings.Contains(asm, "ld hl, arr") {
+		t.Error("expected array base")
+	}
+	if !strings.Contains(asm, "add hl, hl") {
+		t.Error("expected index * 4 for record")
+	}
+	if !strings.Contains(asm, "ld (hl), e") {
+		t.Error("expected store first byte")
+	}
+	if !strings.Contains(asm, "ld (hl), d") {
+		t.Error("expected store second byte for word field")
+	}
+}
+
+func TestGenRecordWithArrayFieldRead(t *testing.T) {
+	asm := genTest(t, "DECLARE s RECORD x WORD, arr ARRAY [5] BYTE END\nDECLARE i WORD\nLET v = s.arr[i]")
+	if !strings.Contains(asm, "ld hl, s") {
+		t.Error("expected record base")
+	}
+	if !strings.Contains(asm, "ld de, 2") {
+		t.Error("expected field offset for arr")
+	}
+	if !strings.Contains(asm, "ld h, 0") {
+		t.Error("expected zero-extension for byte")
+	}
+}
+
+func TestGenRecordWithArrayFieldWrite(t *testing.T) {
+	asm := genTest(t, "DECLARE s RECORD x WORD, arr ARRAY [5] BYTE END\nDECLARE i WORD\nLET s.arr[i] = 99")
+	if !strings.Contains(asm, "ld hl, s") {
+		t.Error("expected record base")
+	}
+	if !strings.Contains(asm, "ld de, 2") {
+		t.Error("expected field offset for arr")
+	}
+	if !strings.Contains(asm, "ld (hl), e") {
+		t.Error("expected byte store")
 	}
 }

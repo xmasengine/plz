@@ -431,6 +431,23 @@ func (t *Type) Parse(parser *Parser) error {
 		*t = aliased
 		return nil
 	}
+	if parser.Peek().TokenKind == KeywordArray {
+		parser.Next()
+		t.Predeclared = PredeclaredNone
+		t.Array = &Array{}
+		if parser.Peek().TokenKind == '[' {
+			parser.Next()
+			tok := parser.Peek()
+			if tok.TokenKind == TokenInt {
+				parser.Next()
+				t.Array.Size = tok.Number
+			}
+			if _, err := parser.Accept(TokenKind(']')); err != nil {
+				return err
+			}
+		}
+		return t.Array.ElemType.Parse(parser)
+	}
 	tok, err := parser.Accept(KeywordByte, KeywordWord)
 	if err != nil {
 		return err
@@ -470,41 +487,23 @@ func (g *Declare) Parse(parser *Parser) error {
 		return err
 	}
 
-	// Optional ARRAY [dim1, dim2, ...] OF type
+	// Optional ARRAY [size] OF type (single dimension only).
 	if parser.Skip(KeywordArray) != nil {
 		parser.Skip(KeywordOf)
-		// Parse optional dimension sizes in brackets.
 		if parser.Peek().TokenKind == '[' {
 			parser.Next()
-			for {
-				tok := parser.Peek()
-				if tok.TokenKind == TokenInt {
-					parser.Next()
-					g.Dims = append(g.Dims, tok.Number)
-				} else {
-					g.Dims = append(g.Dims, 0) // unbounded dimension
-				}
-				if parser.Peek().TokenKind != TokenKind(',') {
-					break
-				}
+			tok := parser.Peek()
+			if tok.TokenKind == TokenInt {
 				parser.Next()
+				g.Size = tok.Number
+			} else {
+				g.Size = 0 // unbounded
 			}
 			if _, err := parser.Accept(TokenKind(']')); err != nil {
 				return err
 			}
 		} else {
-			// ARRAY without brackets = single unbounded dimension.
-			g.Dims = append(g.Dims, 0)
-		}
-		g.Dimension = len(g.Dims)
-		g.Size = 1
-		for _, d := range g.Dims {
-			if d > 0 {
-				g.Size *= d
-			} else {
-				g.Size = 0 // unbounded
-				break
-			}
+			g.Size = 0 // unbounded
 		}
 		return g.Type.Parse(parser)
 	}

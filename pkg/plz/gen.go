@@ -218,12 +218,12 @@ func (p Program) Gen(g *Gen) error {
 	// First pass: allocate frames for non-REENTRANT procedures.
 	for _, stmt := range p.Statements {
 		if stmt.Procedure != nil && !stmt.Procedure.Reentrant {
-		proc := stmt.Procedure
-		localsSize := 0
-		for _, local := range proc.Locals {
-			localsSize += localDeclareSize(local)
-		}
-		total := totalParamSize(proc) + localsSize
+			proc := stmt.Procedure
+			localsSize := 0
+			for _, local := range proc.Locals {
+				localsSize += localDeclareSize(local)
+			}
+			total := totalParamSize(proc) + localsSize
 			if total > 0 {
 				g.procFrame[proc.Name.Name] = g.Heap
 				g.Heap += total
@@ -560,19 +560,29 @@ func (s *Suffix) Gen(g *Gen) error {
 	return nil
 }
 
-// genFieldRead generates code to read s.field into HL.
-// Operands: [struct_ref, field_ref].
-func (g *Gen) genFieldRead(operands []Operand) error {
+// genFieldAddr computes the address of a struct field into HL.
+// Operands: [struct_ref_or_expr, field_ref].
+func (g *Gen) genFieldAddr(operands []Operand) (fieldType Type, err error) {
 	ref := operands[0].Reference
-	if ref == nil && operands[0].Expression != nil && operands[0].Expression.Operand != nil {
-		ref = operands[0].Expression.Operand.Reference
+	var baseSuffix *Suffix
+	if ref == nil && operands[0].Expression != nil {
+		baseSuffix = operands[0].Expression.Suffix
+		if baseSuffix != nil && len(baseSuffix.Operands) > 0 {
+			ref = baseSuffix.Operands[0].Reference
+			// If Operands[0] has an Expression with an Operand Reference, use that.
+			if ref == nil && baseSuffix.Operands[0].Expression != nil && baseSuffix.Operands[0].Expression.Operand != nil {
+				ref = baseSuffix.Operands[0].Expression.Operand.Reference
+			}
+		} else if operands[0].Expression.Operand != nil {
+			ref = operands[0].Expression.Operand.Reference
+		}
 	}
 	if ref == nil {
-		return fmt.Errorf("genFieldRead: first operand must be a reference")
+		return fieldType, fmt.Errorf("genFieldAddr: first operand must have a reference")
 	}
 	d, ok := g.Checker.Symbols[ref.Identifier]
 	if !ok || d.Type.Record == nil {
-		return fmt.Errorf("genFieldRead: %s is not a struct", ref.Identifier)
+		return fieldType, fmt.Errorf("genFieldAddr: %s is not a struct", ref.Identifier)
 	}
 	fname := operands[1].Reference.Identifier
 	fieldIdx := -1
@@ -583,20 +593,41 @@ func (g *Gen) genFieldRead(operands []Operand) error {
 		}
 	}
 	if fieldIdx < 0 {
-		return fmt.Errorf("genFieldRead: struct %s has no field %s", ref.Identifier, fname)
+		return fieldType, fmt.Errorf("genFieldAddr: struct %s has no field %s", ref.Identifier, fname)
 	}
 	off := fieldOffset(d.Type.Record.Fields, fieldIdx)
 	ft := d.Type.Record.Fields[fieldIdx].Type
 
-	// ParamRef symbols hold a pointer; dereference it to get the data address.
-	if d.ParamRef {
-		g.Emitf("\tld hl, (%s)\n", ref.Identifier)
+	if baseSuffix != nil {
+		// The base is an INDEX suffix (e.g., arr[i] for array of records).
+		// Compute element address, then add field offset.
+		if baseSuffix.Operator != OperatorINDEX {
+			return fieldType, fmt.Errorf("genFieldAddr: unsupported base expression")
+		}
+		if _, err := g.genIndexAddr(baseSuffix.Operands); err != nil {
+			return fieldType, err
+		}
 	} else {
-		g.Emitf("\tld hl, %s\n", ref.Identifier)
+		// Simple reference: load base address.
+		if d.ParamRef {
+			g.Emitf("\tld hl, (%s)\n", ref.Identifier)
+		} else {
+			g.Emitf("\tld hl, %s\n", ref.Identifier)
+		}
 	}
 	if off > 0 {
 		g.Emitf("\tld de, %d\n", off)
 		g.Emitln("\tadd hl, de")
+	}
+	return ft, nil
+}
+
+// genFieldRead generates code to read s.field into HL.
+// Operands: [struct_ref, field_ref].
+func (g *Gen) genFieldRead(operands []Operand) error {
+	ft, err := g.genFieldAddr(operands)
+	if err != nil {
+		return err
 	}
 	if ft.Predeclared == PredeclaredByte {
 		g.Emitln("\tld a, (hl)")
@@ -630,17 +661,42 @@ func (g *Gen) elemSize(name Identifier) int {
 	return 2
 }
 
-// genIndexRead generates code to read arr[index].
-// Operands: [array_expr, index_expr].
-func (g *Gen) genIndexRead(operands []Operand) error {
-	// Get the array base address into hl.
-	// The first operand must be a reference (we take its address).
+// genIndexAddr computes the address of arr[index] into HL, without loading the value.
+func (g *Gen) genIndexAddr(operands []Operand) (elemSize int, err error) {
 	ref := operands[0].Reference
-	if ref == nil && operands[0].Expression != nil && operands[0].Expression.Operand != nil {
-		ref = operands[0].Expression.Operand.Reference
+	var baseSuffix *Suffix
+	if ref == nil && operands[0].Expression != nil {
+		baseSuffix = operands[0].Expression.Suffix
+		if baseSuffix != nil && len(baseSuffix.Operands) > 0 {
+			ref = baseSuffix.Operands[0].Reference
+		} else {
+			// Fallback: look for a Reference through the Operand.
+			if operands[0].Expression.Operand != nil {
+				ref = operands[0].Expression.Operand.Reference
+			}
+		}
 	}
-	if ref != nil {
-		// ParamRef symbols hold a pointer; dereference it.
+
+	elem := 2 // default fallback
+	if baseSuffix != nil && baseSuffix.Operator == OperatorFIELD {
+		// Field expression base (e.g., rec.arr[i]): compute field address first.
+		// genFieldAddr returns the field type, which may be an array.
+		ft, err := g.genFieldAddr(baseSuffix.Operands)
+		if err != nil {
+			return 0, err
+		}
+		if ft.Array != nil {
+			if ft.Array.ElemType.Predeclared == PredeclaredByte {
+				elem = 1
+			} else if ft.Array.ElemType.Record != nil {
+				elem = recordTotalSize(ft.Array.ElemType.Record.Fields)
+				elem = nextPow2(elem)
+			} else {
+				elem = 2
+			}
+		}
+	} else if ref != nil {
+		elem = g.elemSize(ref.Identifier)
 		if g.Checker != nil {
 			if d, ok := g.Checker.Symbols[ref.Identifier]; ok && d.ParamRef {
 				g.Emitf("\tld hl, (%s)\n", ref.Identifier)
@@ -649,32 +705,37 @@ func (g *Gen) genIndexRead(operands []Operand) error {
 		}
 		g.Emitf("\tld hl, %s\n", ref.Identifier)
 	} else {
-		return fmt.Errorf("genIndexRead: first operand must be a reference")
+		return 0, fmt.Errorf("genIndexAddr: first operand must be a reference or field expression")
 	}
 gotAddr:
-	elem := g.elemSize(ref.Identifier)
 
-	// If there's an index, add it (scaled by element size).
 	if len(operands) >= 2 {
 		g.Emitln("\tpush hl")
 		if err := operands[1].Expression.Gen(g); err != nil {
-			return err
+			return 0, err
 		}
-		if elem == 2 {
-			g.Emitln("\tadd hl, hl") // index * 2 (word)
+		for size := elem; size > 1; size >>= 1 {
+			g.Emitln("\tadd hl, hl")
 		}
 		g.Emitln("\tex de, hl")
 		g.Emitln("\tpop hl")
 		g.Emitln("\tadd hl, de")
 	}
+	return elem, nil
+}
 
+// genIndexRead generates code to read arr[index] into HL.
+// Operands: [array_expr, index_expr].
+func (g *Gen) genIndexRead(operands []Operand) error {
+	elem, err := g.genIndexAddr(operands)
+	if err != nil {
+		return err
+	}
 	if elem == 1 {
-		// Load byte, zero-extend.
 		g.Emitln("\tld a, (hl)")
 		g.Emitln("\tld l, a")
 		g.Emitln("\tld h, 0")
 	} else {
-		// Load word.
 		g.Emitln("\tld a, (hl)")
 		g.Emitln("\tinc hl")
 		g.Emitln("\tld h, (hl)")
@@ -793,11 +854,109 @@ func (s Let) Gen(g *Gen) error {
 		return err
 	}
 
+	// Determine base decl and initial element size.
+	var d *Declare
+	if g.Checker != nil {
+		if dd, ok := g.Checker.Symbols[s.Identifier]; ok {
+			d = dd
+		}
+	}
+
+	// Three cases:
+	// 1. Simple store (no subscripts, no fields)
+	// 2. Array of records field store: arr[i].x (both subscripts and fields)
+	// 3. Subscripted field store: rec.arr[i] (fields then subscripts, field is array)
+	// 4. Simple field store: rec.x (fields only)
+	// 5. Simple array store: arr[i] (subscripts only)
+
+	if len(s.Subscripts) == 0 && len(s.Fields) == 0 {
+		// Simple variable store.
+		if s.isByteRef(g) {
+			g.Emitln("\tld a, l")
+			g.Emitf("\tld (%s), a\n", s.Identifier)
+		} else {
+			g.Emitf("\tld (%s), hl\n", s.Identifier)
+		}
+		return nil
+	}
+
+	// Save RHS value.
+	g.Emitln("\tpush hl")
+
+	// Compute target address.
+	if len(s.Subscripts) > 0 && len(s.Fields) > 0 {
+		// Two cases look the same in the flat Reference:
+		//   arr[i].x  -> subscripts index the base array, field accesses the result record
+		//   rec.arr[i] -> field accesses the base record, subscripts index the result array
+		// Distinguish: if the first field has an Array type, it's rec.arr[i].
+		isArrOfRecords := true
+		if d != nil && d.Type.Record != nil {
+			fname := s.Fields[0]
+			for _, f := range d.Type.Record.Fields {
+				if f.Identifier == fname && f.Type.Array != nil {
+					isArrOfRecords = false
+					break
+				}
+			}
+		}
+		if isArrOfRecords {
+			// arr[i].x: array of records, field write.
+			if d == nil || d.Type.Record == nil {
+				return fmt.Errorf("let: %s is not an array of records", s.Identifier)
+			}
+			recSize := g.elemSize(s.Identifier)
+			fname := s.Fields[0]
+			fieldIdx := -1
+			for i, f := range d.Type.Record.Fields {
+				if f.Identifier == fname {
+					fieldIdx = i
+					break
+				}
+			}
+			if fieldIdx < 0 {
+				return fmt.Errorf("let: struct %s has no field %s", s.Identifier, fname)
+			}
+			off := fieldOffset(d.Type.Record.Fields, fieldIdx)
+			ft := d.Type.Record.Fields[fieldIdx].Type
+
+			if d.ParamRef {
+				g.Emitf("\tld hl, (%s)\n", s.Identifier)
+			} else {
+				g.Emitf("\tld hl, %s\n", s.Identifier)
+			}
+			// Add scaled index.
+			if len(s.Subscripts) >= 1 {
+				g.Emitln("\tpush hl")
+				if err := s.Subscripts[0].Gen(g); err != nil {
+					return err
+				}
+				for size := recSize; size > 1; size >>= 1 {
+					g.Emitln("\tadd hl, hl")
+				}
+				g.Emitln("\tex de, hl")
+				g.Emitln("\tpop hl")
+				g.Emitln("\tadd hl, de")
+			}
+			// Add field offset.
+			if off > 0 {
+				g.Emitf("\tld de, %d\n", off)
+				g.Emitln("\tadd hl, de")
+			}
+			g.Emitln("\tpop de") // value to store
+			if ft.Predeclared == PredeclaredByte {
+				g.Emitln("\tld (hl), e")
+			} else {
+				g.Emitln("\tld (hl), e")
+				g.Emitln("\tinc hl")
+				g.Emitln("\tld (hl), d")
+			}
+			return nil
+		}
+	}
+
 	if len(s.Fields) > 0 {
-		// Struct field store: s.field = rhs
-		// Compute base + field offset into hl, then pop value and store.
-		d, ok := g.Checker.Symbols[s.Identifier]
-		if !ok || d.Type.Record == nil {
+		// Struct field store: s.field = rhs (possibly with subscripts if field is array).
+		if d == nil || d.Type.Record == nil {
 			return fmt.Errorf("let: %s is not a struct", s.Identifier)
 		}
 		fname := s.Fields[0]
@@ -814,8 +973,6 @@ func (s Let) Gen(g *Gen) error {
 		off := fieldOffset(d.Type.Record.Fields, fieldIdx)
 		ft := d.Type.Record.Fields[fieldIdx].Type
 
-		g.Emitln("\tpush hl")
-		// ParamRef symbols hold a pointer; dereference it to get the data address.
 		if d.ParamRef {
 			g.Emitf("\tld hl, (%s)\n", s.Identifier)
 		} else {
@@ -825,8 +982,30 @@ func (s Let) Gen(g *Gen) error {
 			g.Emitf("\tld de, %d\n", off)
 			g.Emitln("\tadd hl, de")
 		}
+		// If field is an array and there are subscripts, add scaled index.
+		if ft.Array != nil && len(s.Subscripts) > 0 {
+			arrElemSize := 1
+			if ft.Array.ElemType.Predeclared == PredeclaredWord {
+				arrElemSize = 2
+			} else if ft.Array.ElemType.Record != nil {
+				arrElemSize = recordTotalSize(ft.Array.ElemType.Record.Fields)
+				arrElemSize = nextPow2(arrElemSize)
+			}
+			g.Emitln("\tpush hl")
+			if err := s.Subscripts[0].Gen(g); err != nil {
+				return err
+			}
+			for size := arrElemSize; size > 1; size >>= 1 {
+				g.Emitln("\tadd hl, hl")
+			}
+			g.Emitln("\tex de, hl")
+			g.Emitln("\tpop hl")
+			g.Emitln("\tadd hl, de")
+		}
 		g.Emitln("\tpop de")
 		if ft.Predeclared == PredeclaredByte {
+			g.Emitln("\tld (hl), e")
+		} else if ft.Array != nil && ft.Array.ElemType.Predeclared == PredeclaredByte {
 			g.Emitln("\tld (hl), e")
 		} else {
 			g.Emitln("\tld (hl), e")
@@ -836,46 +1015,29 @@ func (s Let) Gen(g *Gen) error {
 		return nil
 	}
 
-	if len(s.Subscripts) == 0 {
-		// Simple variable store.
-		if s.isByteRef(g) {
-			g.Emitln("\tld a, l")
-			g.Emitf("\tld (%s), a\n", s.Identifier)
-		} else {
-			g.Emitf("\tld (%s), hl\n", s.Identifier)
-		}
-		return nil
-	}
+	// Array element set: lhs[i] = rhs
+	// RHS already on stack from push at top of function.
 
-	// Array element set: lhs[sub1][sub2]... = rhs
-	// hl still holds the RHS value; save it.
-	g.Emitln("\tpush hl")
-
-	// Compute target address into hl.
 	elem := g.elemSize(s.Identifier)
-	if g.Checker != nil {
-		if d, ok := g.Checker.Symbols[s.Identifier]; ok && d.ParamRef {
-			g.Emitf("\tld hl, (%s)\n", s.Identifier)
-			goto gotElem
-		}
+	if d != nil && d.ParamRef {
+		g.Emitf("\tld hl, (%s)\n", s.Identifier)
+	} else {
+		g.Emitf("\tld hl, %s\n", s.Identifier)
 	}
-	g.Emitf("\tld hl, %s\n", s.Identifier)
-gotElem:
 	for i := range s.Subscripts {
 		g.Emitln("\tpush hl")
 		if err := s.Subscripts[i].Gen(g); err != nil {
 			return err
 		}
-		if elem == 2 {
-			g.Emitln("\tadd hl, hl") // * 2 (word)
+		for size := elem; size > 1; size >>= 1 {
+			g.Emitln("\tadd hl, hl")
 		}
 		g.Emitln("\tex de, hl")
 		g.Emitln("\tpop hl")
 		g.Emitln("\tadd hl, de")
 	}
 
-	// hl = target address.  Pop the value from the stack.
-	g.Emitln("\tpop de") // de = value to store
+	g.Emitln("\tpop de")
 	if elem == 1 {
 		g.Emitln("\tld (hl), e")
 	} else {
@@ -931,12 +1093,12 @@ func (s Group) Gen(g *Gen) error {
 		n := g.nextLabel()
 		g.Emitf("_for_%d:\n", n)
 		// Compare var with end (hl = end - var)
-		g.Emitln("\tpop de")  // de = end, stack: [step]
-		g.Emitln("\tpush de") // push back, stack: [step, end]
+		g.Emitln("\tpop de")                                   // de = end, stack: [step]
+		g.Emitln("\tpush de")                                  // push back, stack: [step, end]
 		g.Emitf("\tld hl, (%s)\n", s.For.Reference.Identifier) // hl = var
-		g.Emitln("\tex de, hl") // hl = end, de = var
+		g.Emitln("\tex de, hl")                                // hl = end, de = var
 		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de") // hl = end - var
+		g.Emitln("\tsbc hl, de")        // hl = end - var
 		g.Emitf("\tjr c, _end_%d\n", n) // end < var → exit
 
 		// Body
@@ -1164,18 +1326,10 @@ func (s Declare) Gen(g *Gen) error {
 		// Local variable; storage is part of the procedure frame.
 		return nil
 	}
-	elemSize := 1
-	if s.Type.Predeclared == PredeclaredWord {
-		elemSize = 2
-	}
+	elemSize := g.elemSize(s.Identifier)
 	total := s.Size * elemSize
 	if total == 0 {
 		total = elemSize // unbounded → 1 element minimum
-	}
-	// For structs, override total.
-	if s.Type.Record != nil {
-		total = recordTotalSize(s.Type.Record.Fields)
-		total = nextPow2(total)
 	}
 	g.Emitf("org 0x%x\n%s: db 0", g.Heap, s.Identifier)
 	for i := 1; i < total; i++ {
@@ -1246,16 +1400,15 @@ func totalParamSize(proc *Procedure) int {
 // localDeclareSize returns the byte size needed for a local variable declaration.
 func localDeclareSize(d Declare) int {
 	elemSize := 1
-	if d.Type.Predeclared == PredeclaredWord {
+	if d.Type.Record != nil {
+		elemSize = recordTotalSize(d.Type.Record.Fields)
+		elemSize = nextPow2(elemSize)
+	} else if d.Type.Predeclared == PredeclaredWord {
 		elemSize = 2
 	}
 	total := d.Size * elemSize
 	if total == 0 {
 		total = elemSize // unbounded → 1 element minimum
-	}
-	if d.Type.Record != nil {
-		total = recordTotalSize(d.Type.Record.Fields)
-		total = nextPow2(total)
 	}
 	return total
 }
@@ -1264,17 +1417,23 @@ func localDeclareSize(d Declare) int {
 func fieldOffset(fields []Field, i int) int {
 	off := 0
 	for j := 0; j < i; j++ {
-		if fields[j].Type.Predeclared == PredeclaredByte {
-			off += 1
-		} else {
-			off += 2
-		}
+		off += fieldTypeSize(fields[j].Type)
 	}
 	return off
 }
 
-// fieldSize returns the storage size of a single field/type.
+// fieldTypeSize returns the storage size of a single field/type.
 func fieldTypeSize(t Type) int {
+	if t.Array != nil {
+		elemSize := fieldTypeSize(t.Array.ElemType)
+		if t.Array.Size > 0 {
+			return t.Array.Size * elemSize
+		}
+		return 0
+	}
+	if t.Record != nil {
+		return nextPow2(recordTotalSize(t.Record.Fields))
+	}
 	if t.Predeclared == PredeclaredByte {
 		return 1
 	}

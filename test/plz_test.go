@@ -507,3 +507,65 @@ HALT`)
 		t.Errorf("expected 255, got %d", io.OutBytes[0][0])
 	}
 }
+
+func TestIntegrationArrayOfRecordsFieldRead(t *testing.T) {
+	io := compileAndRun(t, `DECLARE arr ARRAY [4] RECORD x WORD, y BYTE END
+DECLARE idx WORD
+DECLARE val WORD
+LET arr[0].x = 100
+LET arr[0].y = 50
+LET arr[1].x = 200
+LET arr[1].y = 77
+LET idx = 1
+LET val = arr[idx].x
+OUTPUT 0 val
+LET val = arr[idx].y
+OUTPUT 0 val
+LET val = arr[0].x
+OUTPUT 0 val
+LET val = arr[0].y
+OUTPUT 0 val
+HALT`)
+	if len(io.OutBytes[0]) < 4 {
+		t.Fatal("expected 4 outputs")
+	}
+	if io.OutBytes[0][0] != 200 {
+		t.Errorf("expected 200 for arr[1].x, got %d", io.OutBytes[0][0])
+	}
+	if io.OutBytes[0][1] != 77 {
+		t.Errorf("expected 77 for arr[1].y, got %d", io.OutBytes[0][1])
+	}
+	if io.OutBytes[0][2] != 100 {
+		t.Errorf("expected 100 for arr[0].x, got %d", io.OutBytes[0][2])
+	}
+	if io.OutBytes[0][3] != 50 {
+		t.Errorf("expected 50 for arr[0].y, got %d", io.OutBytes[0][3])
+	}
+}
+
+func TestIntegrationRecordWithArrayField(t *testing.T) {
+	io := compileAndRun(t, `DECLARE s RECORD x WORD, arr ARRAY [4] BYTE END
+DECLARE idx WORD
+DECLARE val WORD
+LET s.x = 999
+LET s.arr[0] = 10
+LET s.arr[1] = 20
+LET s.arr[2] = 30
+LET s.arr[3] = 40
+LET idx = 2
+LET val = s.arr[idx]
+OUTPUT 0 val
+LET val = s.x
+OUTPUT 0 val
+HALT`)
+	if len(io.OutBytes[0]) < 2 {
+		t.Fatal("expected 2 outputs")
+	}
+	if io.OutBytes[0][0] != 30 {
+		t.Errorf("expected 30 for s.arr[2], got %d", io.OutBytes[0][0])
+	}
+	// 999 = 0x03E7, low byte = 0xE7 = 231
+	if io.OutBytes[0][1] != 231 {
+		t.Errorf("expected 231 for s.x low byte, got %d", io.OutBytes[0][1])
+	}
+}
