@@ -19,6 +19,7 @@ const (
 	TokenString
 	TokenRawString // to match Scanner token kinds
 	TokenComment
+	KeywordArray
 	KeywordByte
 	KeywordCall
 	KeywordConstant
@@ -57,7 +58,8 @@ func (t TokenKind) String() string {
 }
 
 var Keywords = map[string]TokenKind{
-	"BYTE":     KeywordByte,
+	"ARRAY":   KeywordArray,
+	"BYTE":    KeywordByte,
 	"CALL":     KeywordCall,
 	"CONSTANT": KeywordConstant,
 	"DATA":     KeywordData,

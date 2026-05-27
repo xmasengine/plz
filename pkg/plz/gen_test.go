@@ -331,6 +331,29 @@ func TestGenStructFieldRead(t *testing.T) {
 	}
 }
 
+func TestGenArrayDeclareFixed(t *testing.T) {
+	asm := genTest(t, "DECLARE arr ARRAY [10] BYTE")
+	if !strings.Contains(asm, "db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0") {
+		t.Error("expected 10 zero bytes")
+	}
+}
+
+func TestGenArrayDeclareWord(t *testing.T) {
+	asm := genTest(t, "DECLARE arr ARRAY [5] WORD")
+	// 5 * 2 = 10 bytes
+	if !strings.Contains(asm, "db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0") {
+		t.Error("expected 10 zero bytes for 5 words")
+	}
+}
+
+func TestGenArrayDeclareMultiDim(t *testing.T) {
+	asm := genTest(t, "DECLARE arr ARRAY [3, 4] BYTE")
+	// 3 * 4 = 12 bytes: arr: db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+	if !strings.Contains(asm, "db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0") {
+		t.Error("expected 12 zero bytes for 3x4 byte array")
+	}
+}
+
 func TestGenStructFieldWrite(t *testing.T) {
 	asm := genTest(t, "DECLARE s STRUCT x WORD, y BYTE\nLET s.x = 99")
 	if !strings.Contains(asm, "ld hl, s") {

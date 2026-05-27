@@ -147,6 +147,7 @@ type Declare struct {
 	Type        Type
 	Size        int
 	Dimension   int
+	Dims        []int  // per-dimension sizes from ARRAY declaration
 	Initializer *Initializer
 }
 

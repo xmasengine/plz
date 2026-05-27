@@ -812,23 +812,25 @@ func (s GoTo) Gen(g *Gen) error {
 }
 
 func (s Declare) Gen(g *Gen) error {
-	switch {
-	case s.Type.Predeclared == PredeclaredByte:
-		g.Emitf("org 0x%x\n%s: db 0\n", g.Heap, s.Identifier)
-		g.Heap += 1
-	case s.Type.Predeclared == PredeclaredWord:
-		g.Emitf("org 0x%x\n%s: db 0,0\n", g.Heap, s.Identifier)
-		g.Heap += 2
-	case s.Type.Struct != nil:
-		n := structTotalSize(s.Type.Struct.Fields)
-		n = nextPow2(n)
-		g.Emitf("org 0x%x\n%s: db 0", g.Heap, s.Identifier)
-		for i := 1; i < n; i++ {
-			g.Emit(", 0")
-		}
-		g.Emit("\n")
-		g.Heap += n
+	elemSize := 1
+	if s.Type.Predeclared == PredeclaredWord {
+		elemSize = 2
 	}
+	total := s.Size * elemSize
+	if total == 0 {
+		total = elemSize // unbounded → 1 element minimum
+	}
+	// For structs, override total.
+	if s.Type.Struct != nil {
+		total = structTotalSize(s.Type.Struct.Fields)
+		total = nextPow2(total)
+	}
+	g.Emitf("org 0x%x\n%s: db 0", g.Heap, s.Identifier)
+	for i := 1; i < total; i++ {
+		g.Emit(", 0")
+	}
+	g.Emit("\n")
+	g.Heap += total
 	return nil
 }
 

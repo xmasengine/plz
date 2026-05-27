@@ -389,11 +389,50 @@ func (g *Declare) Parse(parser *Parser) error {
 	if err != nil {
 		return err
 	}
+
+	// Optional ARRAY [dim1, dim2, ...] OF type
+	if parser.Skip(KeywordArray) != nil {
+		parser.Skip(KeywordOf)
+		// Parse optional dimension sizes in brackets.
+		if parser.Peek().TokenKind == '[' {
+			parser.Next()
+			for {
+				tok := parser.Peek()
+				if tok.TokenKind == TokenInt {
+					parser.Next()
+					g.Dims = append(g.Dims, tok.Number)
+				} else {
+					g.Dims = append(g.Dims, 0) // unbounded dimension
+				}
+				if parser.Peek().TokenKind != TokenKind(',') {
+					break
+				}
+				parser.Next()
+			}
+			if _, err := parser.Accept(TokenKind(']')); err != nil {
+				return err
+			}
+		} else {
+			// ARRAY without brackets = single unbounded dimension.
+			g.Dims = append(g.Dims, 0)
+		}
+		g.Dimension = len(g.Dims)
+		g.Size = 1
+		for _, d := range g.Dims {
+			if d > 0 {
+				g.Size *= d
+			} else {
+				g.Size = 0 // unbounded
+				break
+			}
+		}
+		return g.Type.Parse(parser)
+	}
+
 	err = g.Type.Parse(parser)
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 
