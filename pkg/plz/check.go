@@ -88,6 +88,8 @@ func (s Statement) Check(c *Checker) error {
 	case s.GoTo != nil:
 	case s.Constant != nil:
 	case s.Declare != nil:
+	case s.Define != nil:
+		return s.Define.Check(c)
 	case s.Data != nil:
 	case s.Return != nil:
 		return s.Return.Check(c)
@@ -95,6 +97,10 @@ func (s Statement) Check(c *Checker) error {
 	case s.Enable != nil:
 	case s.Disable != nil:
 	}
+	return nil
+}
+
+func (s Define) Check(c *Checker) error {
 	return nil
 }
 

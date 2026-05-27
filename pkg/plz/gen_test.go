@@ -458,3 +458,33 @@ func TestGenStructFieldWrite(t *testing.T) {
 		t.Error("expected store second byte for word field")
 	}
 }
+
+func TestGenDefineTypeAlias(t *testing.T) {
+	asm := genTest(t, "DEFINE Point RECORD x WORD, y BYTE END\nDECLARE p TYPE Point\nLET p.x = 42")
+	if !strings.Contains(asm, "p:") {
+		t.Error("expected label for declared record via type alias")
+	}
+	if !strings.Contains(asm, "ld hl, p") {
+		t.Error("expected record base access")
+	}
+}
+
+func TestGenDefineByteAlias(t *testing.T) {
+	asm := genTest(t, "DEFINE MyByte BYTE\nDECLARE bv TYPE MyByte\nLET bv = 99")
+	if !strings.Contains(asm, "bv:") {
+		t.Error("expected label for byte variable via type alias")
+	}
+	if !strings.Contains(asm, "ld a, l") {
+		t.Error("expected byte truncation for store")
+	}
+}
+
+func TestGenDefineWordAlias(t *testing.T) {
+	asm := genTest(t, "DEFINE MyWord WORD\nDECLARE w TYPE MyWord\nLET w = 42")
+	if !strings.Contains(asm, "w:") {
+		t.Error("expected label for word variable via type alias")
+	}
+	if !strings.Contains(asm, "ld (w), hl") {
+		t.Error("expected word store")
+	}
+}

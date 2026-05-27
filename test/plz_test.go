@@ -450,3 +450,60 @@ HALT`)
 		t.Errorf("expected 10, got %d", io.OutBytes[0][0])
 	}
 }
+
+func TestIntegrationDefineRecordAlias(t *testing.T) {
+	io := compileAndRun(t, `DEFINE Point RECORD x WORD, y BYTE END
+DECLARE pt TYPE Point
+DECLARE val WORD
+LET pt.x = 300
+LET pt.y = 42
+LET val = pt.x
+OUTPUT 0 val
+OUTPUT 0 pt.y
+HALT`)
+	if len(io.OutBytes[0]) < 2 {
+		t.Fatal("expected 2 outputs")
+	}
+	if io.OutBytes[0][0] != 44 { // 300 = 0x012C, low byte = 0x2C = 44
+		t.Errorf("expected 44 for p.x low byte, got %d", io.OutBytes[0][0])
+	}
+	if io.OutBytes[0][1] != 42 {
+		t.Errorf("expected 42 for p.y, got %d", io.OutBytes[0][1])
+	}
+}
+
+func TestIntegrationDefineProcAlias(t *testing.T) {
+	io := compileAndRun(t, `DEFINE Point RECORD x WORD, y BYTE END
+DECLARE pt TYPE Point
+DECLARE val WORD
+PROCEDURE getY (pp TYPE Point) WORD
+  RETURN pp.y
+END
+LET pt.x = 100
+LET pt.y = 77
+LET val = getY(pt)
+OUTPUT 0 val
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 77 {
+		t.Errorf("expected 77, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationDefineByteAlias(t *testing.T) {
+	io := compileAndRun(t, `DEFINE MyByte BYTE
+DECLARE bv TYPE MyByte
+DECLARE val WORD
+LET bv = 255
+LET val = bv
+OUTPUT 0 val
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 255 {
+		t.Errorf("expected 255, got %d", io.OutBytes[0][0])
+	}
+}

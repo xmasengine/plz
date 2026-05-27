@@ -22,12 +22,13 @@ func (t Token) Errorf(form string, args ...any) Error {
 // It is an error to call Parse on a AST node that is not currently available
 // in the parser.
 type Parser struct {
-	Tokens  []Token
-	Current int
+	Tokens      []Token
+	Current     int
+	TypeAliases map[string]Type
 }
 
 func NewParser(tokens []Token) *Parser {
-	return &Parser{Tokens: tokens}
+	return &Parser{Tokens: tokens, TypeAliases: make(map[string]Type)}
 }
 
 func (p Parser) Peek() Token {
@@ -141,6 +142,9 @@ func (s *Statement) Parse(parser *Parser) error {
 	case KeywordDeclare:
 		s.Declare = &Declare{}
 		return s.Declare.Parse(parser)
+	case KeywordDefine:
+		s.Define = &Define{}
+		return s.Define.Parse(parser)
 	case KeywordDisable:
 		s.Disable = &Disable{}
 		return s.Disable.Parse(parser)
@@ -414,6 +418,19 @@ func (t *Type) Parse(parser *Parser) error {
 		}
 		return nil
 	}
+	if parser.Peek().TokenKind == KeywordType {
+		parser.Next()
+		nameTok, err := parser.Accept(TokenIdent)
+		if err != nil {
+			return err
+		}
+		aliased, ok := parser.TypeAliases[nameTok.Text]
+		if !ok {
+			return fmt.Errorf("undefined type alias %q", nameTok.Text)
+		}
+		*t = aliased
+		return nil
+	}
 	tok, err := parser.Accept(KeywordByte, KeywordWord)
 	if err != nil {
 		return err
@@ -424,6 +441,22 @@ func (t *Type) Parse(parser *Parser) error {
 	case KeywordWord:
 		t.Predeclared = PredeclaredWord
 	}
+	return nil
+}
+
+func (d *Define) Parse(parser *Parser) error {
+	if _, err := parser.Accept(KeywordDefine); err != nil {
+		return err
+	}
+	nameTok, err := parser.Accept(TokenIdent)
+	if err != nil {
+		return err
+	}
+	d.Name = Identifier(nameTok.Text)
+	if err := d.Type.Parse(parser); err != nil {
+		return err
+	}
+	parser.TypeAliases[nameTok.Text] = d.Type
 	return nil
 }
 

@@ -17,6 +17,7 @@ type Statement struct {
 	Constant  *Constant
 	Data      *Data
 	Declare   *Declare
+	Define    *Define
 	Group     *Group
 	Let       *Let
 	Procedure *Procedure
@@ -78,6 +79,7 @@ const (
 type Type struct {
 	Predeclared
 	*Record
+	AliasName Identifier // set by TYPE <name> before resolution
 }
 
 type Record struct {
@@ -135,6 +137,11 @@ type If struct {
 type Label struct {
 	Name     string
 	Location int
+}
+
+type Define struct {
+	Name Identifier
+	Type Type
 }
 
 type Data struct {

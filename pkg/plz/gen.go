@@ -331,6 +331,8 @@ func (s Statement) Gen(g *Gen) error {
 		return s.Enable.Gen(g)
 	case s.Data != nil:
 		return s.Data.Gen(g)
+	case s.Define != nil:
+		return nil // compile-time only
 	case s.Disable != nil:
 		return s.Disable.Gen(g)
 	case s.Output != nil:

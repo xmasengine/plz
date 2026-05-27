@@ -48,6 +48,8 @@ const (
 	KeywordBy
 	KeywordCase
 	KeywordOf
+	KeywordDefine
+	KeywordType
 )
 
 func (t TokenKind) String() string {
@@ -88,6 +90,8 @@ var Keywords = map[string]TokenKind{
 	"BY":       KeywordBy,
 	"CASE":     KeywordCase,
 	"OF":       KeywordOf,
+	"DEFINE":   KeywordDefine,
+	"TYPE":     KeywordType,
 	"WORD":     KeywordWord,
 }
 
