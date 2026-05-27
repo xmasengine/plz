@@ -556,6 +556,105 @@ func TestParseArrayDeclareMultiDim(t *testing.T) {
 	}
 }
 
+func TestParseProcBasic(t *testing.T) {
+	tokens, err := Scan(strings.NewReader("PROC foo\nRETURN\nEND"))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	var s Statement
+	p := NewParser(tokens)
+	if err := s.Parse(p); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if s.Procedure == nil {
+		t.Fatal("expected Procedure statement")
+	}
+	if s.Procedure.Name.Name != "foo" {
+		t.Errorf("expected name foo, got %s", s.Procedure.Name.Name)
+	}
+}
+
+func TestParseProcParams(t *testing.T) {
+	tokens, err := Scan(strings.NewReader("PROC add (x, y) WORD\nRETURN x + y\nEND"))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	var s Statement
+	p := NewParser(tokens)
+	if err := s.Parse(p); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if s.Procedure == nil {
+		t.Fatal("expected Procedure statement")
+	}
+	if len(s.Procedure.Parameters) != 2 {
+		t.Errorf("expected 2 params, got %d", len(s.Procedure.Parameters))
+	}
+	if s.Procedure.Type.Predeclared != PredeclaredWord {
+		t.Error("expected WORD return type")
+	}
+}
+
+func TestParseProcReentrant(t *testing.T) {
+	tokens, err := Scan(strings.NewReader("PROC foo (a, b, c) WORD REENTRANT RETURN a END"))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	var s Statement
+	p := NewParser(tokens)
+	if err := s.Parse(p); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if s.Procedure == nil {
+		t.Fatal("expected Procedure statement")
+	}
+	if !s.Procedure.Reentrant {
+		t.Error("expected REENTRANT")
+	}
+	if len(s.Procedure.Parameters) != 3 {
+		t.Errorf("expected 3 params, got %d", len(s.Procedure.Parameters))
+	}
+}
+
+func TestParseCallWithArgs(t *testing.T) {
+	tokens, err := Scan(strings.NewReader("CALL foo(1, 2)"))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	var s Statement
+	p := NewParser(tokens)
+	if err := s.Parse(p); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if s.Call == nil {
+		t.Fatal("expected Call statement")
+	}
+	if s.Call.Name != "foo" {
+		t.Errorf("expected name foo, got %s", s.Call.Name)
+	}
+	if len(s.Call.Arguments) != 2 {
+		t.Errorf("expected 2 arguments, got %d", len(s.Call.Arguments))
+	}
+}
+
+func TestParseReturnMulti(t *testing.T) {
+	tokens, err := Scan(strings.NewReader("RETURN 1, 2"))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	var s Statement
+	p := NewParser(tokens)
+	if err := s.Parse(p); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if s.Return == nil {
+		t.Fatal("expected Return statement")
+	}
+	if len(s.Return.Expressions) != 2 {
+		t.Errorf("expected 2 return expressions, got %d", len(s.Return.Expressions))
+	}
+}
+
 func TestSubscriptNoIndex(t *testing.T) {
 	// arr[] should parse with just the array as the only operand (no index)
 	expr, err := parseLetExpr("LET x = arr[]")

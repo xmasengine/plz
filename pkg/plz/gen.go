@@ -8,9 +8,10 @@ const HeapBase = 0xC000 // RAM memory.
 
 type Gen struct {
 	*os.File
-	Heap    int // Pointer to last allocated heap RAM memory.
-	label   int // counter for unique local labels
-	Checker *Checker
+	Heap      int // Pointer to last allocated heap RAM memory.
+	label     int // counter for unique local labels
+	Checker   *Checker
+	procFrame map[string]int // proc name → frame heap base addr
 }
 
 func NewGenFile(name string) (*Gen, error) {
@@ -210,24 +211,71 @@ func (p Program) Gen(g *Gen) error {
 		return err
 	}
 	g.Checker = c
+	g.procFrame = make(map[string]int)
+
+	// First pass: allocate frames for non-REENTRANT procedures.
+	for _, stmt := range p.Statements {
+		if stmt.Procedure != nil && !stmt.Procedure.Reentrant {
+			proc := stmt.Procedure
+			nParams := len(proc.Parameters)
+			// Allocate frame for ALL parameters for non-REENTRANT.
+			if nParams > 0 {
+				g.procFrame[proc.Name.Name] = g.Heap
+				g.Heap += nParams * 2
+			}
+		}
+	}
+
+	// Emit procedure frame storage and parameter consts first (must precede use).
+	for _, stmt := range p.Statements {
+		if stmt.Procedure == nil || stmt.Procedure.Reentrant {
+			continue
+		}
+		proc := stmt.Procedure
+		addr, ok := g.procFrame[proc.Name.Name]
+		if !ok || len(proc.Parameters) == 0 {
+			continue
+		}
+		n := len(proc.Parameters)
+		g.Emitf("org 0x%x\n_plz_%s_frame: db 0", addr, proc.Name.Name)
+		for i := 1; i < n*2; i++ {
+			g.Emit(", 0")
+		}
+		g.Emit("\n")
+		for i, param := range proc.Parameters {
+			g.Emitf("\tconst %s = _plz_%s_frame+%d\n", param, proc.Name.Name, i*2)
+		}
+	}
+
 	g.Emit(ProgramHeader)
 	g.Emitln("\tjp _plz_start")
 	g.Emit(RuntimeHeader)
 	g.Emitln("_plz_start:")
 
 	var declares []*Declare
+	var procedures []*Procedure
 	for _, statement := range p.Statements {
 		if statement.Declare != nil {
 			declares = append(declares, statement.Declare)
 			continue
 		}
-		err := statement.Gen(g)
-		if err != nil {
+		if statement.Procedure != nil {
+			procedures = append(procedures, statement.Procedure)
+			continue
+		}
+		if err := statement.Gen(g); err != nil {
 			return err
 		}
 	}
 
-	// Emit declarations at the end so they don't interleave with code.
+	// Emit procedure bodies after main code (must not be reachable by fall-through).
+	for _, proc := range procedures {
+		if err := proc.Gen(g); err != nil {
+			return err
+		}
+	}
+
+	// Emit declarations at the end.
 	for _, d := range declares {
 		g.Emitln("")
 		d.Gen(g)
@@ -601,15 +649,68 @@ func (g *Gen) genIndexRead(operands []Operand) error {
 // genCallExpr generates code to call a function expression.
 // Operands: [func_expr, arg1, arg2, ...].
 func (g *Gen) genCallExpr(operands []Operand) error {
-	// For now, only support calling a named label.
-	if operands[0].Reference != nil {
-		name := operands[0].Reference.Identifier
-		// Push arguments right-to-left (no args for now – stub).
-		g.Emitf("\tcall %s\n", name)
-		// Result comes back in hl by convention.
+	ref := operands[0].Reference
+	if ref == nil && operands[0].Expression != nil && operands[0].Expression.Operand != nil {
+		ref = operands[0].Expression.Operand.Reference
+	}
+	if ref == nil {
+		return fmt.Errorf("genCallExpr: indirect calls not yet supported")
+	}
+	name := string(ref.Identifier)
+	args := operands[1:]
+
+	switch len(args) {
+	case 0:
+	case 1:
+		if err := args[0].Expression.Gen(g); err != nil {
+			return err
+		}
+	case 2:
+		if err := args[1].Expression.Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tpush hl")
+		if err := args[0].Expression.Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tpop de")
+	default:
+		_, hasFrame := g.procFrame[name]
+		if hasFrame {
+			for i := 2; i < len(args); i++ {
+				if err := args[i].Expression.Gen(g); err != nil {
+					return err
+				}
+				g.Emitf("\tld (_plz_%s_frame+%d), hl\n", name, (i-2)*2)
+			}
+		} else {
+			for i := len(args) - 1; i >= 2; i-- {
+				if err := args[i].Expression.Gen(g); err != nil {
+					return err
+				}
+				g.Emitln("\tpush hl")
+			}
+		}
+		if err := args[1].Expression.Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tpush hl")
+		if err := args[0].Expression.Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tpop de")
+
+		g.Emitf("\tcall _plz_%s\n", name)
+		if !hasFrame && len(args) > 2 {
+			g.Emitf("\tld hl, %d\n", (len(args)-2)*2)
+			g.Emitln("\tadd hl, sp")
+			g.Emitln("\tld sp, hl")
+		}
 		return nil
 	}
-	return fmt.Errorf("genCallExpr: indirect calls not yet supported")
+
+	g.Emitf("\tcall _plz_%s\n", name)
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -786,19 +887,126 @@ func (s Group) Gen(g *Gen) error {
 	}
 	return nil
 }
-func (s Procedure) Gen(g *Gen) error { return nil }
+func (s Procedure) Gen(g *Gen) error {
+	g.Emitf("_plz_%s:\n", s.Name.Name)
+
+	// For non-REENTRANT: save parameters to frame slots.
+	if !s.Reentrant {
+		if _, ok := g.procFrame[s.Name.Name]; ok && len(s.Parameters) > 0 {
+			// Save param1 (HL) to frame slot 0.
+			g.Emitf("\tld (_plz_%s_frame), hl\n", s.Name.Name)
+			if len(s.Parameters) > 1 {
+				// Save param2 (DE) to frame slot 1.
+				g.Emitf("\tld (_plz_%s_frame+2), de\n", s.Name.Name)
+			}
+			// Params 3+ are already stored in frame by the call site.
+		}
+	}
+
+	for _, stmt := range s.Statements {
+		if err := stmt.Gen(g); err != nil {
+			return err
+		}
+	}
+
+	// Implicit ret if the last statement is not a return.
+	if len(s.Statements) == 0 || s.Statements[len(s.Statements)-1].Return == nil {
+		g.Emitln("\tret")
+	}
+	return nil
+}
 
 func (s Return) Gen(g *Gen) error {
+	switch len(s.Expressions) {
+	case 0:
+		// No return value → just ret.
+	case 1:
+		if err := s.Expressions[0].Gen(g); err != nil {
+			return err
+		}
+	case 2:
+		// Second return value in DE.
+		if err := s.Expressions[1].Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tpush hl")
+		if err := s.Expressions[0].Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tpop de")
+	default:
+		return fmt.Errorf("return: too many return values (%d)", len(s.Expressions))
+	}
 	g.Emitln("\tret")
 	return nil
 }
 
 func (s Call) Gen(g *Gen) error {
-	if s.Name != "" {
-		g.Emitln("\tcall ", s.Name)
-	} else {
-		g.Emitln("\tcall ", s.Location)
+	name := s.Name
+	args := s.Arguments
+
+	switch len(args) {
+	case 0:
+		// No arguments.
+	case 1:
+		if err := args[0].Gen(g); err != nil {
+			return err
+		}
+	case 2:
+		// Arg2 into DE, arg1 into HL.
+		if err := args[1].Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tpush hl")
+		if err := args[0].Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tpop de")
+	default:
+		// 3+ arguments.
+		_, hasFrame := g.procFrame[name]
+		if hasFrame {
+			// Non-REENTRANT: store extra args in the procedure's frame.
+			for i := 2; i < len(args); i++ {
+				if err := args[i].Gen(g); err != nil {
+					return err
+				}
+				slot := i - 2
+				g.Emitf("\tld (_plz_%s_frame+%d), hl\n", name, slot*2)
+			}
+		} else {
+			// REENTRANT or no frame: push remaining args onto stack right-to-left.
+			for i := len(args) - 1; i >= 2; i-- {
+				if err := args[i].Gen(g); err != nil {
+					return err
+				}
+				g.Emitln("\tpush hl")
+			}
+		}
+		// Set up HL=arg1, DE=arg2.
+		if err := args[1].Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tpush hl")
+		if err := args[0].Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tpop de")
+
+		if hasFrame {
+			g.Emitf("\tcall _plz_%s\n", name)
+		} else {
+			g.Emitf("\tcall _plz_%s\n", name)
+			if len(args) > 2 {
+				g.Emitf("\tld hl, %d\n", (len(args)-2)*2)
+				g.Emitln("\tadd hl, sp")
+				g.Emitln("\tld sp, hl")
+			}
+		}
+		return nil
 	}
+
+	g.Emitf("\tcall _plz_%s\n", name)
 	return nil
 }
 

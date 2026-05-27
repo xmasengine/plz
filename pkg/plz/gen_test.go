@@ -354,6 +354,42 @@ func TestGenArrayDeclareMultiDim(t *testing.T) {
 	}
 }
 
+func TestGenProcNoArgs(t *testing.T) {
+	asm := genTest(t, "PROC foo\nRETURN 99\nEND")
+	if !strings.Contains(asm, "_plz_foo:") {
+		t.Error("expected _plz_foo: label")
+	}
+	if !strings.Contains(asm, "ld hl, 99") {
+		t.Error("expected return value")
+	}
+	if !strings.Contains(asm, "ret") {
+		t.Error("expected ret")
+	}
+}
+
+func TestGenProcOneArg(t *testing.T) {
+	asm := genTest(t, "PROC double (x) WORD\nRETURN x + x\nEND\nCALL double(5)")
+	if !strings.Contains(asm, "ld hl, 5") {
+		t.Error("expected call with arg 5")
+	}
+	if !strings.Contains(asm, "call _plz_double") {
+		t.Error("expected call _plz_double")
+	}
+}
+
+func TestGenProcTwoArgs(t *testing.T) {
+	asm := genTest(t, "PROC add (a, b) WORD\nRETURN a + b\nEND\nCALL add(3, 4)")
+	if !strings.Contains(asm, "ld hl, 3") {
+		t.Error("expected arg1 = 3")
+	}
+	if !strings.Contains(asm, "pop de") {
+		t.Error("expected arg2 in DE")
+	}
+	if !strings.Contains(asm, "call _plz_add") {
+		t.Error("expected call _plz_add")
+	}
+}
+
 func TestGenStructFieldWrite(t *testing.T) {
 	asm := genTest(t, "DECLARE s STRUCT x WORD, y BYTE\nLET s.x = 99")
 	if !strings.Contains(asm, "ld hl, s") {

@@ -49,8 +49,12 @@ type Procedure struct {
 	Name       Label
 	Type       Type
 	Parameters []Identifier
+	ParamTypes []Type
 	Statements []Statement
 	Interrupt  *Interrupt
+	Reentrant  bool
+	Returns    int
+	Locals     []Declare
 }
 
 type Interrupt struct {
@@ -85,7 +89,7 @@ type Field struct {
 }
 
 type Return struct {
-	*Expression
+	Expressions []Expression
 }
 
 type Call struct {

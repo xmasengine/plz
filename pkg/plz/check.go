@@ -16,7 +16,7 @@ func (c *Checker) Errorf(pos string, form string, args ...any) error {
 
 // Check runs semantic analysis on the program.
 func (p Program) Check(c *Checker) error {
-	// First pass: collect declarations.
+	// First pass: collect declarations and procedure parameters.
 	for _, stmt := range p.Statements {
 		if stmt.Declare != nil {
 			if existing, ok := c.Symbols[stmt.Declare.Identifier]; ok {
@@ -24,6 +24,23 @@ func (p Program) Check(c *Checker) error {
 					stmt.Declare.Identifier, existing.Identifier)
 			}
 			c.Symbols[stmt.Declare.Identifier] = stmt.Declare
+		}
+		if stmt.Procedure != nil {
+			// Register procedure name so it can be used in call expressions.
+			if _, ok := c.Symbols[Identifier(stmt.Procedure.Name.Name)]; !ok {
+				c.Symbols[Identifier(stmt.Procedure.Name.Name)] = &Declare{
+					Identifier: Identifier(stmt.Procedure.Name.Name),
+					Type:       Type{Predeclared: PredeclaredWord},
+				}
+			}
+			for _, param := range stmt.Procedure.Parameters {
+				if _, ok := c.Symbols[param]; !ok {
+					c.Symbols[param] = &Declare{
+						Identifier: param,
+						Type:       Type{Predeclared: PredeclaredWord},
+					}
+				}
+			}
 		}
 	}
 	// Second pass: check all statements.
@@ -54,6 +71,7 @@ func (s Statement) Check(c *Checker) error {
 	case s.Declare != nil:
 	case s.Data != nil:
 	case s.Return != nil:
+		return s.Return.Check(c)
 	case s.Halt != nil:
 	case s.Enable != nil:
 	case s.Disable != nil:
@@ -123,12 +141,29 @@ func (s Let) Check(c *Checker) error {
 }
 
 func (s Procedure) Check(c *Checker) error {
-	// TODO: check procedure body
+	for i := range s.Statements {
+		if err := s.Statements[i].Check(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s Return) Check(c *Checker) error {
+	for i := range s.Expressions {
+		if err := s.Expressions[i].Check(c); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (s Call) Check(c *Checker) error {
-	// TODO: check arguments
+	for i := range s.Arguments {
+		if err := s.Arguments[i].Check(c); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -165,6 +165,9 @@ func (s *Statement) Parse(parser *Parser) error {
 	case KeywordOutput:
 		s.Output = &Output{}
 		return s.Output.Parse(parser)
+	case KeywordProc:
+		s.Procedure = &Procedure{}
+		return s.Procedure.Parse(parser)
 	case KeywordReturn:
 		s.Return = &Return{}
 		return s.Return.Parse(parser)
@@ -317,20 +320,61 @@ func (g *Call) Parse(parser *Parser) error {
 	if err != nil {
 		return err
 	}
-	tok, err := parser.Accept(TokenInt, TokenIdent)
+	tok, err := parser.Accept(TokenIdent)
 	if err != nil {
 		return err
-	} else if tok.TokenKind == TokenInt {
-		g.Location = tok.Number
-	} else if tok.TokenKind == TokenIdent {
-		g.Name = tok.Text
+	}
+	g.Name = tok.Text
+	g.Reference = Reference{Identifier: Identifier(tok.Text)}
+
+	// Optional argument list: (expr1, expr2, ...)
+	if parser.Peek().TokenKind == '(' {
+		parser.Next()
+		for parser.Peek().TokenKind != ')' && !parser.End() {
+			var arg Expression
+			if err := arg.Parse(parser); err != nil {
+				return err
+			}
+			g.Arguments = append(g.Arguments, arg)
+			if parser.Peek().TokenKind != ',' {
+				break
+			}
+			parser.Next()
+		}
+		if _, err := parser.Accept(TokenKind(')')); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func (g *Return) Parse(parser *Parser) error {
-	_, err := parser.Accept(KeywordReturn)
-	return err
+	if _, err := parser.Accept(KeywordReturn); err != nil {
+		return err
+	}
+	// Optional return expressions separated by commas.
+	for {
+		tok := parser.Peek()
+		if tok.TokenKind == TokenEOF || tok.TokenKind == ';' || tok.TokenKind == KeywordEnd {
+			break
+		}
+		// Check if next token looks like the start of an expression.
+		switch tok.TokenKind {
+		case TokenInt, TokenString, TokenChar, TokenIdent, '(', '+', '-', '!':
+			var expr Expression
+			if err := expr.Parse(parser); err != nil {
+				return err
+			}
+			g.Expressions = append(g.Expressions, expr)
+		default:
+			return nil
+		}
+		if parser.Peek().TokenKind != ',' {
+			break
+		}
+		parser.Next()
+	}
+	return nil
 }
 
 func (g *Output) Parse(parser *Parser) error {
@@ -769,6 +813,64 @@ func (g *Group) Parse(parser *Parser) error {
 		g.Statements = append(g.Statements, s)
 		parser.Skip(TokenKind(';'))
 	}
+	if _, err := parser.Accept(KeywordEnd); err != nil {
+		return err
+	}
+	parser.Skip(TokenIdent) // optional label after END
+	return nil
+}
+
+func (p *Procedure) Parse(parser *Parser) error {
+	if _, err := parser.Accept(KeywordProc); err != nil {
+		return err
+	}
+	nameTok, err := parser.Accept(TokenIdent)
+	if err != nil {
+		return err
+	}
+	p.Name = Label{Name: nameTok.Text}
+
+	// Optional parameter list: (param1, param2, ...)
+	if parser.Peek().TokenKind == '(' {
+		parser.Next()
+		for parser.Peek().TokenKind != ')' && !parser.End() {
+			var id Identifier
+			if err := id.Parse(parser); err != nil {
+				return err
+			}
+			p.Parameters = append(p.Parameters, id)
+			if parser.Peek().TokenKind != ',' {
+				break
+			}
+			parser.Next()
+		}
+		if _, err := parser.Accept(TokenKind(')')); err != nil {
+			return err
+		}
+	}
+
+	// Optional return type.
+	if parser.Peek().TokenKind == KeywordByte || parser.Peek().TokenKind == KeywordWord {
+		if err := p.Type.Parse(parser); err != nil {
+			return err
+		}
+	}
+
+	// Optional REENTRANT.
+	if parser.Skip(KeywordReentrant) != nil {
+		p.Reentrant = true
+	}
+
+	// Parse body statements.
+	for !parser.End() && parser.Peek().TokenKind != KeywordEnd {
+		var s Statement
+		if err := s.Parse(parser); err != nil {
+			return err
+		}
+		p.Statements = append(p.Statements, s)
+		parser.Skip(TokenKind(';'))
+	}
+
 	if _, err := parser.Accept(KeywordEnd); err != nil {
 		return err
 	}
