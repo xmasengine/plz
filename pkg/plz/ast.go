@@ -217,6 +217,7 @@ const (
 	OperatorXOR  Operator = '^'
 	OperatorINDEX Operator = '[' + ']'<<8
 	OperatorCALL  Operator = '(' + ')'<<8
+	OperatorFIELD Operator = '.'
 )
 
 // Priority returns the piority of the operator, mostly for Pratt parsing.
@@ -262,6 +263,8 @@ func (o Operator) Priority() int {
 		return 600
 	case OperatorCALL:
 		return 610
+	case OperatorFIELD:
+		return 590
 	default:
 		return 0
 	}
@@ -271,6 +274,7 @@ type Reference struct {
 	Identifier
 	Address    bool
 	Subscripts []Expression
+	Fields     []Identifier
 }
 
 type LogicalExpression struct {

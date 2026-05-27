@@ -271,3 +271,76 @@ func TestGenLetNot(t *testing.T) {
 		t.Error("expected inc l for true case")
 	}
 }
+
+func TestGenLetByteLoad(t *testing.T) {
+	asm := genTest(t, "DECLARE b BYTE\nLET x = b")
+	if !strings.Contains(asm, "ld a, (b)") {
+		t.Error("expected byte load via a")
+	}
+	if !strings.Contains(asm, "ld h, 0") {
+		t.Error("expected zero-extension")
+	}
+}
+
+func TestGenLetByteStore(t *testing.T) {
+	asm := genTest(t, "DECLARE b BYTE\nLET b = 42")
+	if !strings.Contains(asm, "ld a, l") {
+		t.Error("expected ld a, l for byte store")
+	}
+	if !strings.Contains(asm, "ld (b), a") {
+		t.Error("expected ld (b), a")
+	}
+}
+
+func TestGenLetByteArrayNoScale(t *testing.T) {
+	asm := genTest(t, "DECLARE arr BYTE\nDECLARE i WORD\nLET x = arr[i]")
+	if !strings.Contains(asm, "ld hl, arr") {
+		t.Error("expected array base")
+	}
+	if strings.Contains(asm, "add hl, hl") {
+		t.Error("byte array should NOT scale index by 2")
+	}
+	if !strings.Contains(asm, "ld h, 0") {
+		t.Error("expected zero-extension")
+	}
+}
+
+func TestGenDeclareStruct(t *testing.T) {
+	asm := genTest(t, "DECLARE s STRUCT x WORD, y BYTE")
+	if !strings.Contains(asm, "db 0, 0, 0, 0") {
+		t.Error("expected 4 zero bytes for 2+1=3 rounded up to 4")
+	}
+	if !strings.Contains(asm, "s:") {
+		t.Error("expected struct label")
+	}
+}
+
+func TestGenStructFieldRead(t *testing.T) {
+	asm := genTest(t, "DECLARE s STRUCT x WORD, y BYTE\nLET v = s.y")
+	if !strings.Contains(asm, "ld hl, s") {
+		t.Error("expected struct base")
+	}
+	if !strings.Contains(asm, "ld de, 2") {
+		t.Error("expected field offset 2 for second field")
+	}
+	if !strings.Contains(asm, "add hl, de") {
+		t.Error("expected offset add")
+	}
+	if !strings.Contains(asm, "ld h, 0") {
+		t.Error("expected zero-extension for byte field")
+	}
+}
+
+func TestGenStructFieldWrite(t *testing.T) {
+	asm := genTest(t, "DECLARE s STRUCT x WORD, y BYTE\nLET s.x = 99")
+	if !strings.Contains(asm, "ld hl, s") {
+		t.Error("expected struct base")
+	}
+	// offset 0 for first field — no ld de,0 expected (optimized out)
+	if !strings.Contains(asm, "ld (hl), e") {
+		t.Error("expected store first byte")
+	}
+	if !strings.Contains(asm, "ld (hl), d") {
+		t.Error("expected store second byte for word field")
+	}
+}

@@ -173,7 +173,11 @@ func (i Infix) Check(c *Checker) error {
 }
 
 func (s Suffix) Check(c *Checker) error {
-	for _, op := range s.Operands {
+	for i, op := range s.Operands {
+		// The second operand of OperatorFIELD is a field name, not a variable.
+		if s.Operator == OperatorFIELD && i == 1 {
+			continue
+		}
 		if err := op.Check(c); err != nil {
 			return err
 		}
@@ -185,12 +189,28 @@ func (r *Reference) Check(c *Checker) error {
 	if r.Identifier == "" {
 		return nil
 	}
-	if _, ok := c.Symbols[r.Identifier]; !ok {
+	d, ok := c.Symbols[r.Identifier]
+	if !ok {
 		return c.Errorf("", "undeclared variable %q", r.Identifier)
 	}
 	for _, sub := range r.Subscripts {
 		if err := sub.Check(c); err != nil {
 			return err
+		}
+	}
+	for _, fname := range r.Fields {
+		if d.Type.Struct == nil {
+			return c.Errorf("", "%q is not a struct, cannot access field %q", r.Identifier, fname)
+		}
+		found := false
+		for _, f := range d.Type.Struct.Fields {
+			if f.Identifier == fname {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return c.Errorf("", "struct %q has no field %q", r.Identifier, fname)
 		}
 	}
 	return nil

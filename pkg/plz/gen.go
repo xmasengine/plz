@@ -8,8 +8,9 @@ const HeapBase = 0xC000 // RAM memory.
 
 type Gen struct {
 	*os.File
-	Heap  int // Pointer to last allocated heap RAM memory.
-	label int // counter for unique local labels
+	Heap    int // Pointer to last allocated heap RAM memory.
+	label   int // counter for unique local labels
+	Checker *Checker
 }
 
 func NewGenFile(name string) (*Gen, error) {
@@ -208,6 +209,7 @@ func (p Program) Gen(g *Gen) error {
 	if err := p.Check(c); err != nil {
 		return err
 	}
+	g.Checker = c
 	g.Emit(ProgramHeader)
 	g.Emitln("\tjp _plz_start")
 	g.Emit(RuntimeHeader)
@@ -342,11 +344,42 @@ func (o Operand) Gen(g *Gen) error {
 			g.Emitf("\tld hl, %d\n", *o.Literal.Number)
 		}
 	case o.Reference != nil:
-		g.Emitf("\tld hl, (%s)\n", o.Reference.Identifier)
+		if o.Reference.isByteRef(g) {
+			g.Emitf("\tld a, (%s)\n", o.Reference.Identifier)
+			g.Emitln("\tld l, a")
+			g.Emitln("\tld h, 0")
+		} else {
+			g.Emitf("\tld hl, (%s)\n", o.Reference.Identifier)
+		}
 	case o.Expression != nil:
 		return o.Expression.Gen(g)
 	}
 	return nil
+}
+
+func (r *Reference) isByteRef(g *Gen) bool {
+	if g.Checker == nil || r == nil {
+		return false
+	}
+	if len(r.Fields) > 0 {
+		// Field access — check the field's type.
+		d, ok := g.Checker.Symbols[r.Identifier]
+		if !ok || d.Type.Struct == nil {
+			return false
+		}
+		fname := r.Fields[0]
+		for _, f := range d.Type.Struct.Fields {
+			if f.Identifier == fname {
+				return f.Type.Predeclared == PredeclaredByte
+			}
+		}
+		return false
+	}
+	d, ok := g.Checker.Symbols[r.Identifier]
+	if !ok {
+		return false
+	}
+	return d.Type.Predeclared == PredeclaredByte
 }
 
 func (p Prefix) Gen(g *Gen) error {
@@ -452,8 +485,71 @@ func (s *Suffix) Gen(g *Gen) error {
 		return g.genIndexRead(s.Operands)
 	case OperatorCALL:
 		return g.genCallExpr(s.Operands)
+	case OperatorFIELD:
+		return g.genFieldRead(s.Operands)
 	}
 	return nil
+}
+
+// genFieldRead generates code to read s.field into HL.
+// Operands: [struct_ref, field_ref].
+func (g *Gen) genFieldRead(operands []Operand) error {
+	ref := operands[0].Reference
+	if ref == nil && operands[0].Expression != nil && operands[0].Expression.Operand != nil {
+		ref = operands[0].Expression.Operand.Reference
+	}
+	if ref == nil {
+		return fmt.Errorf("genFieldRead: first operand must be a reference")
+	}
+	d, ok := g.Checker.Symbols[ref.Identifier]
+	if !ok || d.Type.Struct == nil {
+		return fmt.Errorf("genFieldRead: %s is not a struct", ref.Identifier)
+	}
+	fname := operands[1].Reference.Identifier
+	fieldIdx := -1
+	for i, f := range d.Type.Struct.Fields {
+		if f.Identifier == fname {
+			fieldIdx = i
+			break
+		}
+	}
+	if fieldIdx < 0 {
+		return fmt.Errorf("genFieldRead: struct %s has no field %s", ref.Identifier, fname)
+	}
+	off := fieldOffset(d.Type.Struct.Fields, fieldIdx)
+	ft := d.Type.Struct.Fields[fieldIdx].Type
+
+	g.Emitf("\tld hl, %s\n", ref.Identifier)
+	if off > 0 {
+		g.Emitf("\tld de, %d\n", off)
+		g.Emitln("\tadd hl, de")
+	}
+	if ft.Predeclared == PredeclaredByte {
+		g.Emitln("\tld a, (hl)")
+		g.Emitln("\tld l, a")
+		g.Emitln("\tld h, 0")
+	} else {
+		g.Emitln("\tld a, (hl)")
+		g.Emitln("\tinc hl")
+		g.Emitln("\tld h, (hl)")
+		g.Emitln("\tld l, a")
+	}
+	return nil
+}
+
+// elemSize returns the storage size of elements declared under name.
+func (g *Gen) elemSize(name Identifier) int {
+	if g.Checker == nil {
+		return 2
+	}
+	d, ok := g.Checker.Symbols[name]
+	if !ok {
+		return 2
+	}
+	if d.Type.Predeclared == PredeclaredByte {
+		return 1
+	}
+	return 2
 }
 
 // genIndexRead generates code to read arr[index].
@@ -471,23 +567,34 @@ func (g *Gen) genIndexRead(operands []Operand) error {
 		return fmt.Errorf("genIndexRead: first operand must be a reference")
 	}
 
-	// If there's an index, add it (scaled by 2 for word-size).
+	elem := g.elemSize(ref.Identifier)
+
+	// If there's an index, add it (scaled by element size).
 	if len(operands) >= 2 {
 		g.Emitln("\tpush hl")
 		if err := operands[1].Expression.Gen(g); err != nil {
 			return err
 		}
-		g.Emitln("\tadd hl, hl") // index * 2 (word)
+		if elem == 2 {
+			g.Emitln("\tadd hl, hl") // index * 2 (word)
+		}
 		g.Emitln("\tex de, hl")
 		g.Emitln("\tpop hl")
 		g.Emitln("\tadd hl, de")
 	}
 
-	// Load the word value at the computed address.
-	g.Emitln("\tld a, (hl)")
-	g.Emitln("\tinc hl")
-	g.Emitln("\tld h, (hl)")
-	g.Emitln("\tld l, a")
+	if elem == 1 {
+		// Load byte, zero-extend.
+		g.Emitln("\tld a, (hl)")
+		g.Emitln("\tld l, a")
+		g.Emitln("\tld h, 0")
+	} else {
+		// Load word.
+		g.Emitln("\tld a, (hl)")
+		g.Emitln("\tinc hl")
+		g.Emitln("\tld h, (hl)")
+		g.Emitln("\tld l, a")
+	}
 	return nil
 }
 
@@ -515,9 +622,52 @@ func (s Let) Gen(g *Gen) error {
 		return err
 	}
 
+	if len(s.Fields) > 0 {
+		// Struct field store: s.field = rhs
+		// Compute base + field offset into hl, then pop value and store.
+		d, ok := g.Checker.Symbols[s.Identifier]
+		if !ok || d.Type.Struct == nil {
+			return fmt.Errorf("let: %s is not a struct", s.Identifier)
+		}
+		fname := s.Fields[0]
+		fieldIdx := -1
+		for i, f := range d.Type.Struct.Fields {
+			if f.Identifier == fname {
+				fieldIdx = i
+				break
+			}
+		}
+		if fieldIdx < 0 {
+			return fmt.Errorf("let: struct %s has no field %s", s.Identifier, fname)
+		}
+		off := fieldOffset(d.Type.Struct.Fields, fieldIdx)
+		ft := d.Type.Struct.Fields[fieldIdx].Type
+
+		g.Emitln("\tpush hl")
+		g.Emitf("\tld hl, %s\n", s.Identifier)
+		if off > 0 {
+			g.Emitf("\tld de, %d\n", off)
+			g.Emitln("\tadd hl, de")
+		}
+		g.Emitln("\tpop de")
+		if ft.Predeclared == PredeclaredByte {
+			g.Emitln("\tld (hl), e")
+		} else {
+			g.Emitln("\tld (hl), e")
+			g.Emitln("\tinc hl")
+			g.Emitln("\tld (hl), d")
+		}
+		return nil
+	}
+
 	if len(s.Subscripts) == 0 {
 		// Simple variable store.
-		g.Emitf("\tld (%s), hl\n", s.Identifier)
+		if s.isByteRef(g) {
+			g.Emitln("\tld a, l")
+			g.Emitf("\tld (%s), a\n", s.Identifier)
+		} else {
+			g.Emitf("\tld (%s), hl\n", s.Identifier)
+		}
 		return nil
 	}
 
@@ -526,13 +676,16 @@ func (s Let) Gen(g *Gen) error {
 	g.Emitln("\tpush hl")
 
 	// Compute target address into hl.
+	elem := g.elemSize(s.Identifier)
 	g.Emitf("\tld hl, %s\n", s.Identifier)
 	for i := range s.Subscripts {
 		g.Emitln("\tpush hl")
 		if err := s.Subscripts[i].Gen(g); err != nil {
 			return err
 		}
-		g.Emitln("\tadd hl, hl") // * 2 (word)
+		if elem == 2 {
+			g.Emitln("\tadd hl, hl") // * 2 (word)
+		}
 		g.Emitln("\tex de, hl")
 		g.Emitln("\tpop hl")
 		g.Emitln("\tadd hl, de")
@@ -540,9 +693,13 @@ func (s Let) Gen(g *Gen) error {
 
 	// hl = target address.  Pop the value from the stack.
 	g.Emitln("\tpop de") // de = value to store
-	g.Emitln("\tld (hl), e")
-	g.Emitln("\tinc hl")
-	g.Emitln("\tld (hl), d")
+	if elem == 1 {
+		g.Emitln("\tld (hl), e")
+	} else {
+		g.Emitln("\tld (hl), e")
+		g.Emitln("\tinc hl")
+		g.Emitln("\tld (hl), d")
+	}
 	return nil
 }
 
@@ -655,12 +812,22 @@ func (s GoTo) Gen(g *Gen) error {
 }
 
 func (s Declare) Gen(g *Gen) error {
-	if s.Type.Predeclared == PredeclaredByte {
+	switch {
+	case s.Type.Predeclared == PredeclaredByte:
 		g.Emitf("org 0x%x\n%s: db 0\n", g.Heap, s.Identifier)
 		g.Heap += 1
-	} else if s.Type.Predeclared == PredeclaredWord {
+	case s.Type.Predeclared == PredeclaredWord:
 		g.Emitf("org 0x%x\n%s: db 0,0\n", g.Heap, s.Identifier)
 		g.Heap += 2
+	case s.Type.Struct != nil:
+		n := structTotalSize(s.Type.Struct.Fields)
+		n = nextPow2(n)
+		g.Emitf("org 0x%x\n%s: db 0", g.Heap, s.Identifier)
+		for i := 1; i < n; i++ {
+			g.Emit(", 0")
+		}
+		g.Emit("\n")
+		g.Heap += n
 	}
 	return nil
 }
@@ -687,6 +854,50 @@ func (s Output) Gen(g *Gen) error {
 	g.Emitf("\tld a, l\n")
 	g.Emitf("\tout (%d), a\n", s.Port)
 	return nil
+}
+
+// fieldOffset returns the byte offset of the i-th field within a struct.
+func fieldOffset(fields []Field, i int) int {
+	off := 0
+	for j := 0; j < i; j++ {
+		if fields[j].Type.Predeclared == PredeclaredByte {
+			off += 1
+		} else {
+			off += 2
+		}
+	}
+	return off
+}
+
+// fieldSize returns the storage size of a single field/type.
+func fieldTypeSize(t Type) int {
+	if t.Predeclared == PredeclaredByte {
+		return 1
+	}
+	return 2
+}
+
+// structTotalSize returns the raw sum of field sizes.
+func structTotalSize(fields []Field) int {
+	s := 0
+	for _, f := range fields {
+		s += fieldTypeSize(f.Type)
+	}
+	return s
+}
+
+// nextPow2 rounds n up to the next power of two.
+func nextPow2(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	n--
+	n |= n >> 1
+	n |= n >> 2
+	n |= n >> 4
+	n |= n >> 8
+	n |= n >> 16
+	return n + 1
 }
 
 func (s Data) Gen(g *Gen) error {

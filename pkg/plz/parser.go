@@ -243,18 +243,29 @@ func (r *Reference) Parse(parser *Parser) error {
 	if err != nil {
 		return err
 	}
-	for parser.Peek().TokenKind == '[' {
-		parser.Next()
-		var subscript Expression
-		if err := subscript.Parse(parser); err != nil {
-			return err
+	for {
+		switch parser.Peek().TokenKind {
+		case '[':
+			parser.Next()
+			var subscript Expression
+			if err := subscript.Parse(parser); err != nil {
+				return err
+			}
+			if _, err := parser.Accept(TokenKind(']')); err != nil {
+				return err
+			}
+			r.Subscripts = append(r.Subscripts, subscript)
+		case '.':
+			parser.Next()
+			fieldTok, err := parser.Accept(TokenIdent)
+			if err != nil {
+				return err
+			}
+			r.Fields = append(r.Fields, Identifier(fieldTok.Text))
+		default:
+			return nil
 		}
-		if _, err := parser.Accept(TokenKind(']')); err != nil {
-			return err
-		}
-		r.Subscripts = append(r.Subscripts, subscript)
 	}
-	return nil
 }
 
 func (g *Literal) Parse(parser *Parser) error {
@@ -336,6 +347,26 @@ func (g *Output) Parse(parser *Parser) error {
 }
 
 func (t *Type) Parse(parser *Parser) error {
+	if parser.Peek().TokenKind == KeywordStruct {
+		parser.Next()
+		t.Predeclared = PredeclaredNone
+		t.Struct = &Struct{}
+		for parser.Peek().TokenKind == TokenIdent {
+			var f Field
+			if err := f.Identifier.Parse(parser); err != nil {
+				return err
+			}
+			if err := f.Type.Parse(parser); err != nil {
+				return err
+			}
+			t.Struct.Fields = append(t.Struct.Fields, f)
+			if parser.Peek().TokenKind != TokenKind(',') {
+				break
+			}
+			parser.Next()
+		}
+		return nil
+	}
 	tok, err := parser.Accept(KeywordByte, KeywordWord)
 	if err != nil {
 		return err
@@ -585,6 +616,26 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 			left.Suffix = &Suffix{
 				Operator: OperatorCALL,
 				Operands: operands,
+			}
+			continue
+		}
+
+		// Struct field access: expr.field
+		if tok.TokenKind == '.' {
+			p.Next()
+			fieldTok, err := p.Accept(TokenIdent)
+			if err != nil {
+				return err
+			}
+			prev := new(Expression)
+			*prev = *left
+			*left = Expression{}
+			left.Suffix = &Suffix{
+				Operator: OperatorFIELD,
+				Operands: []Operand{
+					{Expression: prev},
+					{Reference: &Reference{Identifier: Identifier(fieldTok.Text)}},
+				},
 			}
 			continue
 		}
