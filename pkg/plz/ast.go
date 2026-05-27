@@ -63,12 +63,8 @@ type Interrupt struct {
 }
 
 type Identifier string
-type Predeclared int
 
-type Type struct {
-	Predeclared
-	*Struct
-}
+type Predeclared int
 
 const (
 	PredeclaredNone Predeclared = iota
@@ -79,7 +75,12 @@ const (
 	PredeclaredConstant
 )
 
-type Struct struct {
+type Type struct {
+	Predeclared
+	*Record
+}
+
+type Record struct {
 	Fields []Field
 }
 
@@ -153,6 +154,7 @@ type Declare struct {
 	Dimension   int
 	Dims        []int  // per-dimension sizes from ARRAY declaration
 	Initializer *Initializer
+	ParamRef    bool   // true when this is a record/array parameter (passed by reference)
 }
 
 type Initializer struct {

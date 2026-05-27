@@ -557,7 +557,7 @@ func TestParseArrayDeclareMultiDim(t *testing.T) {
 }
 
 func TestParseProcBasic(t *testing.T) {
-	tokens, err := Scan(strings.NewReader("PROC foo\nRETURN\nEND"))
+	tokens, err := Scan(strings.NewReader("PROCEDURE foo\nRETURN\nEND"))
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestParseProcBasic(t *testing.T) {
 }
 
 func TestParseProcParams(t *testing.T) {
-	tokens, err := Scan(strings.NewReader("PROC add (x WORD, y WORD) WORD\nRETURN x + y\nEND"))
+	tokens, err := Scan(strings.NewReader("PROCEDURE add (x WORD, y WORD) WORD\nRETURN x + y\nEND"))
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -596,7 +596,7 @@ func TestParseProcParams(t *testing.T) {
 }
 
 func TestParseProcReentrant(t *testing.T) {
-	tokens, err := Scan(strings.NewReader("PROC foo (a WORD, b WORD, c WORD) WORD REENTRANT RETURN a END"))
+	tokens, err := Scan(strings.NewReader("PROCEDURE foo (a WORD, b WORD, c WORD) WORD REENTRANT RETURN a END"))
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}

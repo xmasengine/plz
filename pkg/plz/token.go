@@ -37,7 +37,7 @@ const (
 	KeywordInput
 	KeywordLet
 	KeywordReturn
-	KeywordStruct
+	KeywordRecord
 	KeywordOutput
 	KeywordProc
 	KeywordReentrant
@@ -79,9 +79,9 @@ var Keywords = map[string]TokenKind{
 	"LET":      KeywordLet,
 	"RETURN":   KeywordReturn,
 	"OUTPUT":     KeywordOutput,
-	"PROC":       KeywordProc,
+	"PROCEDURE":  KeywordProc,
 	"REENTRANT":  KeywordReentrant,
-	"STRUCT":     KeywordStruct,
+	"RECORD":     KeywordRecord,
 	"WHILE":    KeywordWhile,
 	"FOR":      KeywordFor,
 	"TO":       KeywordTo,

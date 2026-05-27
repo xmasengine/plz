@@ -312,8 +312,8 @@ HALT`)
 	}
 }
 
-func TestIntegrationStruct(t *testing.T) {
-	io := compileAndRun(t, `DECLARE s STRUCT x WORD, y BYTE
+func TestIntegrationRecord(t *testing.T) {
+	io := compileAndRun(t, `DECLARE s RECORD x WORD, y BYTE END
 LET s.x = 300
 LET s.y = 42
 OUTPUT 0 s.x
@@ -332,7 +332,7 @@ HALT`)
 
 func TestIntegrationProcCall(t *testing.T) {
 	io := compileAndRun(t, `DECLARE result WORD
-PROC add (x WORD, y WORD) WORD
+PROCEDURE add (x WORD, y WORD) WORD
   RETURN x + y
 END
 CALL add(2, 3)
@@ -367,7 +367,7 @@ HALT`)
 
 func TestIntegrationProcLocalDeclare(t *testing.T) {
 	io := compileAndRun(t, `DECLARE result WORD
-PROC double (x WORD) WORD
+PROCEDURE double (x WORD) WORD
   DECLARE t WORD
   LET t = x + x
   RETURN t
@@ -385,11 +385,46 @@ HALT`)
 
 func TestIntegrationProcByteParam(t *testing.T) {
 	io := compileAndRun(t, `DECLARE result WORD
-PROC double (x BYTE) WORD
+PROCEDURE double (x BYTE) WORD
   RETURN x + x
 END
 LET result = double(21)
 OUTPUT 0 result
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 42 {
+		t.Errorf("expected 42, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationProcByteReturn(t *testing.T) {
+	io := compileAndRun(t, `DECLARE result WORD
+PROCEDURE getByte BYTE
+  RETURN 42
+END
+LET result = getByte()
+OUTPUT 0 result
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 42 {
+		t.Errorf("expected 42, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationProcRecordParam(t *testing.T) {
+	io := compileAndRun(t, `DECLARE s RECORD x BYTE, y WORD END
+DECLARE val WORD
+PROCEDURE getX (rv RECORD x BYTE, y WORD END) WORD
+  RETURN rv.x
+END
+LET s.x = 42
+LET s.y = 100
+LET val = getX(s)
+OUTPUT 0 val
 HALT`)
 	if len(io.OutBytes[0]) < 1 {
 		t.Fatal("expected output")

@@ -305,8 +305,8 @@ func TestGenLetByteArrayNoScale(t *testing.T) {
 	}
 }
 
-func TestGenDeclareStruct(t *testing.T) {
-	asm := genTest(t, "DECLARE s STRUCT x WORD, y BYTE")
+func TestGenDeclareRecord(t *testing.T) {
+	asm := genTest(t, "DECLARE s RECORD x WORD, y BYTE END")
 	if !strings.Contains(asm, "db 0, 0, 0, 0") {
 		t.Error("expected 4 zero bytes for 2+1=3 rounded up to 4")
 	}
@@ -315,8 +315,8 @@ func TestGenDeclareStruct(t *testing.T) {
 	}
 }
 
-func TestGenStructFieldRead(t *testing.T) {
-	asm := genTest(t, "DECLARE s STRUCT x WORD, y BYTE\nLET v = s.y")
+func TestGenRecordFieldRead(t *testing.T) {
+	asm := genTest(t, "DECLARE s RECORD x WORD, y BYTE END\nLET v = s.y")
 	if !strings.Contains(asm, "ld hl, s") {
 		t.Error("expected struct base")
 	}
@@ -355,7 +355,7 @@ func TestGenArrayDeclareMultiDim(t *testing.T) {
 }
 
 func TestGenProcNoArgs(t *testing.T) {
-	asm := genTest(t, "PROC foo\nRETURN 99\nEND")
+	asm := genTest(t, "PROCEDURE foo\nRETURN 99\nEND")
 	if !strings.Contains(asm, "_plz_foo:") {
 		t.Error("expected _plz_foo: label")
 	}
@@ -368,7 +368,7 @@ func TestGenProcNoArgs(t *testing.T) {
 }
 
 func TestGenProcOneArg(t *testing.T) {
-	asm := genTest(t, "PROC double (x WORD) WORD\nRETURN x + x\nEND\nCALL double(5)")
+	asm := genTest(t, "PROCEDURE double (x WORD) WORD\nRETURN x + x\nEND\nCALL double(5)")
 	if !strings.Contains(asm, "ld hl, 5") {
 		t.Error("expected call with arg 5")
 	}
@@ -378,7 +378,7 @@ func TestGenProcOneArg(t *testing.T) {
 }
 
 func TestGenProcTwoArgs(t *testing.T) {
-	asm := genTest(t, "PROC add (a WORD, b WORD) WORD\nRETURN a + b\nEND\nCALL add(3, 4)")
+	asm := genTest(t, "PROCEDURE add (a WORD, b WORD) WORD\nRETURN a + b\nEND\nCALL add(3, 4)")
 	if !strings.Contains(asm, "ld hl, 3") {
 		t.Error("expected arg1 = 3")
 	}
@@ -391,7 +391,7 @@ func TestGenProcTwoArgs(t *testing.T) {
 }
 
 func TestGenProcLocalDeclare(t *testing.T) {
-	asm := genTest(t, `PROC foo (x WORD) WORD
+	asm := genTest(t, `PROCEDURE foo (x WORD) WORD
 DECLARE t WORD
 LET t = x + 1
 RETURN t
@@ -409,7 +409,7 @@ CALL foo(5)`)
 }
 
 func TestGenProcByteParam(t *testing.T) {
-	asm := genTest(t, "PROC double (x BYTE) WORD\nRETURN x + x\nEND\nCALL double(21)")
+	asm := genTest(t, "PROCEDURE double (x BYTE) WORD\nRETURN x + x\nEND\nCALL double(21)")
 	if !strings.Contains(asm, "ld a, l") {
 		t.Error("expected byte truncation for BYTE param save")
 	}
@@ -421,8 +421,32 @@ func TestGenProcByteParam(t *testing.T) {
 	}
 }
 
+func TestGenProcByteReturn(t *testing.T) {
+	asm := genTest(t, "PROCEDURE getByte BYTE\nRETURN 42\nEND\nCALL getByte()")
+	if !strings.Contains(asm, "ld h, 0") {
+		t.Error("expected BYTE return zero-extension")
+	}
+}
+
+func TestGenProcRecordParam(t *testing.T) {
+	asm := genTest(t, "DECLARE s RECORD x BYTE, y WORD END\nPROCEDURE useRec (rv RECORD x BYTE, y WORD END) WORD\nRETURN rv.y\nEND\nCALL useRec(s)")
+	if !strings.Contains(asm, "ld hl, s") {
+		t.Error("expected address load for record arg at call site")
+	}
+	if !strings.Contains(asm, "ld hl, (rv)") {
+		t.Error("expected dereference for record param field access")
+	}
+}
+
+func TestGenProcRecordReturn(t *testing.T) {
+	asm := genTest(t, "DECLARE data RECORD x BYTE, y WORD END\nPROCEDURE getPtr RECORD x BYTE, y WORD END\nRETURN data\nEND\nCALL getPtr()")
+	if !strings.Contains(asm, "ld hl, data") {
+		t.Error("expected address load for RECORD return")
+	}
+}
+
 func TestGenStructFieldWrite(t *testing.T) {
-	asm := genTest(t, "DECLARE s STRUCT x WORD, y BYTE\nLET s.x = 99")
+	asm := genTest(t, "DECLARE s RECORD x WORD, y BYTE END\nLET s.x = 99")
 	if !strings.Contains(asm, "ld hl, s") {
 		t.Error("expected struct base")
 	}

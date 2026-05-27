@@ -391,10 +391,10 @@ func (g *Output) Parse(parser *Parser) error {
 }
 
 func (t *Type) Parse(parser *Parser) error {
-	if parser.Peek().TokenKind == KeywordStruct {
+	if parser.Peek().TokenKind == KeywordRecord {
 		parser.Next()
 		t.Predeclared = PredeclaredNone
-		t.Struct = &Struct{}
+		t.Record = &Record{}
 		for parser.Peek().TokenKind == TokenIdent {
 			var f Field
 			if err := f.Identifier.Parse(parser); err != nil {
@@ -403,11 +403,14 @@ func (t *Type) Parse(parser *Parser) error {
 			if err := f.Type.Parse(parser); err != nil {
 				return err
 			}
-			t.Struct.Fields = append(t.Struct.Fields, f)
+			t.Record.Fields = append(t.Record.Fields, f)
 			if parser.Peek().TokenKind != TokenKind(',') {
 				break
 			}
 			parser.Next()
+		}
+		if _, err := parser.Accept(KeywordEnd); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -842,7 +845,7 @@ func (p *Procedure) Parse(parser *Parser) error {
 			if err := typ.Parse(parser); err != nil {
 				return err
 			}
-			if typ.Predeclared == PredeclaredNone && typ.Struct == nil {
+			if typ.Predeclared == PredeclaredNone && typ.Record == nil {
 				return fmt.Errorf("expected type after parameter name")
 			}
 			p.Parameters = append(p.Parameters, id)
@@ -857,8 +860,8 @@ func (p *Procedure) Parse(parser *Parser) error {
 		}
 	}
 
-	// Optional return type.
-	if parser.Peek().TokenKind == KeywordByte || parser.Peek().TokenKind == KeywordWord {
+	// Optional return type (BYTE, WORD, or RECORD).
+	if parser.Peek().TokenKind == KeywordByte || parser.Peek().TokenKind == KeywordWord || parser.Peek().TokenKind == KeywordRecord {
 		if err := p.Type.Parse(parser); err != nil {
 			return err
 		}

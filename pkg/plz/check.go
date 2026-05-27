@@ -3,11 +3,15 @@ package plz
 import "fmt"
 
 type Checker struct {
-	Symbols map[Identifier]*Declare
+	Symbols    map[Identifier]*Declare
+	Procedures map[string]*Procedure // procedure name → definition
 }
 
 func NewChecker() *Checker {
-	return &Checker{Symbols: make(map[Identifier]*Declare)}
+	return &Checker{
+		Symbols:    make(map[Identifier]*Declare),
+		Procedures: make(map[string]*Procedure),
+	}
 }
 
 func (c *Checker) Errorf(pos string, form string, args ...any) error {
@@ -26,6 +30,8 @@ func (p Program) Check(c *Checker) error {
 			c.Symbols[stmt.Declare.Identifier] = stmt.Declare
 		}
 		if stmt.Procedure != nil {
+			// Store procedure definition for call-site lookup.
+			c.Procedures[stmt.Procedure.Name.Name] = stmt.Procedure
 			// Register procedure name so it can be used in call expressions.
 			if _, ok := c.Symbols[Identifier(stmt.Procedure.Name.Name)]; !ok {
 				c.Symbols[Identifier(stmt.Procedure.Name.Name)] = &Declare{
@@ -39,9 +45,11 @@ func (p Program) Check(c *Checker) error {
 					if i < len(stmt.Procedure.ParamTypes) {
 						ptype = stmt.Procedure.ParamTypes[i]
 					}
+					isRef := ptype.Record != nil // records passed by reference
 					c.Symbols[param] = &Declare{
 						Identifier: param,
 						Type:       ptype,
+						ParamRef:   isRef,
 					}
 				}
 			}
@@ -245,11 +253,11 @@ func (r *Reference) Check(c *Checker) error {
 		}
 	}
 	for _, fname := range r.Fields {
-		if d.Type.Struct == nil {
-			return c.Errorf("", "%q is not a struct, cannot access field %q", r.Identifier, fname)
+		if d.Type.Record == nil {
+			return c.Errorf("", "%q is not a record, cannot access field %q", r.Identifier, fname)
 		}
 		found := false
-		for _, f := range d.Type.Struct.Fields {
+		for _, f := range d.Type.Record.Fields {
 			if f.Identifier == fname {
 				found = true
 				break

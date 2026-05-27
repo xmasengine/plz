@@ -8,11 +8,12 @@ const HeapBase = 0xC000 // RAM memory.
 
 type Gen struct {
 	*os.File
-	Heap        int // Pointer to last allocated heap RAM memory.
-	label       int // counter for unique local labels
-	Checker     *Checker
-	procFrame   map[string]int // proc name → frame heap base addr
-	InProcedure bool           // set when generating inside a procedure body
+	Heap           int // Pointer to last allocated heap RAM memory.
+	label          int // counter for unique local labels
+	Checker        *Checker
+	procFrame      map[string]int // proc name → frame heap base addr
+	InProcedure    bool           // set when generating inside a procedure body
+	ProcReturnType Type           // return type of current procedure (for BYTE zero-extend in Return.Gen)
 }
 
 func NewGenFile(name string) (*Gen, error) {
@@ -430,11 +431,11 @@ func (r *Reference) isByteRef(g *Gen) bool {
 	if len(r.Fields) > 0 {
 		// Field access — check the field's type.
 		d, ok := g.Checker.Symbols[r.Identifier]
-		if !ok || d.Type.Struct == nil {
+		if !ok || d.Type.Record == nil {
 			return false
 		}
 		fname := r.Fields[0]
-		for _, f := range d.Type.Struct.Fields {
+		for _, f := range d.Type.Record.Fields {
 			if f.Identifier == fname {
 				return f.Type.Predeclared == PredeclaredByte
 			}
@@ -568,12 +569,12 @@ func (g *Gen) genFieldRead(operands []Operand) error {
 		return fmt.Errorf("genFieldRead: first operand must be a reference")
 	}
 	d, ok := g.Checker.Symbols[ref.Identifier]
-	if !ok || d.Type.Struct == nil {
+	if !ok || d.Type.Record == nil {
 		return fmt.Errorf("genFieldRead: %s is not a struct", ref.Identifier)
 	}
 	fname := operands[1].Reference.Identifier
 	fieldIdx := -1
-	for i, f := range d.Type.Struct.Fields {
+	for i, f := range d.Type.Record.Fields {
 		if f.Identifier == fname {
 			fieldIdx = i
 			break
@@ -582,10 +583,15 @@ func (g *Gen) genFieldRead(operands []Operand) error {
 	if fieldIdx < 0 {
 		return fmt.Errorf("genFieldRead: struct %s has no field %s", ref.Identifier, fname)
 	}
-	off := fieldOffset(d.Type.Struct.Fields, fieldIdx)
-	ft := d.Type.Struct.Fields[fieldIdx].Type
+	off := fieldOffset(d.Type.Record.Fields, fieldIdx)
+	ft := d.Type.Record.Fields[fieldIdx].Type
 
-	g.Emitf("\tld hl, %s\n", ref.Identifier)
+	// ParamRef symbols hold a pointer; dereference it to get the data address.
+	if d.ParamRef {
+		g.Emitf("\tld hl, (%s)\n", ref.Identifier)
+	} else {
+		g.Emitf("\tld hl, %s\n", ref.Identifier)
+	}
 	if off > 0 {
 		g.Emitf("\tld de, %d\n", off)
 		g.Emitln("\tadd hl, de")
@@ -612,6 +618,10 @@ func (g *Gen) elemSize(name Identifier) int {
 	if !ok {
 		return 2
 	}
+	if d.Type.Record != nil {
+		total := recordTotalSize(d.Type.Record.Fields)
+		return nextPow2(total)
+	}
 	if d.Type.Predeclared == PredeclaredByte {
 		return 1
 	}
@@ -628,11 +638,18 @@ func (g *Gen) genIndexRead(operands []Operand) error {
 		ref = operands[0].Expression.Operand.Reference
 	}
 	if ref != nil {
+		// ParamRef symbols hold a pointer; dereference it.
+		if g.Checker != nil {
+			if d, ok := g.Checker.Symbols[ref.Identifier]; ok && d.ParamRef {
+				g.Emitf("\tld hl, (%s)\n", ref.Identifier)
+				goto gotAddr
+			}
+		}
 		g.Emitf("\tld hl, %s\n", ref.Identifier)
 	} else {
 		return fmt.Errorf("genIndexRead: first operand must be a reference")
 	}
-
+gotAddr:
 	elem := g.elemSize(ref.Identifier)
 
 	// If there's an index, add it (scaled by element size).
@@ -677,50 +694,83 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 	name := string(ref.Identifier)
 	args := operands[1:]
 
+	// Look up the procedure definition for param type info.
+	proc, _ := g.Checker.Procedures[name]
+
+	genCallArg := func(i int) error {
+		if proc != nil && i < len(proc.ParamTypes) && proc.ParamTypes[i].Record != nil {
+			refArg := args[i].Reference
+			if refArg == nil && args[i].Expression != nil && args[i].Expression.Operand != nil {
+				refArg = args[i].Expression.Operand.Reference
+			}
+			if refArg != nil && refArg.Identifier != "" && len(refArg.Fields) == 0 && len(refArg.Subscripts) == 0 {
+				g.Emitf("\tld hl, %s\n", refArg.Identifier)
+				return nil
+			}
+		}
+		return args[i].Expression.Gen(g)
+	}
+
 	switch len(args) {
 	case 0:
 	case 1:
-		if err := args[0].Expression.Gen(g); err != nil {
+		if err := genCallArg(0); err != nil {
 			return err
 		}
 	case 2:
-		if err := args[1].Expression.Gen(g); err != nil {
+		if err := genCallArg(1); err != nil {
 			return err
 		}
 		g.Emitln("\tpush hl")
-		if err := args[0].Expression.Gen(g); err != nil {
+		if err := genCallArg(0); err != nil {
 			return err
 		}
 		g.Emitln("\tpop de")
 	default:
 		_, hasFrame := g.procFrame[name]
+		var totalExtra int
 		if hasFrame {
 			for i := 2; i < len(args); i++ {
-				if err := args[i].Expression.Gen(g); err != nil {
+				if err := genCallArg(i); err != nil {
 					return err
 				}
-				g.Emitf("\tld (_plz_%s_frame+%d), hl\n", name, (i-2)*2)
+				off := paramOffset(proc, i)
+				if proc != nil && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
+					g.Emitf("\tld a, l\n\tld (_plz_%s_frame+%d), a\n", name, off)
+				} else {
+					g.Emitf("\tld (_plz_%s_frame+%d), hl\n", name, off)
+				}
 			}
 		} else {
 			for i := len(args) - 1; i >= 2; i-- {
-				if err := args[i].Expression.Gen(g); err != nil {
+				if err := genCallArg(i); err != nil {
 					return err
 				}
-				g.Emitln("\tpush hl")
+				psize := 2
+				if proc != nil && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
+					psize = 1
+				}
+				totalExtra += psize
+				if psize == 1 {
+					g.Emitln("\tld a, l")
+					g.Emitln("\tpush af")
+				} else {
+					g.Emitln("\tpush hl")
+				}
 			}
 		}
-		if err := args[1].Expression.Gen(g); err != nil {
+		if err := genCallArg(1); err != nil {
 			return err
 		}
 		g.Emitln("\tpush hl")
-		if err := args[0].Expression.Gen(g); err != nil {
+		if err := genCallArg(0); err != nil {
 			return err
 		}
 		g.Emitln("\tpop de")
 
 		g.Emitf("\tcall _plz_%s\n", name)
-		if !hasFrame && len(args) > 2 {
-			g.Emitf("\tld hl, %d\n", (len(args)-2)*2)
+		if !hasFrame && totalExtra > 0 {
+			g.Emitf("\tld hl, %d\n", totalExtra)
 			g.Emitln("\tadd hl, sp")
 			g.Emitln("\tld sp, hl")
 		}
@@ -745,12 +795,12 @@ func (s Let) Gen(g *Gen) error {
 		// Struct field store: s.field = rhs
 		// Compute base + field offset into hl, then pop value and store.
 		d, ok := g.Checker.Symbols[s.Identifier]
-		if !ok || d.Type.Struct == nil {
+		if !ok || d.Type.Record == nil {
 			return fmt.Errorf("let: %s is not a struct", s.Identifier)
 		}
 		fname := s.Fields[0]
 		fieldIdx := -1
-		for i, f := range d.Type.Struct.Fields {
+		for i, f := range d.Type.Record.Fields {
 			if f.Identifier == fname {
 				fieldIdx = i
 				break
@@ -759,11 +809,16 @@ func (s Let) Gen(g *Gen) error {
 		if fieldIdx < 0 {
 			return fmt.Errorf("let: struct %s has no field %s", s.Identifier, fname)
 		}
-		off := fieldOffset(d.Type.Struct.Fields, fieldIdx)
-		ft := d.Type.Struct.Fields[fieldIdx].Type
+		off := fieldOffset(d.Type.Record.Fields, fieldIdx)
+		ft := d.Type.Record.Fields[fieldIdx].Type
 
 		g.Emitln("\tpush hl")
-		g.Emitf("\tld hl, %s\n", s.Identifier)
+		// ParamRef symbols hold a pointer; dereference it to get the data address.
+		if d.ParamRef {
+			g.Emitf("\tld hl, (%s)\n", s.Identifier)
+		} else {
+			g.Emitf("\tld hl, %s\n", s.Identifier)
+		}
 		if off > 0 {
 			g.Emitf("\tld de, %d\n", off)
 			g.Emitln("\tadd hl, de")
@@ -796,7 +851,14 @@ func (s Let) Gen(g *Gen) error {
 
 	// Compute target address into hl.
 	elem := g.elemSize(s.Identifier)
+	if g.Checker != nil {
+		if d, ok := g.Checker.Symbols[s.Identifier]; ok && d.ParamRef {
+			g.Emitf("\tld hl, (%s)\n", s.Identifier)
+			goto gotElem
+		}
+	}
 	g.Emitf("\tld hl, %s\n", s.Identifier)
+gotElem:
 	for i := range s.Subscripts {
 		g.Emitln("\tpush hl")
 		if err := s.Subscripts[i].Gen(g); err != nil {
@@ -908,6 +970,9 @@ func (s Group) Gen(g *Gen) error {
 func (s Procedure) Gen(g *Gen) error {
 	g.Emitf("_plz_%s:\n", s.Name.Name)
 
+	// Save return type so Return.Gen can zero-extend BYTE values.
+	g.ProcReturnType = s.Type
+
 	// For non-REENTRANT: save parameters to frame slots.
 	if !s.Reentrant {
 		if _, ok := g.procFrame[s.Name.Name]; ok && len(s.Parameters) > 0 {
@@ -954,8 +1019,20 @@ func (s Return) Gen(g *Gen) error {
 	case 0:
 		// No return value → just ret.
 	case 1:
+		// For RECORD return type, return the ADDRESS of the record.
+		if g.ProcReturnType.Record != nil {
+			ref := s.Expressions[0].Operand.Reference
+			if ref != nil && ref.Identifier != "" && len(ref.Fields) == 0 && len(ref.Subscripts) == 0 {
+				g.Emitf("\tld hl, %s\n", ref.Identifier)
+				break
+			}
+		}
 		if err := s.Expressions[0].Gen(g); err != nil {
 			return err
+		}
+		// Zero-extend BYTE return values.
+		if g.ProcReturnType.Predeclared == PredeclaredByte {
+			g.Emitln("\tld h, 0")
 		}
 	case 2:
 		// Second return value in DE.
@@ -978,63 +1055,91 @@ func (s Call) Gen(g *Gen) error {
 	name := s.Name
 	args := s.Arguments
 
+	// Look up the procedure definition for param type info.
+	proc, _ := g.Checker.Procedures[name]
+
+	// genCallArg emits code to load the i-th argument into HL.
+	// For RECORD params it loads the ADDRESS (not the value).
+	genCallArg := func(i int) error {
+		if proc != nil && i < len(proc.ParamTypes) && proc.ParamTypes[i].Record != nil {
+			// Load address of record argument.
+			ref := args[i].Operand.Reference
+			if ref != nil && ref.Identifier != "" && len(ref.Fields) == 0 && len(ref.Subscripts) == 0 {
+				g.Emitf("\tld hl, %s\n", ref.Identifier)
+				return nil
+			}
+		}
+		return args[i].Gen(g)
+	}
+
 	switch len(args) {
 	case 0:
 		// No arguments.
 	case 1:
-		if err := args[0].Gen(g); err != nil {
+		if err := genCallArg(0); err != nil {
 			return err
 		}
 	case 2:
 		// Arg2 into DE, arg1 into HL.
-		if err := args[1].Gen(g); err != nil {
+		if err := genCallArg(1); err != nil {
 			return err
 		}
 		g.Emitln("\tpush hl")
-		if err := args[0].Gen(g); err != nil {
+		if err := genCallArg(0); err != nil {
 			return err
 		}
 		g.Emitln("\tpop de")
 	default:
 		// 3+ arguments.
 		_, hasFrame := g.procFrame[name]
+		var totalExtra int // total bytes of extra args for REENTRANT cleanup
 		if hasFrame {
 			// Non-REENTRANT: store extra args in the procedure's frame.
 			for i := 2; i < len(args); i++ {
-				if err := args[i].Gen(g); err != nil {
+				if err := genCallArg(i); err != nil {
 					return err
 				}
-				slot := i - 2
-				g.Emitf("\tld (_plz_%s_frame+%d), hl\n", name, slot*2)
+				off := paramOffset(proc, i)
+				if proc != nil && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
+					g.Emitf("\tld a, l\n\tld (_plz_%s_frame+%d), a\n", name, off)
+				} else {
+					g.Emitf("\tld (_plz_%s_frame+%d), hl\n", name, off)
+				}
 			}
 		} else {
 			// REENTRANT or no frame: push remaining args onto stack right-to-left.
 			for i := len(args) - 1; i >= 2; i-- {
-				if err := args[i].Gen(g); err != nil {
+				if err := genCallArg(i); err != nil {
 					return err
 				}
-				g.Emitln("\tpush hl")
+				psize := 2
+				if proc != nil && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
+					psize = 1
+				}
+				totalExtra += psize
+				if psize == 1 {
+					g.Emitln("\tld a, l")
+					g.Emitln("\tpush af")
+				} else {
+					g.Emitln("\tpush hl")
+				}
 			}
 		}
 		// Set up HL=arg1, DE=arg2.
-		if err := args[1].Gen(g); err != nil {
+		if err := genCallArg(1); err != nil {
 			return err
 		}
 		g.Emitln("\tpush hl")
-		if err := args[0].Gen(g); err != nil {
+		if err := genCallArg(0); err != nil {
 			return err
 		}
 		g.Emitln("\tpop de")
 
-		if hasFrame {
-			g.Emitf("\tcall _plz_%s\n", name)
-		} else {
-			g.Emitf("\tcall _plz_%s\n", name)
-			if len(args) > 2 {
-				g.Emitf("\tld hl, %d\n", (len(args)-2)*2)
-				g.Emitln("\tadd hl, sp")
-				g.Emitln("\tld sp, hl")
-			}
+		g.Emitf("\tcall _plz_%s\n", name)
+		if !hasFrame && totalExtra > 0 {
+			g.Emitf("\tld hl, %d\n", totalExtra)
+			g.Emitln("\tadd hl, sp")
+			g.Emitln("\tld sp, hl")
 		}
 		return nil
 	}
@@ -1066,8 +1171,8 @@ func (s Declare) Gen(g *Gen) error {
 		total = elemSize // unbounded → 1 element minimum
 	}
 	// For structs, override total.
-	if s.Type.Struct != nil {
-		total = structTotalSize(s.Type.Struct.Fields)
+	if s.Type.Record != nil {
+		total = recordTotalSize(s.Type.Record.Fields)
 		total = nextPow2(total)
 	}
 	g.Emitf("org 0x%x\n%s: db 0", g.Heap, s.Identifier)
@@ -1104,9 +1209,16 @@ func (s Output) Gen(g *Gen) error {
 }
 
 // paramByteSize returns the storage size (in bytes) for the i-th parameter of proc.
+// Records are passed by reference so they occupy 2 bytes (a pointer) in the frame.
 func paramByteSize(proc *Procedure, i int) int {
-	if i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
-		return 1
+	if i < len(proc.ParamTypes) {
+		if proc.ParamTypes[i].Predeclared == PredeclaredByte {
+			return 1
+		}
+		// Records and arrays are passed by reference → 2-byte pointer.
+		if proc.ParamTypes[i].Record != nil {
+			return 2
+		}
 	}
 	return 2
 }
@@ -1139,8 +1251,8 @@ func localDeclareSize(d Declare) int {
 	if total == 0 {
 		total = elemSize // unbounded → 1 element minimum
 	}
-	if d.Type.Struct != nil {
-		total = structTotalSize(d.Type.Struct.Fields)
+	if d.Type.Record != nil {
+		total = recordTotalSize(d.Type.Record.Fields)
 		total = nextPow2(total)
 	}
 	return total
@@ -1167,8 +1279,8 @@ func fieldTypeSize(t Type) int {
 	return 2
 }
 
-// structTotalSize returns the raw sum of field sizes.
-func structTotalSize(fields []Field) int {
+// recordTotalSize returns the raw sum of field sizes.
+func recordTotalSize(fields []Field) int {
 	s := 0
 	for _, f := range fields {
 		s += fieldTypeSize(f.Type)
