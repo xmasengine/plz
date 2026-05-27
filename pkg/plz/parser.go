@@ -830,7 +830,7 @@ func (p *Procedure) Parse(parser *Parser) error {
 	}
 	p.Name = Label{Name: nameTok.Text}
 
-	// Optional parameter list: (param1, param2, ...)
+	// Optional typed parameter list: (param1 TYPE, param2 TYPE, ...)
 	if parser.Peek().TokenKind == '(' {
 		parser.Next()
 		for parser.Peek().TokenKind != ')' && !parser.End() {
@@ -838,7 +838,15 @@ func (p *Procedure) Parse(parser *Parser) error {
 			if err := id.Parse(parser); err != nil {
 				return err
 			}
+			var typ Type
+			if err := typ.Parse(parser); err != nil {
+				return err
+			}
+			if typ.Predeclared == PredeclaredNone && typ.Struct == nil {
+				return fmt.Errorf("expected type after parameter name")
+			}
 			p.Parameters = append(p.Parameters, id)
+			p.ParamTypes = append(p.ParamTypes, typ)
 			if parser.Peek().TokenKind != ',' {
 				break
 			}
@@ -861,11 +869,14 @@ func (p *Procedure) Parse(parser *Parser) error {
 		p.Reentrant = true
 	}
 
-	// Parse body statements.
+	// Parse body statements; collect DECLARE statements into Locals.
 	for !parser.End() && parser.Peek().TokenKind != KeywordEnd {
 		var s Statement
 		if err := s.Parse(parser); err != nil {
 			return err
+		}
+		if s.Declare != nil {
+			p.Locals = append(p.Locals, *s.Declare)
 		}
 		p.Statements = append(p.Statements, s)
 		parser.Skip(TokenKind(';'))

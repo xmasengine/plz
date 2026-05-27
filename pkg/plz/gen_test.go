@@ -368,7 +368,7 @@ func TestGenProcNoArgs(t *testing.T) {
 }
 
 func TestGenProcOneArg(t *testing.T) {
-	asm := genTest(t, "PROC double (x) WORD\nRETURN x + x\nEND\nCALL double(5)")
+	asm := genTest(t, "PROC double (x WORD) WORD\nRETURN x + x\nEND\nCALL double(5)")
 	if !strings.Contains(asm, "ld hl, 5") {
 		t.Error("expected call with arg 5")
 	}
@@ -378,7 +378,7 @@ func TestGenProcOneArg(t *testing.T) {
 }
 
 func TestGenProcTwoArgs(t *testing.T) {
-	asm := genTest(t, "PROC add (a, b) WORD\nRETURN a + b\nEND\nCALL add(3, 4)")
+	asm := genTest(t, "PROC add (a WORD, b WORD) WORD\nRETURN a + b\nEND\nCALL add(3, 4)")
 	if !strings.Contains(asm, "ld hl, 3") {
 		t.Error("expected arg1 = 3")
 	}
@@ -387,6 +387,37 @@ func TestGenProcTwoArgs(t *testing.T) {
 	}
 	if !strings.Contains(asm, "call _plz_add") {
 		t.Error("expected call _plz_add")
+	}
+}
+
+func TestGenProcLocalDeclare(t *testing.T) {
+	asm := genTest(t, `PROC foo (x WORD) WORD
+DECLARE t WORD
+LET t = x + 1
+RETURN t
+END
+CALL foo(5)`)
+	if !strings.Contains(asm, "_plz_foo_frame: db 0, 0, 0, 0") {
+		t.Error("expected frame with 4 bytes (param + local)")
+	}
+	if !strings.Contains(asm, "const t = _plz_foo_frame+2") {
+		t.Error("expected const mapping for local t")
+	}
+	if strings.Contains(asm, "\nt: db ") {
+		t.Error("local t should NOT have its own db allocation")
+	}
+}
+
+func TestGenProcByteParam(t *testing.T) {
+	asm := genTest(t, "PROC double (x BYTE) WORD\nRETURN x + x\nEND\nCALL double(21)")
+	if !strings.Contains(asm, "ld a, l") {
+		t.Error("expected byte truncation for BYTE param save")
+	}
+	if !strings.Contains(asm, "const x = _plz_double_frame+0") {
+		t.Error("expected x at offset 0 in frame")
+	}
+	if !strings.Contains(asm, "_plz_double_frame: db 0") {
+		t.Error("expected 1-byte frame for single BYTE param")
 	}
 }
 

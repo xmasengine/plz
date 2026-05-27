@@ -33,13 +33,24 @@ func (p Program) Check(c *Checker) error {
 					Type:       Type{Predeclared: PredeclaredWord},
 				}
 			}
-			for _, param := range stmt.Procedure.Parameters {
+			for i, param := range stmt.Procedure.Parameters {
 				if _, ok := c.Symbols[param]; !ok {
+					ptype := Type{Predeclared: PredeclaredWord}
+					if i < len(stmt.Procedure.ParamTypes) {
+						ptype = stmt.Procedure.ParamTypes[i]
+					}
 					c.Symbols[param] = &Declare{
 						Identifier: param,
-						Type:       Type{Predeclared: PredeclaredWord},
+						Type:       ptype,
 					}
 				}
+			}
+			for _, local := range stmt.Procedure.Locals {
+				if existing, ok := c.Symbols[local.Identifier]; ok {
+					return c.Errorf("", "duplicate declaration of %s (first at %s)",
+						local.Identifier, existing.Identifier)
+				}
+				c.Symbols[local.Identifier] = &local
 			}
 		}
 	}

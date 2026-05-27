@@ -332,7 +332,7 @@ HALT`)
 
 func TestIntegrationProcCall(t *testing.T) {
 	io := compileAndRun(t, `DECLARE result WORD
-PROC add (x, y) WORD
+PROC add (x WORD, y WORD) WORD
   RETURN x + y
 END
 CALL add(2, 3)
@@ -362,6 +362,40 @@ HALT`)
 	}
 	if io.OutBytes[0][1] != 99 {
 		t.Errorf("expected 99, got %d", io.OutBytes[0][1])
+	}
+}
+
+func TestIntegrationProcLocalDeclare(t *testing.T) {
+	io := compileAndRun(t, `DECLARE result WORD
+PROC double (x WORD) WORD
+  DECLARE t WORD
+  LET t = x + x
+  RETURN t
+END
+LET result = double(21)
+OUTPUT 0 result
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 42 {
+		t.Errorf("expected 42, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationProcByteParam(t *testing.T) {
+	io := compileAndRun(t, `DECLARE result WORD
+PROC double (x BYTE) WORD
+  RETURN x + x
+END
+LET result = double(21)
+OUTPUT 0 result
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 42 {
+		t.Errorf("expected 42, got %d", io.OutBytes[0][0])
 	}
 }
 

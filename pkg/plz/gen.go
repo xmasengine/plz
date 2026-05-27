@@ -8,10 +8,11 @@ const HeapBase = 0xC000 // RAM memory.
 
 type Gen struct {
 	*os.File
-	Heap      int // Pointer to last allocated heap RAM memory.
-	label     int // counter for unique local labels
-	Checker   *Checker
-	procFrame map[string]int // proc name → frame heap base addr
+	Heap        int // Pointer to last allocated heap RAM memory.
+	label       int // counter for unique local labels
+	Checker     *Checker
+	procFrame   map[string]int // proc name → frame heap base addr
+	InProcedure bool           // set when generating inside a procedure body
 }
 
 func NewGenFile(name string) (*Gen, error) {
@@ -216,34 +217,51 @@ func (p Program) Gen(g *Gen) error {
 	// First pass: allocate frames for non-REENTRANT procedures.
 	for _, stmt := range p.Statements {
 		if stmt.Procedure != nil && !stmt.Procedure.Reentrant {
-			proc := stmt.Procedure
-			nParams := len(proc.Parameters)
-			// Allocate frame for ALL parameters for non-REENTRANT.
-			if nParams > 0 {
+		proc := stmt.Procedure
+		localsSize := 0
+		for _, local := range proc.Locals {
+			localsSize += localDeclareSize(local)
+		}
+		total := totalParamSize(proc) + localsSize
+			if total > 0 {
 				g.procFrame[proc.Name.Name] = g.Heap
-				g.Heap += nParams * 2
+				g.Heap += total
 			}
 		}
 	}
 
-	// Emit procedure frame storage and parameter consts first (must precede use).
+	// Emit procedure frame storage and parameter/locals consts first (must precede use).
 	for _, stmt := range p.Statements {
 		if stmt.Procedure == nil || stmt.Procedure.Reentrant {
 			continue
 		}
 		proc := stmt.Procedure
 		addr, ok := g.procFrame[proc.Name.Name]
-		if !ok || len(proc.Parameters) == 0 {
+		if !ok {
 			continue
 		}
-		n := len(proc.Parameters)
+		// Compute total frame size.
+		localsSize := 0
+		for _, local := range proc.Locals {
+			localsSize += localDeclareSize(local)
+		}
+		total := totalParamSize(proc) + localsSize
+		if total == 0 {
+			continue
+		}
 		g.Emitf("org 0x%x\n_plz_%s_frame: db 0", addr, proc.Name.Name)
-		for i := 1; i < n*2; i++ {
+		for i := 1; i < total; i++ {
 			g.Emit(", 0")
 		}
 		g.Emit("\n")
 		for i, param := range proc.Parameters {
-			g.Emitf("\tconst %s = _plz_%s_frame+%d\n", param, proc.Name.Name, i*2)
+			g.Emitf("\tconst %s = _plz_%s_frame+%d\n", param, proc.Name.Name, paramOffset(proc, i))
+		}
+		// Emit const mappings for local variables.
+		off := totalParamSize(proc)
+		for _, local := range proc.Locals {
+			g.Emitf("\tconst %s = _plz_%s_frame+%d\n", local.Identifier, proc.Name.Name, off)
+			off += localDeclareSize(local)
 		}
 	}
 
@@ -894,20 +912,35 @@ func (s Procedure) Gen(g *Gen) error {
 	if !s.Reentrant {
 		if _, ok := g.procFrame[s.Name.Name]; ok && len(s.Parameters) > 0 {
 			// Save param1 (HL) to frame slot 0.
-			g.Emitf("\tld (_plz_%s_frame), hl\n", s.Name.Name)
+			off0 := paramOffset(&s, 0)
+			p0size := paramByteSize(&s, 0)
+			if p0size == 1 {
+				g.Emitf("\tld a, l\n\tld (_plz_%s_frame+%d), a\n", s.Name.Name, off0)
+			} else {
+				g.Emitf("\tld (_plz_%s_frame+%d), hl\n", s.Name.Name, off0)
+			}
 			if len(s.Parameters) > 1 {
-				// Save param2 (DE) to frame slot 1.
-				g.Emitf("\tld (_plz_%s_frame+2), de\n", s.Name.Name)
+				// Save param2 (DE) to frame slot.
+				off1 := paramOffset(&s, 1)
+				p1size := paramByteSize(&s, 1)
+				if p1size == 1 {
+					g.Emitf("\tld a, e\n\tld (_plz_%s_frame+%d), a\n", s.Name.Name, off1)
+				} else {
+					g.Emitf("\tld (_plz_%s_frame+%d), de\n", s.Name.Name, off1)
+				}
 			}
 			// Params 3+ are already stored in frame by the call site.
 		}
 	}
 
+	// Generate body with InProcedure set so local Declare.Gen emits no storage.
+	g.InProcedure = true
 	for _, stmt := range s.Statements {
 		if err := stmt.Gen(g); err != nil {
 			return err
 		}
 	}
+	g.InProcedure = false
 
 	// Implicit ret if the last statement is not a return.
 	if len(s.Statements) == 0 || s.Statements[len(s.Statements)-1].Return == nil {
@@ -1020,6 +1053,10 @@ func (s GoTo) Gen(g *Gen) error {
 }
 
 func (s Declare) Gen(g *Gen) error {
+	if g.InProcedure {
+		// Local variable; storage is part of the procedure frame.
+		return nil
+	}
 	elemSize := 1
 	if s.Type.Predeclared == PredeclaredWord {
 		elemSize = 2
@@ -1064,6 +1101,49 @@ func (s Output) Gen(g *Gen) error {
 	g.Emitf("\tld a, l\n")
 	g.Emitf("\tout (%d), a\n", s.Port)
 	return nil
+}
+
+// paramByteSize returns the storage size (in bytes) for the i-th parameter of proc.
+func paramByteSize(proc *Procedure, i int) int {
+	if i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
+		return 1
+	}
+	return 2
+}
+
+// paramOffset returns the byte offset of the i-th parameter within the procedure frame.
+func paramOffset(proc *Procedure, i int) int {
+	off := 0
+	for j := 0; j < i; j++ {
+		off += paramByteSize(proc, j)
+	}
+	return off
+}
+
+// totalParamSize returns the total byte size of all parameters for a procedure.
+func totalParamSize(proc *Procedure) int {
+	total := 0
+	for i := range proc.Parameters {
+		total += paramByteSize(proc, i)
+	}
+	return total
+}
+
+// localDeclareSize returns the byte size needed for a local variable declaration.
+func localDeclareSize(d Declare) int {
+	elemSize := 1
+	if d.Type.Predeclared == PredeclaredWord {
+		elemSize = 2
+	}
+	total := d.Size * elemSize
+	if total == 0 {
+		total = elemSize // unbounded → 1 element minimum
+	}
+	if d.Type.Struct != nil {
+		total = structTotalSize(d.Type.Struct.Fields)
+		total = nextPow2(total)
+	}
+	return total
 }
 
 // fieldOffset returns the byte offset of the i-th field within a struct.
