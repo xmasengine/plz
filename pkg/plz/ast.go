@@ -42,7 +42,6 @@ type Output struct {
 type Let struct {
 	Reference
 	Expression
-	Literal // provisonally
 }
 
 type Procedure struct {
