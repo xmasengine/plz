@@ -237,6 +237,17 @@ func (r *Reference) Parse(parser *Parser) error {
 	if err != nil {
 		return err
 	}
+	for parser.Peek().TokenKind == '[' {
+		parser.Next()
+		var subscript Expression
+		if err := subscript.Parse(parser); err != nil {
+			return err
+		}
+		if _, err := parser.Accept(TokenKind(']')); err != nil {
+			return err
+		}
+		r.Subscripts = append(r.Subscripts, subscript)
+	}
 	return nil
 }
 

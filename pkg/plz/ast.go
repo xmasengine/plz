@@ -269,8 +269,8 @@ func (o Operator) Priority() int {
 
 type Reference struct {
 	Identifier
-	Address   bool
-	Subscript *Expression
+	Address    bool
+	Subscripts []Expression
 }
 
 type LogicalExpression struct {
