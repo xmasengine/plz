@@ -78,8 +78,75 @@ const ProgramFooter = `
 org 0xC000 // RAM memory.
 `
 
+const RuntimeHeader = `
+; -------------------------------------------------------------------
+; PL/Z runtime helpers
+; -------------------------------------------------------------------
+
+; _plz_mul: HL = HL * DE (unsigned 16-bit)
+_plz_mul:
+	push bc
+	push hl
+	pop bc          ; bc = multiplicand
+	ld hl, 0        ; hl = accumulator
+	ld a, 16        ; loop counter
+_plz_mul_loop:
+	push af
+	ld a, c
+	rra             ; LSB of bc -> carry
+	jr nc, _plz_mul_skip
+	add hl, de
+_plz_mul_skip:
+	srl b
+	rr c
+	sla e
+	rl d
+	pop af
+	dec a
+	jr nz, _plz_mul_loop
+	pop bc
+	ret
+
+; _plz_div: HL = HL / DE (unsigned 16-bit)
+_plz_div:
+	call _plz_divmod
+	push bc
+	pop hl
+	ret
+
+; _plz_mod: HL = HL % DE (unsigned 16-bit)
+_plz_mod:
+	call _plz_divmod
+	ret
+
+; Internal: divide HL by DE
+; Output: BC = quotient, HL = remainder
+_plz_divmod:
+	xor a
+	push hl
+	pop bc          ; bc = dividend
+	ld hl, 0        ; hl = remainder
+	ld a, 16        ; 16 bits
+_plz_div_loop:
+	sla c
+	rl b
+	adc hl, hl
+	push hl
+	or a
+	sbc hl, de
+	jr c, _plz_div_skip
+	inc c
+	ex (sp), hl
+_plz_div_skip:
+	pop hl
+	dec a
+	jr nz, _plz_div_loop
+	ret
+`
+
 func (p Program) Gen(g *Gen) error {
 	g.Emit(ProgramHeader)
+	g.Emit(RuntimeHeader)
 	for _, statement := range p.Statements {
 		err := statement.Gen(g)
 		if err != nil {
@@ -257,8 +324,12 @@ func (i Infix) Gen(g *Gen) error {
 		g.Emitln("\txor e")
 		g.Emitln("\tld l, a")
 
-	case OperatorMUL, OperatorDIV, OperatorMOD:
-		g.Emitf("\t// %c not yet implemented\n", i.Operator)
+	case OperatorMUL:
+		g.Emitln("\tcall _plz_mul")
+	case OperatorDIV:
+		g.Emitln("\tcall _plz_div")
+	case OperatorMOD:
+		g.Emitln("\tcall _plz_mod")
 
 	case OperatorEQU:
 		g.genCmp("nz")
