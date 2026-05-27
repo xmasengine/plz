@@ -500,21 +500,94 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 	}
 
 	for {
+		tok := p.Peek()
+
+		// Array subscript: expr[index]
+		if tok.TokenKind == '[' {
+			p.Next()
+			if p.Peek().TokenKind == ']' {
+				p.Next()
+				prev := new(Expression)
+				*prev = *left
+				*left = Expression{}
+				left.Suffix = &Suffix{
+					Operator: OperatorINDEX,
+					Operands: []Operand{{Expression: prev}},
+				}
+				continue
+			}
+			var index Expression
+			if err := index.Parse(p); err != nil {
+				return err
+			}
+			if _, err := p.Accept(TokenKind(']')); err != nil {
+				return err
+			}
+			prev := new(Expression)
+			*prev = *left
+			indexCopy := new(Expression)
+			*indexCopy = index
+			*left = Expression{}
+			left.Suffix = &Suffix{
+				Operator: OperatorINDEX,
+				Operands: []Operand{
+					{Expression: prev},
+					{Expression: indexCopy},
+				},
+			}
+			continue
+		}
+
+		// Function call: expr(args...)
+		if tok.TokenKind == '(' {
+			p.Next()
+			var args []Expression
+			if p.Peek().TokenKind != ')' {
+				for {
+					var arg Expression
+					if err := arg.Parse(p); err != nil {
+						return err
+					}
+					args = append(args, arg)
+					if p.Peek().TokenKind == ')' {
+						break
+					}
+					if _, err := p.Accept(TokenKind(',')); err != nil {
+						return err
+					}
+				}
+			}
+			if _, err := p.Accept(TokenKind(')')); err != nil {
+				return err
+			}
+			prev := new(Expression)
+			*prev = *left
+			operands := make([]Operand, 0, 1+len(args))
+			operands = append(operands, Operand{Expression: prev})
+			for i := range args {
+				ac := new(Expression)
+				*ac = args[i]
+				operands = append(operands, Operand{Expression: ac})
+			}
+			*left = Expression{}
+			left.Suffix = &Suffix{
+				Operator: OperatorCALL,
+				Operands: operands,
+			}
+			continue
+		}
+
 		op := p.PeekOperator()
 		if op == OperatorNone || op == OperatorNOT || op.Priority() < minBp {
 			break
 		}
 		p.ReadOperator()
 
-		// Save heap copies so the pointers stay valid after
-		// *left = sub (parenthesised sub-expression) in a later
-		// iteration.
 		prev := new(Expression)
 		*prev = *left
 
 		var right Expression
-		err := right.ParseExpr(p, op.Priority())
-		if err != nil {
+		if err := right.ParseExpr(p, op.Priority()); err != nil {
 			return err
 		}
 		rightCopy := new(Expression)

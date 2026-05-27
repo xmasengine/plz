@@ -215,6 +215,8 @@ const (
 	OperatorAND  Operator = '&'
 	OperatorOR   Operator = '|'
 	OperatorXOR  Operator = '^'
+	OperatorINDEX Operator = '[' + ']'<<8
+	OperatorCALL  Operator = '(' + ')'<<8
 )
 
 // Priority returns the piority of the operator, mostly for Pratt parsing.
@@ -256,6 +258,10 @@ func (o Operator) Priority() int {
 		return 500
 	case OperatorNEG:
 		return 510
+	case OperatorINDEX:
+		return 600
+	case OperatorCALL:
+		return 610
 	default:
 		return 0
 	}
