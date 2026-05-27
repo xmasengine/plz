@@ -169,12 +169,7 @@ type Expression struct {
 	*Prefix
 	*Infix
 	*Suffix
-	Stack []Operation
-}
-
-type Operation struct {
-	Operator
-	Operands []Operand
+	*Operand
 }
 
 type Prefix struct {
@@ -196,6 +191,7 @@ type Operand struct {
 	*Call
 	*Reference
 	*Expression
+	*Literal
 }
 
 // An operator can be up to 3 bytes long, shift the chars into the int.

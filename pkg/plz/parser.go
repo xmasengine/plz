@@ -367,8 +367,177 @@ func (g *Let) Parse(parser *Parser) error {
 	if err != nil {
 		return err
 	}
-	return g.Literal.Parse(parser)
+	return g.Expression.Parse(parser)
+}
 
+// PeekOperator looks at the next token(s) without consuming them.
+// If not an operator returns OperatorNone.
+func (p *Parser) PeekOperator() Operator {
+	tok := p.Peek()
+	switch tok.TokenKind {
+	case '+':
+		return OperatorADD
+	case '-':
+		return OperatorSUB
+	case '*':
+		return OperatorMUL
+	case '/':
+		return OperatorDIV
+	case '%':
+		return OperatorMOD
+	case '&':
+		return OperatorAND
+	case '|':
+		return OperatorOR
+	case '^':
+		return OperatorXOR
+	case '=':
+		return OperatorEQU
+	case '!':
+		if p.PeekAt(1).TokenKind == '=' {
+			return OperatorNEQ
+		}
+		return OperatorNone
+	case '<':
+		if p.PeekAt(1).TokenKind == '=' {
+			return OperatorLTE
+		}
+		return OperatorLT
+	case '>':
+		if p.PeekAt(1).TokenKind == '=' {
+			return OperatorGTE
+		}
+		return OperatorGT
+	}
+	return OperatorNone
+}
+
+// ReadOperator consumestokens and returns the operator found.
+// Multi-character operators consume two or three tokens.
+// If no operator is present, returns OperatorNone and consumes no tokens.
+func (p *Parser) ReadOperator() (op Operator) {
+	op = p.PeekOperator()
+	switch op {
+	case OperatorEQU, OperatorNEQ, OperatorGTE, OperatorLTE:
+		p.Next()
+		p.Next()
+	case OperatorNone:
+		return OperatorNone
+	default:
+		p.Next()
+	}
+	return op
+}
+
+// ParseExpr is the core Pratt parser. It reads tokens starting from the
+// current position and builds an Expression tree.  The minBp parameter sets
+// the minimum binding-power that the expression must have; operators with
+// lower priority cause the loop to stop.
+func (left *Expression) ParseExpr(p *Parser, minBp int) error {
+	tok := p.Peek()
+
+	switch tok.TokenKind {
+	case TokenInt:
+		p.Next()
+		num := tok.Number
+		left.Operand = &Operand{Literal: &Literal{Number: &num}}
+
+	case TokenString, TokenChar:
+		p.Next()
+		n := tok.Number
+		left.Operand = &Operand{Literal: &Literal{Number: &n}}
+
+	case TokenIdent:
+		p.Next()
+		left.Operand = &Operand{Reference: &Reference{Identifier: Identifier(tok.Text)}}
+
+	case '(':
+		p.Next()
+		var sub Expression
+		err := sub.ParseExpr(p, 0)
+		if err != nil {
+			return err
+		}
+		if _, err = p.Accept(TokenKind(')')); err != nil {
+			return err
+		}
+		*left = sub
+
+	case '+':
+		// Unary plus – effectively a no-op, skip it.
+		p.Next()
+		err := left.ParseExpr(p, 0)
+		if err != nil {
+			return err
+		}
+
+	case '-':
+		p.Next()
+		var right Expression
+		err := right.ParseExpr(p, OperatorNEG.Priority())
+		if err != nil {
+			return err
+		}
+		left.Prefix = &Prefix{
+			Operator: OperatorNEG,
+			Operand:  Operand{Expression: &right},
+		}
+
+	case '!':
+		p.Next()
+		var right Expression
+		err := right.ParseExpr(p, OperatorNOT.Priority())
+		if err != nil {
+			return err
+		}
+		left.Prefix = &Prefix{
+			Operator: OperatorNOT,
+			Operand:  Operand{Expression: &right},
+		}
+
+	default:
+		return tok.Errorf("unexpected token in expression: %v", tok)
+	}
+
+	for {
+		op := p.PeekOperator()
+		if op == OperatorNone || op == OperatorNOT || op.Priority() < minBp {
+			break
+		}
+		p.ReadOperator()
+
+		// Save heap copies so the pointers stay valid after
+		// *left = sub (parenthesised sub-expression) in a later
+		// iteration.
+		prev := new(Expression)
+		*prev = *left
+
+		var right Expression
+		err := right.ParseExpr(p, op.Priority())
+		if err != nil {
+			return err
+		}
+		rightCopy := new(Expression)
+		*rightCopy = right
+
+		*left = Expression{}
+		left.Infix = &Infix{
+			Operator: op,
+			Operands: [2]Operand{
+				{Expression: prev},
+				{Expression: rightCopy},
+			},
+		}
+	}
+
+	return nil
+}
+
+func (e *Expression) Parse(p *Parser) error {
+	err := e.ParseExpr(p, 0)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -376,7 +545,7 @@ func (g *Let) Parse(parser *Parser) error {
 
 
 <PROGRAM> ::= <STATEMENT LIST>
-<STATMENT LIST> := <STATEMENT> | <STATEMENT LIST> <STATEMENT>
+<STATEMENT LIST> := <STATEMENT> | <STATEMENT LIST> <STATEMENT>
 <STATEMENT> := <BASIC STATEMENT> | <IF STATEMENT>
 
 <BASIC STATEMENT> := <ASSIGNMENT> ;

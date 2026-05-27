@@ -131,7 +131,7 @@ func (l Label) Gen(g *Gen) error {
 		if target > 0 {
 			g.Emitf("org %x, %x\n", org, target)
 		} else {
-			g.Emitf("org %x, %x\n", org)
+			g.Emitf("org %x\n", org)
 		}
 	}
 	if l.Name != "" {
