@@ -169,6 +169,12 @@ type Expression struct {
 	*Prefix
 	*Infix
 	*Suffix
+	Stack []Operation
+}
+
+type Operation struct {
+	Operator
+	Operands []Operand
 }
 
 type Prefix struct {
