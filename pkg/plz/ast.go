@@ -2,6 +2,7 @@ package plz
 
 type Node interface {
 	Parse(*Parser) error
+	Check(*Checker) error
 	Gen(*Gen) error
 	Nodes() []Node
 }
@@ -36,7 +37,7 @@ type Disable struct {
 
 type Output struct {
 	Port  int
-	Value byte
+	Value Expression
 }
 
 type Let struct {

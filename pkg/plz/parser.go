@@ -79,7 +79,7 @@ func (p Parser) Have(kinds ...TokenKind) bool {
 	return false
 }
 
-func (p Parser) Skip(kind TokenKind) *Token {
+func (p *Parser) Skip(kind TokenKind) *Token {
 	t := p.Peek()
 	if t.TokenKind == kind {
 		p.Next()
@@ -332,12 +332,7 @@ func (g *Output) Parse(parser *Parser) error {
 		return err
 	}
 	g.Port = tok.Number
-	tok, err = parser.Accept(TokenInt, TokenChar)
-	if err != nil {
-		return err
-	}
-	g.Value = byte(tok.Number & 0xff)
-	return nil
+	return g.Value.Parse(parser)
 }
 
 func (t *Type) Parse(parser *Parser) error {

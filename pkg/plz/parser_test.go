@@ -373,6 +373,120 @@ func TestLetArraySetRHSWithSubscript(t *testing.T) {
 	}
 }
 
+// parseStmt parses a full statement (IF, GROUP, etc.)
+func parseStmt(src string) (Statement, error) {
+	tokens, err := Scan(strings.NewReader(src))
+	if err != nil {
+		return Statement{}, err
+	}
+	p := NewParser(tokens)
+	var s Statement
+	err = s.Parse(p)
+	return s, err
+}
+
+func TestParseIfThen(t *testing.T) {
+	s, err := parseStmt("IF x THEN LET y = 1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.If == nil {
+		t.Fatal("expected If statement")
+	}
+	if s.If.Condition.Operand == nil || s.If.Condition.Operand.Reference == nil {
+		t.Fatal("expected reference condition")
+	}
+	if s.If.Then.Let == nil {
+		t.Fatal("expected Then to be a Let")
+	}
+	if s.If.Else != nil {
+		t.Fatal("expected no Else")
+	}
+}
+
+func TestParseIfThenElse(t *testing.T) {
+	s, err := parseStmt("IF x THEN LET y = 1 ELSE LET z = 2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.If == nil {
+		t.Fatal("expected If statement")
+	}
+	if s.If.Else == nil {
+		t.Fatal("expected Else")
+	}
+	if s.If.Else.Let == nil {
+		t.Fatal("expected Else to be a Let")
+	}
+	if s.If.Else.Let.Identifier != Identifier("z") {
+		t.Errorf("expected z, got %s", s.If.Else.Let.Identifier)
+	}
+}
+
+func TestParseGroupDo(t *testing.T) {
+	s, err := parseStmt("DO LET x = 1 END")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.Group == nil {
+		t.Fatal("expected Group")
+	}
+	if s.Group.While != nil || s.Group.For != nil || s.Group.Case != nil {
+		t.Fatal("expected bare DO group")
+	}
+	if len(s.Group.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(s.Group.Statements))
+	}
+}
+
+func TestParseGroupWhile(t *testing.T) {
+	s, err := parseStmt("WHILE a DO LET x = 1 END")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.Group == nil {
+		t.Fatal("expected Group")
+	}
+	if s.Group.While == nil {
+		t.Fatal("expected While")
+	}
+	if len(s.Group.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(s.Group.Statements))
+	}
+}
+
+func TestParseGroupFor(t *testing.T) {
+	s, err := parseStmt("FOR i = 1 TO 10 DO LET x = i END")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.Group == nil {
+		t.Fatal("expected Group")
+	}
+	if s.Group.For == nil {
+		t.Fatal("expected For")
+	}
+	if s.Group.For.Reference.Identifier != Identifier("i") {
+		t.Errorf("expected i, got %s", s.Group.For.Reference.Identifier)
+	}
+	if s.Group.For.By != nil {
+		t.Fatal("expected no BY clause")
+	}
+}
+
+func TestParseGroupForBy(t *testing.T) {
+	s, err := parseStmt("FOR i = 1 TO 10 BY 2 DO LET x = i END")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.Group == nil || s.Group.For == nil {
+		t.Fatal("expected For")
+	}
+	if s.Group.For.By == nil {
+		t.Fatal("expected BY clause")
+	}
+}
+
 func TestSubscriptNoIndex(t *testing.T) {
 	// arr[] should parse with just the array as the only operand (no index)
 	expr, err := parseLetExpr("LET x = arr[]")

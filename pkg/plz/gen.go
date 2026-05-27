@@ -79,21 +79,21 @@ org 0xC000 // RAM memory.
 `
 
 const RuntimeHeader = `
-; -------------------------------------------------------------------
-; PL/Z runtime helpers
-; -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// PL/Z runtime helpers
+// -------------------------------------------------------------------
 
-; _plz_mul: HL = HL * DE (unsigned 16-bit)
+// _plz_mul: HL = HL * DE (unsigned 16-bit)
 _plz_mul:
 	push bc
 	push hl
-	pop bc          ; bc = multiplicand
-	ld hl, 0        ; hl = accumulator
-	ld a, 16        ; loop counter
+	pop bc          // bc = multiplicand
+	ld hl, 0        // hl = accumulator
+	ld a, 16        // loop counter
 _plz_mul_loop:
 	push af
 	ld a, c
-	rra             ; LSB of bc -> carry
+	rra             // LSB of bc -> carry
 	jr nc, _plz_mul_skip
 	add hl, de
 _plz_mul_skip:
@@ -107,26 +107,26 @@ _plz_mul_skip:
 	pop bc
 	ret
 
-; _plz_div: HL = HL / DE (unsigned 16-bit)
+// _plz_div: HL = HL / DE (unsigned 16-bit)
 _plz_div:
 	call _plz_divmod
 	push bc
 	pop hl
 	ret
 
-; _plz_mod: HL = HL % DE (unsigned 16-bit)
+// _plz_mod: HL = HL % DE (unsigned 16-bit)
 _plz_mod:
 	call _plz_divmod
 	ret
 
-; Internal: divide HL by DE
-; Output: BC = quotient, HL = remainder
+// Internal: divide HL by DE
+// Output: BC = quotient, HL = remainder
 _plz_divmod:
 	xor a
 	push hl
-	pop bc          ; bc = dividend
-	ld hl, 0        ; hl = remainder
-	ld a, 16        ; 16 bits
+	pop bc          // bc = dividend
+	ld hl, 0        // hl = remainder
+	ld a, 16        // 16 bits
 _plz_div_loop:
 	sla c
 	rl b
@@ -143,7 +143,7 @@ _plz_div_skip:
 	jr nz, _plz_div_loop
 	ret
 
-; _plz_eq: HL = (HL == DE) ? 1 : 0
+// _plz_eq: HL = (HL == DE) ? 1 : 0
 _plz_eq:
 	or a
 	sbc hl, de
@@ -152,7 +152,7 @@ _plz_eq:
 	inc l
 	ret
 
-; _plz_ne: HL = (HL != DE) ? 1 : 0
+// _plz_ne: HL = (HL != DE) ? 1 : 0
 _plz_ne:
 	or a
 	sbc hl, de
@@ -161,7 +161,7 @@ _plz_ne:
 	inc l
 	ret
 
-; _plz_gt: HL = (HL > DE) ? 1 : 0 (unsigned)
+// _plz_gt: HL = (HL > DE) ? 1 : 0 (unsigned)
 _plz_gt:
 	or a
 	sbc hl, de
@@ -170,7 +170,7 @@ _plz_gt:
 	ld hl, 1
 	ret
 
-; _plz_lt: HL = (HL < DE) ? 1 : 0 (unsigned)
+// _plz_lt: HL = (HL < DE) ? 1 : 0 (unsigned)
 _plz_lt:
 	or a
 	sbc hl, de
@@ -178,7 +178,7 @@ _plz_lt:
 	ld hl, 1
 	ret
 
-; _plz_gte: HL = (HL >= DE) ? 1 : 0 (unsigned)
+// _plz_gte: HL = (HL >= DE) ? 1 : 0 (unsigned)
 _plz_gte:
 	or a
 	sbc hl, de
@@ -186,7 +186,7 @@ _plz_gte:
 	ld hl, 1
 	ret
 
-; _plz_lte: HL = (HL <= DE) ? 1 : 0 (unsigned)
+// _plz_lte: HL = (HL <= DE) ? 1 : 0 (unsigned)
 _plz_lte:
 	or a
 	sbc hl, de
@@ -204,13 +204,31 @@ _plz_cmp_false:
 `
 
 func (p Program) Gen(g *Gen) error {
+	c := NewChecker()
+	if err := p.Check(c); err != nil {
+		return err
+	}
 	g.Emit(ProgramHeader)
+	g.Emitln("\tjp _plz_start")
 	g.Emit(RuntimeHeader)
+	g.Emitln("_plz_start:")
+
+	var declares []*Declare
 	for _, statement := range p.Statements {
+		if statement.Declare != nil {
+			declares = append(declares, statement.Declare)
+			continue
+		}
 		err := statement.Gen(g)
 		if err != nil {
 			return err
 		}
+	}
+
+	// Emit declarations at the end so they don't interleave with code.
+	for _, d := range declares {
+		g.Emitln("")
+		d.Gen(g)
 	}
 	return nil
 }
@@ -443,8 +461,12 @@ func (s *Suffix) Gen(g *Gen) error {
 func (g *Gen) genIndexRead(operands []Operand) error {
 	// Get the array base address into hl.
 	// The first operand must be a reference (we take its address).
-	if operands[0].Reference != nil {
-		g.Emitf("\tld hl, %s\n", operands[0].Reference.Identifier)
+	ref := operands[0].Reference
+	if ref == nil && operands[0].Expression != nil && operands[0].Expression.Operand != nil {
+		ref = operands[0].Expression.Operand.Reference
+	}
+	if ref != nil {
+		g.Emitf("\tld hl, %s\n", ref.Identifier)
 	} else {
 		return fmt.Errorf("genIndexRead: first operand must be a reference")
 	}
@@ -544,13 +566,7 @@ func (s Group) Gen(g *Gen) error {
 		g.Emitf("_end_%d:\n", n)
 
 	case s.For != nil:
-		// Push end value on stack
-		if err := s.For.To.Gen(g); err != nil {
-			return err
-		}
-		g.Emitln("\tpush hl")
-
-		// Evaluate step (default 1), store in IX for preservation
+		// Evaluate step (default 1), push on stack
 		if s.For.By != nil {
 			if err := s.For.By.Gen(g); err != nil {
 				return err
@@ -559,7 +575,12 @@ func (s Group) Gen(g *Gen) error {
 			g.Emitln("\tld hl, 1")
 		}
 		g.Emitln("\tpush hl")
-		g.Emitln("\tpop ix")
+
+		// Evaluate end, push on stack
+		if err := s.For.To.Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tpush hl")
 
 		// Initialize var = start
 		if err := s.For.Start.Gen(g); err != nil {
@@ -569,12 +590,13 @@ func (s Group) Gen(g *Gen) error {
 
 		n := g.nextLabel()
 		g.Emitf("_for_%d:\n", n)
-		// Compare var with end (hl = end from stack)
-		g.Emitln("\tpop hl")
-		g.Emitln("\tpush hl")
-		g.Emitf("\tld de, (%s)\n", s.For.Reference.Identifier)
+		// Compare var with end (hl = end - var)
+		g.Emitln("\tpop de")  // de = end, stack: [step]
+		g.Emitln("\tpush de") // push back, stack: [step, end]
+		g.Emitf("\tld hl, (%s)\n", s.For.Reference.Identifier) // hl = var
+		g.Emitln("\tex de, hl") // hl = end, de = var
 		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")
+		g.Emitln("\tsbc hl, de") // hl = end - var
 		g.Emitf("\tjr c, _end_%d\n", n) // end < var → exit
 
 		// Body
@@ -584,13 +606,18 @@ func (s Group) Gen(g *Gen) error {
 			}
 		}
 
-		// var += ix (step)
-		g.Emitf("\tld hl, (%s)\n", s.For.Reference.Identifier)
-		g.Emitln("\tadd hl, ix")
+		// var += step
+		g.Emitln("\tpop de")  // de = end, stack: [step]
+		g.Emitln("\tpop hl")  // hl = step, stack: []
+		g.Emitln("\tpush hl") // push step back, stack: [step]
+		g.Emitln("\tpush de") // push end back, stack: [step, end]
+		g.Emitf("\tld de, (%s)\n", s.For.Reference.Identifier)
+		g.Emitln("\tadd hl, de") // hl = step + var
 		g.Emitf("\tld (%s), hl\n", s.For.Reference.Identifier)
 		g.Emitf("\tjr _for_%d\n", n)
 		g.Emitf("_end_%d:\n", n)
 		g.Emitln("\tpop hl") // discard end
+		g.Emitln("\tpop hl") // discard step
 
 	default:
 		// Bare DO...END: just emit statements
@@ -654,7 +681,10 @@ func (s Disable) Gen(g *Gen) error {
 }
 
 func (s Output) Gen(g *Gen) error {
-	g.Emitf("\tld a, %d\n", s.Value)
+	if err := s.Value.Gen(g); err != nil {
+		return err
+	}
+	g.Emitf("\tld a, l\n")
 	g.Emitf("\tout (%d), a\n", s.Port)
 	return nil
 }
