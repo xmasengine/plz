@@ -2,13 +2,20 @@ package plz
 
 import "fmt"
 
+type Scope struct {
+	Name     string                  // Name of the scope or procedure we are in
+	Parent   *Scope                  // Parent scope
+	Symbols  map[Identifier]*Declare // Symbols in the scope
+	Children []*Scope                // Child scopes
+}
+
 type Checker struct {
-	Symbols     map[Identifier]*Declare     // global symbols
+	Symbols     map[Identifier]*Declare            // global symbols
 	procSymbols map[string]map[Identifier]*Declare // procedure → local symbols
-	Procedures  map[string]*Procedure       // procedure name → definition
-	Tasks       map[string]int              // task name → task index
-	TaskDefs    []*Task                     // task definitions in order
-	currentProc string                      // procedure currently being checked
+	Procedures  map[string]*Procedure              // procedure name → definition
+	Tasks       map[string]int                     // task name → task index
+	TaskDefs    []*Task                            // task definitions in order
+	currentProc string                             // procedure currently being checked
 }
 
 func NewChecker() *Checker {

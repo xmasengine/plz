@@ -70,6 +70,7 @@ type Interrupt struct {
 
 type Identifier string
 
+// Predeclared is a predeclared type like BYTE, WORD, DATA, LABEL, CONSTANT, ...
 type Predeclared int
 
 const (
@@ -82,10 +83,10 @@ const (
 )
 
 type Type struct {
-	Predeclared
-	*Record
-	*Array
-	AliasName Identifier // set by TYPE <name> before resolution
+	Predeclared            // Predeclared type or PredeclaredNone if not prdeclared
+	*Record                // Record is not nil if this is a RECORD type.
+	*Array                 // ARRAY is not nil if this is a RECORD type.
+	AliasName   Identifier // Name of the type for TYPE alias types.
 }
 
 // Array represents an array type used in RECORD fields or TYPE aliases.
@@ -223,26 +224,26 @@ type Operand struct {
 type Operator TokenKind
 
 const (
-	OperatorNone Operator = 0
-	OperatorADD  Operator = '+'
-	OperatorSUB  Operator = '-'
-	OperatorNEG  Operator = '-' + '@'<<8
-	OperatorGT   Operator = '>'
-	OperatorLT   Operator = '<'
-	OperatorGTE  Operator = '>' + '='<<8
-	OperatorLTE  Operator = '<' + '='<<8
-	OperatorNEQ  Operator = '!' + '='<<8
-	OperatorEQU  Operator = '=' + '='<<8
-	OperatorMOD  Operator = '%'
-	OperatorDIV  Operator = '/'
-	OperatorNOT  Operator = '!'
-	OperatorMUL  Operator = '*'
-	OperatorAND  Operator = '&'
-	OperatorOR   Operator = '|'
-	OperatorXOR  Operator = '^'
-	OperatorINDEX Operator = '[' + ']'<<8
-	OperatorCALL  Operator = '(' + ')'<<8
-	OperatorFIELD Operator = '.'
+	OperatorNone       Operator = 0
+	OperatorADD        Operator = '+'
+	OperatorSUB        Operator = '-'
+	OperatorNEG        Operator = '-' + '@'<<8
+	OperatorGT         Operator = '>'
+	OperatorLT         Operator = '<'
+	OperatorGTE        Operator = '>' + '='<<8
+	OperatorLTE        Operator = '<' + '='<<8
+	OperatorNEQ        Operator = '!' + '='<<8
+	OperatorEQU        Operator = '=' + '='<<8
+	OperatorMOD        Operator = '%'
+	OperatorDIV        Operator = '/'
+	OperatorNOT        Operator = '!'
+	OperatorMUL        Operator = '*'
+	OperatorAND        Operator = '&'
+	OperatorOR         Operator = '|'
+	OperatorXOR        Operator = '^'
+	OperatorINDEX      Operator = '[' + ']'<<8
+	OperatorCALL       Operator = '(' + ')'<<8
+	OperatorFIELD      Operator = '.'
 	OperatorShiftLeft  Operator = '<' + '<'<<8
 	OperatorShiftRight Operator = '>' + '>'<<8
 )
@@ -290,12 +291,13 @@ func (o Operator) Priority() int {
 		return 500
 	case OperatorNEG:
 		return 510
+
+	case OperatorFIELD:
+		return 590
 	case OperatorINDEX:
 		return 600
 	case OperatorCALL:
 		return 610
-	case OperatorFIELD:
-		return 590
 	default:
 		return 0
 	}
