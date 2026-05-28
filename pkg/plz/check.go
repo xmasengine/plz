@@ -3,29 +3,29 @@ package plz
 import "fmt"
 
 type Scope struct {
-	Name     string                  // Name of the scope or procedure we are in
-	Parent   *Scope                  // Parent scope
-	Symbols  map[Identifier]*Declare // Symbols in the scope
-	Children []*Scope                // Child scopes
+	Name     string                 // Name of the scope or procedure we are in
+	Parent   *Scope                 // Parent scope
+	Symbols  map[Identifier]Declare // Symbols in the scope
+	Children []*Scope               // Child scopes
 }
 
 type Checker struct {
-	Symbols     map[Identifier]*Declare            // global symbols
-	procSymbols map[string]map[Identifier]*Declare // procedure → local symbols
-	Procedures  map[string]*Procedure              // procedure name → definition
-	Tasks       map[string]int                     // task name → task index
-	TaskDefs    []*Task                            // task definitions in order
-	currentProc string                             // procedure currently being checked
+	Symbols     map[Identifier]Declare            // global symbols
+	procSymbols map[string]map[Identifier]Declare // procedure → local symbols
+	Procedures  map[string]Procedure              // procedure name → definition
+	Tasks       map[string]int                    // task name → task index
+	TaskDefs    []Task                            // task definitions in order
+	currentProc string                            // procedure currently being checked
 }
 
 func NewChecker() *Checker {
 	c := &Checker{
-		Symbols:     make(map[Identifier]*Declare),
-		procSymbols: make(map[string]map[Identifier]*Declare),
-		Procedures:  make(map[string]*Procedure),
+		Symbols:     make(map[Identifier]Declare),
+		procSymbols: make(map[string]map[Identifier]Declare),
+		Procedures:  make(map[string]Procedure),
 		Tasks:       make(map[string]int),
 	}
-	c.Symbols["INPUT"] = &Declare{
+	c.Symbols["INPUT"] = Declare{
 		Identifier: "INPUT",
 		Type:       Type{Predeclared: PredeclaredWord},
 	}
@@ -33,15 +33,16 @@ func NewChecker() *Checker {
 }
 
 // lookup resolves an identifier within the current procedure scope.
-func (c *Checker) lookup(id Identifier) *Declare {
+func (c *Checker) lookup(id Identifier) (Declare, bool) {
 	if c.currentProc != "" {
 		if m, ok := c.procSymbols[c.currentProc]; ok {
 			if d, ok := m[id]; ok {
-				return d
+				return d, true
 			}
 		}
 	}
-	return c.Symbols[id]
+	d, ok := c.Symbols[id]
+	return d, ok
 }
 
 func (c *Checker) Errorf(pos string, form string, args ...any) error {
@@ -49,7 +50,7 @@ func (c *Checker) Errorf(pos string, form string, args ...any) error {
 }
 
 // ProcSymbols returns the per-procedure symbol map for the given procedure.
-func (c *Checker) ProcSymbols(procName string) (map[Identifier]*Declare, bool) {
+func (c *Checker) ProcSymbols(procName string) (map[Identifier]Declare, bool) {
 	m, ok := c.procSymbols[procName]
 	return m, ok
 }
@@ -58,47 +59,46 @@ func (c *Checker) ProcSymbols(procName string) (map[Identifier]*Declare, bool) {
 func (p Program) Check(c *Checker) error {
 	// First pass: collect declarations, labels, and procedure parameters.
 	for _, stmt := range p.Statements {
-		if stmt.Label != nil && stmt.Label.Name != "" {
-			if _, ok := c.Symbols[Identifier(stmt.Label.Name)]; !ok {
-				kind := PredeclaredWord
-				if stmt.Data != nil {
-					kind = PredeclaredByte
-				}
-				c.Symbols[Identifier(stmt.Label.Name)] = &Declare{
-					Identifier: Identifier(stmt.Label.Name),
-					Type:       Type{Predeclared: kind},
+		if stmt.Label != nil {
+			lbl := *stmt.Label
+			if _, ok := c.Symbols[Identifier(lbl.Name)]; !ok {
+				c.Symbols[Identifier(lbl.Name)] = Declare{
+					Identifier: Identifier(lbl.Name),
+					Type:       Type{Predeclared: PredeclaredLabel},
 				}
 			}
 		}
-		if stmt.Declare != nil {
-			if existing, ok := c.Symbols[stmt.Declare.Identifier]; ok && existing.ProcName == "" {
+
+		switch cmd := stmt.Command.(type) {
+		case Declare:
+			if existing, ok := c.Symbols[cmd.Identifier]; ok && existing.ProcName == "" {
 				return c.Errorf("", "duplicate declaration of %s (first at %s)",
-					stmt.Declare.Identifier, existing.Identifier)
+					cmd.Identifier, existing.Identifier)
 			}
-			c.Symbols[stmt.Declare.Identifier] = stmt.Declare
-		}
-		if stmt.Task != nil {
-			name := stmt.Task.Name.Name
+			c.Symbols[cmd.Identifier] = cmd
+
+		case Task:
+			name := cmd.Name.Name
 			if _, ok := c.Tasks[name]; ok {
 				return c.Errorf("", "duplicate task %q", name)
 			}
 			idx := len(c.TaskDefs)
 			c.Tasks[name] = idx
-			c.TaskDefs = append(c.TaskDefs, stmt.Task)
-		}
-		if stmt.Procedure != nil {
-			proc := stmt.Procedure
+			c.TaskDefs = append(c.TaskDefs, cmd)
+
+		case Procedure:
+			proc := cmd
 			// Store procedure definition for call-site lookup.
 			c.Procedures[proc.Name.Name] = proc
 			// Register procedure name so it can be used in call expressions.
 			if _, ok := c.Symbols[Identifier(proc.Name.Name)]; !ok {
-				c.Symbols[Identifier(proc.Name.Name)] = &Declare{
+				c.Symbols[Identifier(proc.Name.Name)] = Declare{
 					Identifier: Identifier(proc.Name.Name),
 					Type:       Type{Predeclared: PredeclaredWord},
 				}
 			}
 			// Create per-procedure symbol map.
-			pm := make(map[Identifier]*Declare)
+			pm := make(map[Identifier]Declare)
 			dup := func(name Identifier) error {
 				if _, ok := pm[name]; ok {
 					return c.Errorf("", "duplicate parameter %q in procedure %s",
@@ -115,7 +115,7 @@ func (p Program) Check(c *Checker) error {
 					ptype = proc.ParamTypes[i]
 				}
 				isRef := ptype.Record != nil || ptype.Predeclared == PredeclaredData
-				d := &Declare{
+				d := Declare{
 					Identifier: param,
 					Type:       ptype,
 					ParamRef:   isRef,
@@ -130,12 +130,13 @@ func (p Program) Check(c *Checker) error {
 						local.Identifier, proc.Name.Name)
 				}
 				local.ProcName = proc.Name.Name
-				pm[local.Identifier] = &local
-				c.Symbols[local.Identifier] = &local
+				pm[local.Identifier] = local
+				c.Symbols[local.Identifier] = local
 			}
 			c.procSymbols[proc.Name.Name] = pm
 		}
 	}
+
 	// Second pass: check all statements.
 	for _, stmt := range p.Statements {
 		if err := stmt.Check(c); err != nil {
@@ -146,40 +147,39 @@ func (p Program) Check(c *Checker) error {
 }
 
 func (s Statement) Check(c *Checker) error {
-	switch {
-	case s.If != nil:
-		return s.If.Check(c)
-	case s.Let != nil:
-		return s.Let.Check(c)
-	case s.Group != nil:
-		return s.Group.Check(c)
-	case s.Procedure != nil:
-		return s.Procedure.Check(c)
-	case s.Output != nil:
-		return s.Output.Check(c)
-	case s.Call != nil:
-		return s.Call.Check(c)
-	case s.GoTo != nil:
-	case s.Constant != nil:
-	case s.Declare != nil:
-	case s.Define != nil:
-		return s.Define.Check(c)
-	case s.Data != nil:
-	case s.Return != nil:
-		return s.Return.Check(c)
-	case s.Halt != nil:
-	case s.Enable != nil:
-	case s.Disable != nil:
-	case s.Task != nil:
-		return s.Task.Check(c)
-	case s.Suspend != nil:
-		return s.Suspend.Check(c)
-	case s.Resume != nil:
-		return s.Resume.Check(c)
-	case s.Sleep != nil:
-		return s.Sleep.Check(c)
-	case s.Yield != nil:
-	case s.Label != nil:
+	switch cmd := s.Command.(type) {
+	case If:
+		return cmd.Check(c)
+	case Let:
+		return cmd.Check(c)
+	case Group:
+		return cmd.Check(c)
+	case Procedure:
+		return cmd.Check(c)
+	case Output:
+		return cmd.Check(c)
+	case Call:
+		return cmd.Check(c)
+	case GoTo:
+	case Constant:
+	case Declare:
+	case Define:
+		return cmd.Check(c)
+	case Data:
+	case Return:
+		return cmd.Check(c)
+	case Halt:
+	case Enable:
+	case Disable:
+	case Task:
+		return cmd.Check(c)
+	case Suspend:
+		return s.Check(c)
+	case Resume:
+		return s.Check(c)
+	case Sleep:
+		return s.Check(c)
+	case Yield:
 	}
 	return nil
 }
@@ -364,8 +364,8 @@ func (r *Reference) Check(c *Checker) error {
 	if r.Identifier == "" {
 		return nil
 	}
-	d := c.lookup(r.Identifier)
-	if d == nil {
+	d, ok := c.lookup(r.Identifier)
+	if !ok {
 		return c.Errorf("", "undeclared variable %q", r.Identifier)
 	}
 	for _, sub := range r.Subscripts {

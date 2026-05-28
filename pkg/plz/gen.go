@@ -228,28 +228,13 @@ func (p Program) Gen(g *Gen) error {
 	g.Checker = c
 	g.procFrame = make(map[string]int)
 
-	// First pass: allocate frames for non-REENTRANT procedures.
-	for _, stmt := range p.Statements {
-		if stmt.Procedure != nil && !stmt.Procedure.Reentrant {
-			proc := stmt.Procedure
-			localsSize := 0
-			for _, local := range proc.Locals {
-				localsSize += localDeclareSize(local)
-			}
-			total := totalParamSize(proc) + localsSize
-			if total > 0 {
-				g.procFrame[proc.Name.Name] = g.Heap
-				g.Heap += total
-			}
-		}
-	}
-
 	// Emit procedure frame storage and parameter/locals consts first (must precede use).
 	for _, stmt := range p.Statements {
-		if stmt.Procedure == nil || stmt.Procedure.Reentrant {
+		proc, ok := stmt.Command.(Procedure)
+		if !ok && proc.Reentrant {
 			continue
 		}
-		proc := stmt.Procedure
+
 		addr, ok := g.procFrame[proc.Name.Name]
 		if !ok {
 			continue
@@ -259,7 +244,7 @@ func (p Program) Gen(g *Gen) error {
 		for _, local := range proc.Locals {
 			localsSize += localDeclareSize(local)
 		}
-		total := totalParamSize(proc) + localsSize
+		total := proc.totalParamSize() + localsSize
 		if total == 0 {
 			continue
 		}
@@ -270,11 +255,11 @@ func (p Program) Gen(g *Gen) error {
 		g.Emit("\n")
 		for i, param := range proc.Parameters {
 			unique := fmt.Sprintf("_plz_%s_%s", proc.Name.Name, param)
-			g.Emitf("\tconst %s = _plz_%s_frame+%d\n", unique, proc.Name.Name, paramOffset(proc, i))
+			g.Emitf("\tconst %s = _plz_%s_frame+%d\n", unique, proc.Name.Name, proc.paramOffset(i))
 			g.symName[proc.Name.Name+":"+string(param)] = unique
 		}
 		// Emit const mappings for local variables.
-		off := totalParamSize(proc)
+		off := proc.totalParamSize()
 		for _, local := range proc.Locals {
 			unique := fmt.Sprintf("_plz_%s_%s", proc.Name.Name, local.Identifier)
 			g.Emitf("\tconst %s = _plz_%s_frame+%d\n", unique, proc.Name.Name, off)
@@ -313,22 +298,27 @@ func (p Program) Gen(g *Gen) error {
 		g.Emitln("\tcall _plz_scheduler")
 	}
 
-	var declares []*Declare
-	var procedures []*Procedure
+	var declares []Declare
+	var procedures []Procedure
 	for _, statement := range p.Statements {
-		if statement.Declare != nil {
-			declares = append(declares, statement.Declare)
+		switch cmd := statement.Command.(type) {
+		case Declare:
+			declares = append(declares, cmd)
 			continue
-		}
-		if statement.Procedure != nil {
-			procedures = append(procedures, statement.Procedure)
+		case Procedure:
+			procedures = append(procedures, cmd)
 			continue
-		}
-		if statement.Task != nil {
+		case Task:
 			continue // emitted separately
-		}
-		if err := statement.Gen(g); err != nil {
-			return err
+		default:
+			genner, ok := (cmd.(interface{ Gen(*Gen) error }))
+			if ok {
+				if err := genner.Gen(g); err != nil {
+					return err
+				}
+			} else {
+				g.Emitf("// statement not implemented: %v\n", statement)
+			}
 		}
 	}
 
@@ -365,11 +355,30 @@ func (p Program) Gen(g *Gen) error {
 		g.Heap += 131 // current_task(1) + sch_sp(2) + tcbs(128)
 	}
 
+	// Allocate frames for non-REENTRANT procedures in RAM.
+	for _, stmt := range p.Statements {
+		proc, ok := stmt.Command.(Procedure)
+		if !ok || proc.Reentrant {
+			continue
+		}
+
+		localsSize := 0
+		for _, local := range proc.Locals {
+			localsSize += localDeclareSize(local)
+		}
+		total := proc.totalParamSize() + localsSize
+		if total > 0 {
+			g.procFrame[proc.Name.Name] = g.Heap
+			g.Heap += total
+		}
+	}
+
 	// Emit declarations at the end.
 	for _, d := range declares {
 		g.Emitln("")
 		d.Gen(g)
 	}
+
 	return nil
 }
 
@@ -377,50 +386,15 @@ func (s Statement) Gen(g *Gen) error {
 	if s.Label != nil {
 		s.Label.Gen(g)
 	}
-	switch {
-	case s.If != nil:
-		return s.If.Gen(g)
-	case s.Let != nil:
-		return s.Let.Gen(g)
-	case s.Constant != nil:
-		return s.Constant.Gen(g)
-	case s.Declare != nil:
-		return s.Declare.Gen(g)
-	case s.Group != nil:
-		return s.Group.Gen(g)
-	case s.Procedure != nil:
-		return s.Procedure.Gen(g)
-	case s.Return != nil:
-		return s.Return.Gen(g)
-	case s.Call != nil:
-		return s.Call.Gen(g)
-	case s.GoTo != nil:
-		return s.GoTo.Gen(g)
-	case s.Halt != nil:
-		return s.Halt.Gen(g)
-	case s.Enable != nil:
-		return s.Enable.Gen(g)
-	case s.Data != nil:
-		return s.Data.Gen(g)
-	case s.Define != nil:
-		return nil // compile-time only
-	case s.Disable != nil:
-		return s.Disable.Gen(g)
-	case s.Output != nil:
-		return s.Output.Gen(g)
-	case s.Suspend != nil:
-		return s.Suspend.Gen(g)
-	case s.Resume != nil:
-		return s.Resume.Gen(g)
-	case s.Sleep != nil:
-		return s.Sleep.Gen(g)
-	case s.Yield != nil:
-		return s.Yield.Gen(g)
-	case s.Task != nil:
-		return s.Task.Gen(g)
-	default:
+	genner, ok := (s.Command.(interface{ Gen(*Gen) error }))
+	if ok {
+		if err := genner.Gen(g); err != nil {
+			return err
+		}
+	} else {
 		g.Emitf("// statement not implemented: %v\n", s)
 	}
+
 	return nil
 }
 
@@ -864,10 +838,10 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 	args := operands[1:]
 
 	// Look up the procedure definition for param type info.
-	proc, _ := g.Checker.Procedures[name]
+	proc, ok := g.Checker.Procedures[name]
 
 	genCallArg := func(i int) error {
-		if proc != nil && i < len(proc.ParamTypes) {
+		if ok && i < len(proc.ParamTypes) {
 			pt := proc.ParamTypes[i]
 			if pt.Record != nil || pt.Predeclared == PredeclaredData {
 				refArg := args[i].Reference
@@ -906,8 +880,8 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 				if err := genCallArg(i); err != nil {
 					return err
 				}
-				off := paramOffset(proc, i)
-				if proc != nil && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
+				off := proc.paramOffset(i)
+				if ok && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
 					g.Emitf("\tld a, l\n\tld (_plz_%s_frame+%d), a\n", name, off)
 				} else {
 					g.Emitf("\tld (_plz_%s_frame+%d), hl\n", name, off)
@@ -919,7 +893,7 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 					return err
 				}
 				psize := 2
-				if proc != nil && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
+				if ok && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
 					psize = 1
 				}
 				totalExtra += psize
@@ -964,7 +938,7 @@ func (s Let) Gen(g *Gen) error {
 	}
 
 	// Determine base decl and initial element size.
-	var d *Declare
+	var d Declare
 	if g.Checker != nil {
 		if dd, ok := g.Checker.Symbols[s.Identifier]; ok {
 			d = dd
@@ -999,7 +973,7 @@ func (s Let) Gen(g *Gen) error {
 		//   rec.arr[i] -> field accesses the base record, subscripts index the result array
 		// Distinguish: if the first field has an Array type, it's rec.arr[i].
 		isArrOfRecords := true
-		if d != nil && d.Type.Record != nil {
+		if d.Type.Record != nil {
 			fname := s.Fields[0]
 			for _, f := range d.Type.Record.Fields {
 				if f.Identifier == fname && f.Type.Array != nil {
@@ -1010,7 +984,7 @@ func (s Let) Gen(g *Gen) error {
 		}
 		if isArrOfRecords {
 			// arr[i].x: array of records, field write.
-			if d == nil || d.Type.Record == nil {
+			if d.Type.Record == nil {
 				return fmt.Errorf("let: %s is not an array of records", s.Identifier)
 			}
 			recSize := g.elemSize(s.Identifier)
@@ -1065,7 +1039,7 @@ func (s Let) Gen(g *Gen) error {
 
 	if len(s.Fields) > 0 {
 		// Struct field store: s.field = rhs (possibly with subscripts if field is array).
-		if d == nil || d.Type.Record == nil {
+		if d.Type.Record == nil {
 			return fmt.Errorf("let: %s is not a struct", s.Identifier)
 		}
 		fname := s.Fields[0]
@@ -1128,7 +1102,7 @@ func (s Let) Gen(g *Gen) error {
 	// RHS already on stack from push at top of function.
 
 	elem := g.elemSize(s.Identifier)
-	if d != nil && d.ParamRef {
+	if d.ParamRef {
 		g.Emitf("\tld hl, (%s)\n", g.localSym(s.Identifier))
 	} else {
 		g.Emitf("\tld hl, %s\n", g.localSym(s.Identifier))
@@ -1202,10 +1176,10 @@ func (s Group) Gen(g *Gen) error {
 		n := g.nextLabel()
 		g.Emitf("_for_%d:\n", n)
 		// Compare var with end (hl = end - var)
-		g.Emitln("\tpop de")                                   // de = end, stack: [step]
-		g.Emitln("\tpush de")                                  // push back, stack: [step, end]
+		g.Emitln("\tpop de")                                               // de = end, stack: [step]
+		g.Emitln("\tpush de")                                              // push back, stack: [step, end]
 		g.Emitf("\tld hl, (%s)\n", g.localSym(s.For.Reference.Identifier)) // hl = var
-		g.Emitln("\tex de, hl")                                // hl = end, de = var
+		g.Emitln("\tex de, hl")                                            // hl = end, de = var
 		g.Emitln("\tor a")
 		g.Emitln("\tsbc hl, de")        // hl = end - var
 		g.Emitf("\tjr c, _end_%d\n", n) // end < var → exit
@@ -1250,8 +1224,8 @@ func (s Procedure) Gen(g *Gen) error {
 	if !s.Reentrant {
 		if _, ok := g.procFrame[s.Name.Name]; ok && len(s.Parameters) > 0 {
 			// Save param1 (HL) to frame slot 0.
-			off0 := paramOffset(&s, 0)
-			p0size := paramByteSize(&s, 0)
+			off0 := s.paramOffset(0)
+			p0size := s.paramByteSize(0)
 			if p0size == 1 {
 				g.Emitf("\tld a, l\n\tld (_plz_%s_frame+%d), a\n", s.Name.Name, off0)
 			} else {
@@ -1259,8 +1233,8 @@ func (s Procedure) Gen(g *Gen) error {
 			}
 			if len(s.Parameters) > 1 {
 				// Save param2 (DE) to frame slot.
-				off1 := paramOffset(&s, 1)
-				p1size := paramByteSize(&s, 1)
+				off1 := s.paramOffset(1)
+				p1size := s.paramByteSize(1)
 				if p1size == 1 {
 					g.Emitf("\tld a, e\n\tld (_plz_%s_frame+%d), a\n", s.Name.Name, off1)
 				} else {
@@ -1283,7 +1257,9 @@ func (s Procedure) Gen(g *Gen) error {
 	g.procName = ""
 
 	// Implicit ret if the last statement is not a return.
-	if len(s.Statements) == 0 || s.Statements[len(s.Statements)-1].Return == nil {
+	if len(s.Statements) == 0 {
+		g.Emitln("\tret")
+	} else if _, ok := s.Statements[len(s.Statements)-1].Command.(Return); ok {
 		g.Emitln("\tret")
 	}
 	return nil
@@ -1336,7 +1312,7 @@ func (s Call) Gen(g *Gen) error {
 	// genCallArg emits code to load the i-th argument into HL.
 	// For RECORD params it loads the ADDRESS (not the value).
 	genCallArg := func(i int) error {
-		if proc != nil && i < len(proc.ParamTypes) {
+		if i < len(proc.ParamTypes) {
 			pt := proc.ParamTypes[i]
 			if pt.Record != nil || pt.Predeclared == PredeclaredData {
 				// Load address of record or DATA argument.
@@ -1377,8 +1353,8 @@ func (s Call) Gen(g *Gen) error {
 				if err := genCallArg(i); err != nil {
 					return err
 				}
-				off := paramOffset(proc, i)
-				if proc != nil && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
+				off := proc.paramOffset(i)
+				if i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
 					g.Emitf("\tld a, l\n\tld (_plz_%s_frame+%d), a\n", name, off)
 				} else {
 					g.Emitf("\tld (_plz_%s_frame+%d), hl\n", name, off)
@@ -1391,7 +1367,7 @@ func (s Call) Gen(g *Gen) error {
 					return err
 				}
 				psize := 2
-				if proc != nil && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
+				if i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared == PredeclaredByte {
 					psize = 1
 				}
 				totalExtra += psize
@@ -1476,39 +1452,6 @@ func (s Output) Gen(g *Gen) error {
 	g.Emitf("\tld a, l\n")
 	g.Emitf("\tout (%d), a\n", s.Port)
 	return nil
-}
-
-// paramByteSize returns the storage size (in bytes) for the i-th parameter of proc.
-// Records are passed by reference so they occupy 2 bytes (a pointer) in the frame.
-func paramByteSize(proc *Procedure, i int) int {
-	if i < len(proc.ParamTypes) {
-		if proc.ParamTypes[i].Predeclared == PredeclaredByte {
-			return 1
-		}
-		// Records and arrays are passed by reference → 2-byte pointer.
-		if proc.ParamTypes[i].Record != nil {
-			return 2
-		}
-	}
-	return 2
-}
-
-// paramOffset returns the byte offset of the i-th parameter within the procedure frame.
-func paramOffset(proc *Procedure, i int) int {
-	off := 0
-	for j := 0; j < i; j++ {
-		off += paramByteSize(proc, j)
-	}
-	return off
-}
-
-// totalParamSize returns the total byte size of all parameters for a procedure.
-func totalParamSize(proc *Procedure) int {
-	total := 0
-	for i := range proc.Parameters {
-		total += paramByteSize(proc, i)
-	}
-	return total
 }
 
 // localDeclareSize returns the byte size needed for a local variable declaration.
@@ -1634,8 +1577,8 @@ func (s Sleep) Gen(g *Gen) error {
 	g.Emitln("\tadd hl, hl")
 	g.Emitln("\tld de, _plz_tcbs+2")
 	g.Emitln("\tadd hl, de")
-	g.Emitln("\tld (hl), 2")   // state = SLEEPING
-	g.Emitln("\tinc hl")        // HL = &sleep counter
+	g.Emitln("\tld (hl), 2") // state = SLEEPING
+	g.Emitln("\tinc hl")     // HL = &sleep counter
 	g.Emitln("\tpop af")
 	g.Emitln("\tld (hl), a")
 	g.Emitln("\tcall _plz_scheduler")

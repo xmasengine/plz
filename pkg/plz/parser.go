@@ -191,75 +191,98 @@ func (s *Statement) Parse(parser *Parser) error {
 		}
 	}
 	tok := parser.Peek()
+	var err error
+
 	switch tok.TokenKind {
 	case KeywordCall:
-		s.Call = &Call{}
-		return s.Call.Parse(parser)
+		cmd := Call{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordConstant:
-		s.Constant = &Constant{}
-		return s.Constant.Parse(parser)
+		cmd := Constant{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordData:
-		s.Data = &Data{}
-		return s.Data.Parse(parser)
+		cmd := Data{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordDeclare:
-		s.Declare = &Declare{}
-		return s.Declare.Parse(parser)
+		cmd := Declare{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordDefine:
-		s.Define = &Define{}
-		return s.Define.Parse(parser)
+		cmd := Define{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordDisable:
-		s.Disable = &Disable{}
-		return s.Disable.Parse(parser)
+		cmd := Disable{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordEnable:
-		s.Enable = &Enable{}
-		return s.Enable.Parse(parser)
+		cmd := Enable{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordGoTo:
-		s.GoTo = &GoTo{}
-		return s.GoTo.Parse(parser)
+		cmd := GoTo{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordHalt:
-		s.Halt = &Halt{}
-		return s.Halt.Parse(parser)
+		cmd := Halt{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordIf:
-		s.If = &If{}
-		return s.If.Parse(parser)
+		cmd := If{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordDo, KeywordWhile, KeywordFor, KeywordCase:
-		s.Group = &Group{}
-		return s.Group.Parse(parser)
+		cmd := Group{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordLet:
-		s.Let = &Let{}
-		return s.Let.Parse(parser)
+		cmd := Let{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordOutput:
-		s.Output = &Output{}
-		return s.Output.Parse(parser)
+		cmd := Output{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordInterrupt, KeywordNMI:
-		s.Procedure = &Procedure{}
-		return s.Procedure.Parse(parser)
+		cmd := Procedure{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordProc:
-		s.Procedure = &Procedure{}
-		return s.Procedure.Parse(parser)
+		cmd := Procedure{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordReturn:
-		s.Return = &Return{}
-		return s.Return.Parse(parser)
+		cmd := Return{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordTask:
-		s.Task = &Task{}
-		return s.Task.Parse(parser)
+		cmd := Task{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordSuspend:
-		s.Suspend = &Suspend{}
-		return s.Suspend.Parse(parser)
+		cmd := Suspend{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordResume:
-		s.Resume = &Resume{}
-		return s.Resume.Parse(parser)
+		cmd := Resume{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordSleep:
-		s.Sleep = &Sleep{}
-		return s.Sleep.Parse(parser)
+		cmd := Sleep{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordYield:
-		s.Yield = &Yield{}
-		return s.Yield.Parse(parser)
+		cmd := Yield{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	default:
 		return tok.Errorf("Statement: unexpected token %v", tok)
 	}
 
-	return nil
+	return err
 }
 
 // Returns true if we have a label false if not. May only peek, peekAt or Have.
@@ -385,7 +408,6 @@ func (r *Reference) Parse(parser *Parser) error {
 		}
 	}
 }
-
 
 func (g *Disable) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordDisable)
@@ -1028,8 +1050,8 @@ func (p *Procedure) Parse(parser *Parser) error {
 		if err := s.Parse(parser); err != nil {
 			return err
 		}
-		if s.Declare != nil {
-			p.Locals = append(p.Locals, *s.Declare)
+		if decl, ok := s.Command.(Declare); ok {
+			p.Locals = append(p.Locals, decl)
 		}
 		p.Statements = append(p.Statements, s)
 		parser.Skip(TokenKind(';'))

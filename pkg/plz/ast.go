@@ -11,28 +11,34 @@ type Program struct {
 	Statements []Statement
 }
 
+type Commander interface {
+	Command() Commander
+}
+
+func (c If) Command() Commander        { return c }
+func (c Constant) Command() Commander  { return c }
+func (c Data) Command() Commander      { return c }
+func (c Declare) Command() Commander   { return c }
+func (c Define) Command() Commander    { return c }
+func (c Group) Command() Commander     { return c }
+func (c Let) Command() Commander       { return c }
+func (c Procedure) Command() Commander { return c }
+func (c Return) Command() Commander    { return c }
+func (c Call) Command() Commander      { return c }
+func (c GoTo) Command() Commander      { return c }
+func (c Halt) Command() Commander      { return c }
+func (c Enable) Command() Commander    { return c }
+func (c Disable) Command() Commander   { return c }
+func (c Output) Command() Commander    { return c }
+func (c Task) Command() Commander      { return c }
+func (c Suspend) Command() Commander   { return c }
+func (c Resume) Command() Commander    { return c }
+func (c Sleep) Command() Commander     { return c }
+func (c Yield) Command() Commander     { return c }
+
 type Statement struct {
-	Label     *Label
-	If        *If
-	Constant  *Constant
-	Data      *Data
-	Declare   *Declare
-	Define    *Define
-	Group     *Group
-	Let       *Let
-	Procedure *Procedure
-	Return    *Return
-	Call      *Call
-	GoTo      *GoTo
-	Halt      *Halt
-	Enable    *Enable
-	Disable   *Disable
-	Output    *Output
-	Task      *Task
-	Suspend   *Suspend
-	Resume    *Resume
-	Sleep     *Sleep
-	Yield     *Yield
+	Label   *Label    // optional label
+	Command Commander // a statement is one of the commands
 }
 
 type Enable struct {
@@ -338,4 +344,37 @@ type Sleep struct {
 
 // Yield control: YIELD
 type Yield struct {
+}
+
+// totalParamSize returns the total byte size of all parameters for a procedure.
+func (p Procedure) totalParamSize() int {
+	total := 0
+	for i := range p.Parameters {
+		total += p.paramByteSize(i)
+	}
+	return total
+}
+
+// paramByteSize returns the storage size (in bytes) for the i-th parameter of proc.
+// Records are passed by reference so they occupy 2 bytes (a pointer) in the frame.
+func (p Procedure) paramByteSize(i int) int {
+	if i < len(p.ParamTypes) {
+		if p.ParamTypes[i].Predeclared == PredeclaredByte {
+			return 1
+		}
+		// Records and arrays are passed by reference → 2-byte pointer.
+		if p.ParamTypes[i].Record != nil {
+			return 2
+		}
+	}
+	return 2
+}
+
+// paramOffset returns the byte offset of the i-th parameter within the procedure frame.
+func (p Procedure) paramOffset(i int) int {
+	off := 0
+	for j := 0; j < i; j++ {
+		off += p.paramByteSize(j)
+	}
+	return off
 }
