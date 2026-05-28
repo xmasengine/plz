@@ -1,14 +1,25 @@
 package plz
 
-type Node interface {
-	Parse(*Parser) error
-	Check(*Checker) error
-	Gen(*Gen) error
-	Nodes() []Node
-}
-
 type Program struct {
 	Statements []Statement
+}
+
+type Parselet interface {
+	Parse(*Parser) error
+}
+
+type Checklet interface {
+	Check(*Checker) error
+}
+
+type Genlet interface {
+	Gen(*Gen) error
+}
+
+type Node interface {
+	Parselet
+	Checklet
+	Genlet
 }
 
 type Commander interface {

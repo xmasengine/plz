@@ -147,41 +147,11 @@ func (p Program) Check(c *Checker) error {
 }
 
 func (s Statement) Check(c *Checker) error {
-	switch cmd := s.Command.(type) {
-	case If:
-		return cmd.Check(c)
-	case Let:
-		return cmd.Check(c)
-	case Group:
-		return cmd.Check(c)
-	case Procedure:
-		return cmd.Check(c)
-	case Output:
-		return cmd.Check(c)
-	case Call:
-		return cmd.Check(c)
-	case GoTo:
-	case Constant:
-	case Declare:
-	case Define:
-		return cmd.Check(c)
-	case Data:
-	case Return:
-		return cmd.Check(c)
-	case Halt:
-	case Enable:
-	case Disable:
-	case Task:
-		return cmd.Check(c)
-	case Suspend:
-		return s.Check(c)
-	case Resume:
-		return s.Check(c)
-	case Sleep:
-		return s.Check(c)
-	case Yield:
+	checklet, ok := s.Command.(Checklet)
+	if ok {
+		return checklet.Check(c)
 	}
-	return nil
+	return nil // no check implemented, not needed
 }
 
 func (s Define) Check(c *Checker) error {

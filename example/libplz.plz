@@ -38,9 +38,9 @@ END
 
 // Clear the screen (fill tile map at 0x3800 with space character).
 PROCEDURE cls()
-  DECLARE i WORD
+  DECLARE ii WORD
   CALL set_write_addr(0x3800)
-  FOR i = 0 TO 0x5FF DO
+  FOR ii = 0 TO 0x5FF DO
     OUTPUT 0xBE 0x20
   END
 END
