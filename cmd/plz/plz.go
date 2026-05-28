@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -17,6 +18,20 @@ import (
 	"github.com/xmasengine/plz/pkg/z80/emu"
 	asm "github.com/xmasengine/plz/pkg/z80asm"
 )
+
+type StringList []string
+
+func (s *StringList) String() string {
+	return strings.Join(*s, ":")
+}
+
+func (s *StringList) Set(to string) error {
+	parts := strings.Split(to, ":")
+	*s = append(*s, parts...)
+	return nil
+}
+
+var _ flag.Value = &StringList{}
 
 type arguments struct {
 	Output     string
@@ -32,7 +47,7 @@ type arguments struct {
 		Run       bool
 		Help      bool
 	}
-	IncludeDirs string
+	IncludeDirs StringList
 	Sources     []string
 	Timeout     time.Duration
 	Ctx         context.Context
@@ -90,7 +105,7 @@ func main() {
 	flag.IntVar(&args.OutputPort, "p", 0, "output port for emulation")
 	flag.StringVar(&args.Input, "i", "", "input file name")
 	flag.StringVar(&args.Format, "f", "bin", "output file format")
-	flag.StringVar(&args.IncludeDirs, "d", "", "inclucde directories")
+	flag.Var(&args.IncludeDirs, "d", "include directories")
 	flag.IntVar(&args.InputPort, "q", 0, "input port for emulation")
 	flag.Parse()
 	if args.Mode.Help {
