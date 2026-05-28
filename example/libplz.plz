@@ -1,0 +1,200 @@
+// libplz.plz — PLZ Standard Library for Sega Master System
+// Provides console hardware access through PLZ procedures.
+
+// ============================================================
+// VDP (Video Display Processor) routines
+// Ports: 0xBE = data, 0xBF = control/status
+// ============================================================
+
+// Write a VDP register.
+PROCEDURE write_vdp_reg(reg BYTE, value BYTE)
+  OUTPUT 0xBF value
+  OUTPUT 0xBF reg | 0x80
+END
+
+// Set VRAM write address (for subsequent writes to port 0xBE).
+PROCEDURE set_write_addr(addr WORD)
+  OUTPUT 0xBF addr & 0xFF
+  OUTPUT 0xBF (addr / 256) | 0x40
+END
+
+// Set VRAM read address (for subsequent reads from port 0xBE).
+PROCEDURE set_read_addr(addr WORD)
+  OUTPUT 0xBF addr & 0xFF
+  OUTPUT 0xBF (addr / 256) & 0x3F
+END
+
+// Write a byte to VRAM at the given address.
+PROCEDURE write_vram(addr WORD, value BYTE)
+  CALL set_write_addr(addr)
+  OUTPUT 0xBE value
+END
+
+// Read a byte from VRAM at the given address.
+PROCEDURE read_vram(addr WORD) BYTE
+  CALL set_read_addr(addr)
+  RETURN INPUT(0xBE)
+END
+
+// Clear the screen (fill tile map at 0x3800 with space character).
+PROCEDURE cls()
+  DECLARE i WORD
+  CALL set_write_addr(0x3800)
+  FOR i = 0 TO 0x5FF DO
+    OUTPUT 0xBE 0x20
+  END
+END
+
+// Fill a region of VRAM with a byte value.
+PROCEDURE fill_vram(addr WORD, value BYTE, count WORD)
+  DECLARE idx WORD
+  CALL set_write_addr(addr)
+  FOR idx = 0 TO count - 1 DO
+    OUTPUT 0xBE value
+  END
+END
+
+// Copy count bytes from RAM to VRAM.
+// Used as the building block for tile/sprite/palette loading.
+PROCEDURE copy_vram(dest WORD, source DATA, count WORD)
+  DECLARE ii WORD
+  CALL set_write_addr(dest)
+  FOR ii = 0 TO count - 1 DO
+    OUTPUT 0xBE source[ii]
+  END
+END
+
+// Load count tiles (each 32 bytes) into the pattern table starting at tile index idx.
+// Pattern table base is 0x0000 in SMS mode 4; each 8x8 tile occupies 32 bytes (4 bpp).
+// Example: CALL load_tiles(128, my_tiles, 16)
+PROCEDURE load_tiles(idx BYTE, tiles DATA, count BYTE)
+  CALL copy_vram(idx << 5, tiles, count << 5)
+END
+
+// Load count sprite patterns into the sprite pattern table starting at sprite index idx.
+// Sprite pattern base is at 0x2000 in SMS mode 4.
+// Each sprite occupies 32 bytes; see load_tiles for details.
+PROCEDURE load_sprites(idx BYTE, sprites DATA, count BYTE)
+  CALL copy_vram(0x2000 + (idx << 5), sprites, count << 5)
+END
+
+// Load count palette entries from DATA to the SMS palette area at VRAM 0xC000.
+// Each palette entry is 2 bytes. The DATA should contain 2*count bytes.
+PROCEDURE load_palette(pal DATA, count BYTE)
+  CALL copy_vram(0xC000, pal, count << 1)
+END
+
+// ============================================================
+// Screen control
+// ============================================================
+
+PROCEDURE disable_screen()
+  CALL write_vdp_reg(1, 0x80)
+END
+
+PROCEDURE enable_screen()
+  CALL write_vdp_reg(1, 0xE0)
+END
+
+// ============================================================
+// Screen mode initialization (SMS Mode 4)
+// Sets up VDP for 32x24 tile mode with sprite support.
+// Name table at 0x3800, sprite table at 0x3F00, pattern at 0x0000.
+// ============================================================
+
+PROCEDURE screen_mode_4()
+  CALL disable_screen()
+  CALL write_vdp_reg(0, 0x04)   // Reg 0: Mode 4
+  CALL write_vdp_reg(1, 0x82)   // Reg 1: Display off, VBlank IRQ, 16K
+  CALL write_vdp_reg(2, 0x0E)   // Reg 2: Name table at 0x3800
+  CALL write_vdp_reg(3, 0xFF)   // Reg 3: Reserved (set $FF)
+  CALL write_vdp_reg(4, 0x07)   // Reg 4: Reserved (set $07)
+  CALL write_vdp_reg(5, 0x7E)   // Reg 5: Sprite table at 0x3F00
+  CALL write_vdp_reg(6, 0x00)   // Reg 6: Sprite pattern base at 0x0000
+  CALL write_vdp_reg(7, 0x00)   // Reg 7: Border color
+  CALL write_vdp_reg(8, 0x00)   // Reg 8: Background X scroll
+  CALL write_vdp_reg(9, 0x00)   // Reg 9: Background Y scroll
+  CALL fill_vram(0x3F00, 0xE0, 256) // Hide all sprites off-screen
+  CALL cls()
+  CALL enable_screen()
+END
+
+// ============================================================
+// Palette
+// SMS palette resides in VRAM at 0xC000-0xC01F (16 entries, 2 bytes each).
+// Each entry is a 6-bit RGB value: 0bbbbbgggggrrrrr
+// ============================================================
+
+// Load a single palette entry.
+PROCEDURE load_palette_entry(entry BYTE, color WORD)
+  CALL set_write_addr(0xC000 + (entry << 1))
+  OUTPUT 0xBE color & 0xFF
+  OUTPUT 0xBE color >> 8
+END
+
+// Load the default SMS palette (16-color TMS-style palette).
+PROCEDURE load_palette_default()
+  CALL load_palette_entry(0, 0x0000)  // Transparent
+  CALL load_palette_entry(1, 0x0000)  // Black
+  CALL load_palette_entry(2, 0x002B)  // Green
+  CALL load_palette_entry(3, 0x005F)  // Light green
+  CALL load_palette_entry(4, 0x0B00)  // Blue
+  CALL load_palette_entry(5, 0x0F00)  // Light blue
+  CALL load_palette_entry(6, 0x0B15)  // Dark red
+  CALL load_palette_entry(7, 0x0B3F)  // Cyan
+  CALL load_palette_entry(8, 0x0D80)  // Red
+  CALL load_palette_entry(9, 0x0DB6)  // Light red
+  CALL load_palette_entry(10, 0x0AD0) // Yellow
+  CALL load_palette_entry(11, 0x0B55) // Pastel green
+  CALL load_palette_entry(12, 0x0660) // Dark blue
+  CALL load_palette_entry(13, 0x0D92) // Pink
+  CALL load_palette_entry(14, 0x0AD2) // Light yellow
+  CALL load_palette_entry(15, 0x0FFF) // White
+END
+
+// ============================================================
+// Controller input (SMS ports)
+// Port 0x3F: controller select
+// Port 0xDC: joypad port 1, Port 0xDD: joypad port 2
+// ============================================================
+
+// Read joypad 1 state. Returns bitmask of pressed buttons.
+// Bits: 0=Up, 1=Down, 2=Left, 3=Right, 4=B1, 5=B2
+PROCEDURE read_joy1() BYTE
+  OUTPUT 0x3F 0x40
+  RETURN INPUT(0xDC) ^ 0xFF
+END
+
+PROCEDURE read_joy2() BYTE
+  OUTPUT 0x3F 0x40
+  RETURN INPUT(0xDD) ^ 0xFF
+END
+
+// ============================================================
+// Timing / Frame sync
+// ============================================================
+
+// Wait for vertical blanking interval (start of next frame).
+PROCEDURE wait_vsync()
+  WHILE (INPUT(0xBF) & 0x80) == 0 DO
+  END
+END
+
+// ============================================================
+// Text output
+// Cursor stores VRAM address for the next character.
+// Tile map base = 0x3800, 32 cols x 24 rows, 2 bytes per tile.
+// ============================================================
+
+DECLARE cursor WORD
+
+// Print a single character at cursor, advance cursor.
+PROCEDURE print_char(ch BYTE)
+  CALL write_vram(cursor, ch)
+  LET cursor = cursor + 2
+END
+
+// Set cursor to screen column/row (0-indexed).
+PROCEDURE set_cursor(col BYTE, row BYTE)
+  LET cursor = 0x3800 + (row * 32 + col) * 2
+END

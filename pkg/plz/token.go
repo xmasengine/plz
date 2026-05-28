@@ -50,6 +50,15 @@ const (
 	KeywordOf
 	KeywordDefine
 	KeywordType
+	KeywordInclude
+	KeywordInterrupt
+	KeywordNMI
+	KeywordTask
+	KeywordPriority
+	KeywordSuspend
+	KeywordSleep
+	KeywordYield
+	KeywordResume
 )
 
 func (t TokenKind) String() string {
@@ -93,6 +102,15 @@ var Keywords = map[string]TokenKind{
 	"DEFINE":   KeywordDefine,
 	"TYPE":     KeywordType,
 	"WORD":     KeywordWord,
+	"INCLUDE":  KeywordInclude,
+	"INTERRUPT": KeywordInterrupt,
+	"NMI":     KeywordNMI,
+	"TASK":    KeywordTask,
+	"PRIORITY": KeywordPriority,
+	"SUSPEND": KeywordSuspend,
+	"SLEEP":   KeywordSleep,
+	"YIELD":   KeywordYield,
+	"RESUME":  KeywordResume,
 }
 
 type Token struct {
@@ -107,10 +125,24 @@ func (t Token) String() string {
 }
 
 func Scan(rd io.Reader) ([]Token, error) {
+	return scan(rd, "")
+}
+
+func ScanFile(name string) ([]Token, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return scan(f, name)
+}
+
+func scan(rd io.Reader, name string) ([]Token, error) {
 	var err error
 	var res []Token
 	s := &scanner.Scanner{}
 	s.Init(rd)
+	s.Position.Filename = name
 	s.Mode = scanner.ScanIdents |
 		scanner.ScanInts |
 		scanner.ScanChars |
@@ -161,13 +193,4 @@ func Scan(rd io.Reader) ([]Token, error) {
 		res = append(res, tok)
 	}
 	return res, nil
-}
-
-func ScanFile(name string) ([]Token, error) {
-	f, err := os.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return Scan(f)
 }

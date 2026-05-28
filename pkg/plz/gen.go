@@ -11,9 +11,11 @@ type Gen struct {
 	Heap           int // Pointer to last allocated heap RAM memory.
 	label          int // counter for unique local labels
 	Checker        *Checker
-	procFrame      map[string]int // proc name → frame heap base addr
-	InProcedure    bool           // set when generating inside a procedure body
-	ProcReturnType Type           // return type of current procedure (for BYTE zero-extend in Return.Gen)
+	procFrame      map[string]int    // proc name → frame heap base addr
+	InProcedure    bool              // set when generating inside a procedure body
+	procName       string            // current procedure name (if InProcedure)
+	symName        map[string]string // "proc:ident" → "_plz_proc_ident" for param/local remapping
+	ProcReturnType Type              // return type of current procedure (for BYTE zero-extend in Return.Gen)
 }
 
 func NewGenFile(name string) (*Gen, error) {
@@ -33,8 +35,19 @@ func NewGenTmp() (*Gen, error) {
 }
 
 func NewGen(fout *os.File) *Gen {
-	res := &Gen{File: fout, Heap: HeapBase}
+	res := &Gen{File: fout, Heap: HeapBase, symName: make(map[string]string)}
 	return res
+}
+
+// localSym remaps a param/local identifier to its unique prefixed name
+// when generating code inside a procedure body.
+func (g *Gen) localSym(id Identifier) Identifier {
+	if g.procName != "" {
+		if name, ok := g.symName[g.procName+":"+string(id)]; ok {
+			return Identifier(name)
+		}
+	}
+	return id
 }
 
 func (g *Gen) Close() error {
@@ -256,12 +269,16 @@ func (p Program) Gen(g *Gen) error {
 		}
 		g.Emit("\n")
 		for i, param := range proc.Parameters {
-			g.Emitf("\tconst %s = _plz_%s_frame+%d\n", param, proc.Name.Name, paramOffset(proc, i))
+			unique := fmt.Sprintf("_plz_%s_%s", proc.Name.Name, param)
+			g.Emitf("\tconst %s = _plz_%s_frame+%d\n", unique, proc.Name.Name, paramOffset(proc, i))
+			g.symName[proc.Name.Name+":"+string(param)] = unique
 		}
 		// Emit const mappings for local variables.
 		off := totalParamSize(proc)
 		for _, local := range proc.Locals {
-			g.Emitf("\tconst %s = _plz_%s_frame+%d\n", local.Identifier, proc.Name.Name, off)
+			unique := fmt.Sprintf("_plz_%s_%s", proc.Name.Name, local.Identifier)
+			g.Emitf("\tconst %s = _plz_%s_frame+%d\n", unique, proc.Name.Name, off)
+			g.symName[proc.Name.Name+":"+string(local.Identifier)] = unique
 			off += localDeclareSize(local)
 		}
 	}
@@ -270,6 +287,31 @@ func (p Program) Gen(g *Gen) error {
 	g.Emitln("\tjp _plz_start")
 	g.Emit(RuntimeHeader)
 	g.Emitln("_plz_start:")
+
+	// Task initialization
+	if len(c.TaskDefs) > 0 {
+		g.Emitf("\tld hl, _plz_tcbs\n")
+		g.Emitf("\tld de, _plz_tcbs+1\n")
+		g.Emitf("\tld bc, %d\n", 128)
+		g.Emitln("\tld (hl), 0")
+		g.Emitln("\tldir")
+		for i, task := range c.TaskDefs {
+			g.Emitf("\tld hl, _plz_task_%d\n", i)
+			g.Emitf("\tld sp, _plz_task%d_stack+128\n", i)
+			g.Emitln("\tpush hl")
+			g.Emitf("\tld (_plz_tcbs+%d), sp\n", i*8)
+			g.Emitf("\tld a, %d\n", task.Priority)
+			g.Emitf("\tld (_plz_tcbs+%d), a\n", i*8+4)
+		}
+		// Mark unused task slots as dead
+		for i := len(c.TaskDefs); i < 16; i++ {
+			g.Emitf("\tld a, 3\n")
+			g.Emitf("\tld (_plz_tcbs+%d), a\n", i*8+2)
+		}
+		g.Emitln("\txor a")
+		g.Emitln("\tld (_plz_current_task), a")
+		g.Emitln("\tcall _plz_scheduler")
+	}
 
 	var declares []*Declare
 	var procedures []*Procedure
@@ -282,6 +324,9 @@ func (p Program) Gen(g *Gen) error {
 			procedures = append(procedures, statement.Procedure)
 			continue
 		}
+		if statement.Task != nil {
+			continue // emitted separately
+		}
 		if err := statement.Gen(g); err != nil {
 			return err
 		}
@@ -292,6 +337,32 @@ func (p Program) Gen(g *Gen) error {
 		if err := proc.Gen(g); err != nil {
 			return err
 		}
+	}
+
+	// Emit task bodies after procedures.
+	for i := range c.TaskDefs {
+		t := c.TaskDefs[i]
+		g.Emitf("_plz_task_%d:\n", i)
+		for _, stmt := range t.Body {
+			if err := stmt.Gen(g); err != nil {
+				return err
+			}
+		}
+		g.Emitln("\tjp _plz_task_done")
+	}
+
+	// Emit scheduler and task runtime.
+	if len(c.TaskDefs) > 0 {
+		g.Emit(SchedulerCode)
+		g.Emitf("org 0x%x\n", g.Heap)
+		g.Emitf("_plz_current_task: db 0\n")
+		g.Emitf("_plz_sch_sp: dw 0\n")
+		g.Emitf("_plz_tcbs: ds 128\n")
+		for i := range c.TaskDefs {
+			g.Emitf("_plz_task%d_stack: ds 128\n", i)
+			g.Heap += 128
+		}
+		g.Heap += 131 // current_task(1) + sch_sp(2) + tcbs(128)
 	}
 
 	// Emit declarations at the end.
@@ -337,6 +408,16 @@ func (s Statement) Gen(g *Gen) error {
 		return s.Disable.Gen(g)
 	case s.Output != nil:
 		return s.Output.Gen(g)
+	case s.Suspend != nil:
+		return s.Suspend.Gen(g)
+	case s.Resume != nil:
+		return s.Resume.Gen(g)
+	case s.Sleep != nil:
+		return s.Sleep.Gen(g)
+	case s.Yield != nil:
+		return s.Yield.Gen(g)
+	case s.Task != nil:
+		return s.Task.Gen(g)
 	default:
 		g.Emitf("// statement not implemented: %v\n", s)
 	}
@@ -414,11 +495,11 @@ func (o Operand) Gen(g *Gen) error {
 		}
 	case o.Reference != nil:
 		if o.Reference.isByteRef(g) {
-			g.Emitf("\tld a, (%s)\n", o.Reference.Identifier)
+			g.Emitf("\tld a, (%s)\n", g.localSym(o.Reference.Identifier))
 			g.Emitln("\tld l, a")
 			g.Emitln("\tld h, 0")
 		} else {
-			g.Emitf("\tld hl, (%s)\n", o.Reference.Identifier)
+			g.Emitf("\tld hl, (%s)\n", g.localSym(o.Reference.Identifier))
 		}
 	case o.Expression != nil:
 		return o.Expression.Gen(g)
@@ -499,6 +580,31 @@ func (i Infix) Gen(g *Gen) error {
 	case OperatorSUB:
 		g.Emitln("\tor a")
 		g.Emitln("\tsbc hl, de")
+
+	case OperatorShiftLeft:
+		loop := g.nextLabel()
+		end := g.nextLabel()
+		g.Emitln("\tld a, e")
+		g.Emitf("_lbl_%d:\n", loop)
+		g.Emitln("\tor a")
+		g.Emitf("\tjr z, _lbl_%d\n", end)
+		g.Emitln("\tadd hl, hl")
+		g.Emitln("\tdec a")
+		g.Emitf("\tjr _lbl_%d\n", loop)
+		g.Emitf("_lbl_%d:\n", end)
+
+	case OperatorShiftRight:
+		loop := g.nextLabel()
+		end := g.nextLabel()
+		g.Emitln("\tld a, e")
+		g.Emitf("_lbl_%d:\n", loop)
+		g.Emitln("\tor a")
+		g.Emitf("\tjr z, _lbl_%d\n", end)
+		g.Emitln("\tsrl h")
+		g.Emitln("\trr l")
+		g.Emitln("\tdec a")
+		g.Emitf("\tjr _lbl_%d\n", loop)
+		g.Emitf("_lbl_%d:\n", end)
 
 	case OperatorAND:
 		g.Emitln("\tld a, h")
@@ -610,9 +716,9 @@ func (g *Gen) genFieldAddr(operands []Operand) (fieldType Type, err error) {
 	} else {
 		// Simple reference: load base address.
 		if d.ParamRef {
-			g.Emitf("\tld hl, (%s)\n", ref.Identifier)
+			g.Emitf("\tld hl, (%s)\n", g.localSym(ref.Identifier))
 		} else {
-			g.Emitf("\tld hl, %s\n", ref.Identifier)
+			g.Emitf("\tld hl, %s\n", g.localSym(ref.Identifier))
 		}
 	}
 	if off > 0 {
@@ -655,7 +761,7 @@ func (g *Gen) elemSize(name Identifier) int {
 		total := recordTotalSize(d.Type.Record.Fields)
 		return nextPow2(total)
 	}
-	if d.Type.Predeclared == PredeclaredByte {
+	if d.Type.Predeclared == PredeclaredByte || d.Type.Predeclared == PredeclaredData {
 		return 1
 	}
 	return 2
@@ -699,11 +805,11 @@ func (g *Gen) genIndexAddr(operands []Operand) (elemSize int, err error) {
 		elem = g.elemSize(ref.Identifier)
 		if g.Checker != nil {
 			if d, ok := g.Checker.Symbols[ref.Identifier]; ok && d.ParamRef {
-				g.Emitf("\tld hl, (%s)\n", ref.Identifier)
+				g.Emitf("\tld hl, (%s)\n", g.localSym(ref.Identifier))
 				goto gotAddr
 			}
 		}
-		g.Emitf("\tld hl, %s\n", ref.Identifier)
+		g.Emitf("\tld hl, %s\n", g.localSym(ref.Identifier))
 	} else {
 		return 0, fmt.Errorf("genIndexAddr: first operand must be a reference or field expression")
 	}
@@ -761,14 +867,17 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 	proc, _ := g.Checker.Procedures[name]
 
 	genCallArg := func(i int) error {
-		if proc != nil && i < len(proc.ParamTypes) && proc.ParamTypes[i].Record != nil {
-			refArg := args[i].Reference
-			if refArg == nil && args[i].Expression != nil && args[i].Expression.Operand != nil {
-				refArg = args[i].Expression.Operand.Reference
-			}
-			if refArg != nil && refArg.Identifier != "" && len(refArg.Fields) == 0 && len(refArg.Subscripts) == 0 {
-				g.Emitf("\tld hl, %s\n", refArg.Identifier)
-				return nil
+		if proc != nil && i < len(proc.ParamTypes) {
+			pt := proc.ParamTypes[i]
+			if pt.Record != nil || pt.Predeclared == PredeclaredData {
+				refArg := args[i].Reference
+				if refArg == nil && args[i].Expression != nil && args[i].Expression.Operand != nil {
+					refArg = args[i].Expression.Operand.Reference
+				}
+				if refArg != nil && refArg.Identifier != "" && len(refArg.Fields) == 0 && len(refArg.Subscripts) == 0 {
+					g.Emitf("\tld hl, %s\n", g.localSym(refArg.Identifier))
+					return nil
+				}
 			}
 		}
 		return args[i].Expression.Gen(g)
@@ -873,9 +982,9 @@ func (s Let) Gen(g *Gen) error {
 		// Simple variable store.
 		if s.isByteRef(g) {
 			g.Emitln("\tld a, l")
-			g.Emitf("\tld (%s), a\n", s.Identifier)
+			g.Emitf("\tld (%s), a\n", g.localSym(s.Identifier))
 		} else {
-			g.Emitf("\tld (%s), hl\n", s.Identifier)
+			g.Emitf("\tld (%s), hl\n", g.localSym(s.Identifier))
 		}
 		return nil
 	}
@@ -920,9 +1029,9 @@ func (s Let) Gen(g *Gen) error {
 			ft := d.Type.Record.Fields[fieldIdx].Type
 
 			if d.ParamRef {
-				g.Emitf("\tld hl, (%s)\n", s.Identifier)
+				g.Emitf("\tld hl, (%s)\n", g.localSym(s.Identifier))
 			} else {
-				g.Emitf("\tld hl, %s\n", s.Identifier)
+				g.Emitf("\tld hl, %s\n", g.localSym(s.Identifier))
 			}
 			// Add scaled index.
 			if len(s.Subscripts) >= 1 {
@@ -974,9 +1083,9 @@ func (s Let) Gen(g *Gen) error {
 		ft := d.Type.Record.Fields[fieldIdx].Type
 
 		if d.ParamRef {
-			g.Emitf("\tld hl, (%s)\n", s.Identifier)
+			g.Emitf("\tld hl, (%s)\n", g.localSym(s.Identifier))
 		} else {
-			g.Emitf("\tld hl, %s\n", s.Identifier)
+			g.Emitf("\tld hl, %s\n", g.localSym(s.Identifier))
 		}
 		if off > 0 {
 			g.Emitf("\tld de, %d\n", off)
@@ -1020,9 +1129,9 @@ func (s Let) Gen(g *Gen) error {
 
 	elem := g.elemSize(s.Identifier)
 	if d != nil && d.ParamRef {
-		g.Emitf("\tld hl, (%s)\n", s.Identifier)
+		g.Emitf("\tld hl, (%s)\n", g.localSym(s.Identifier))
 	} else {
-		g.Emitf("\tld hl, %s\n", s.Identifier)
+		g.Emitf("\tld hl, %s\n", g.localSym(s.Identifier))
 	}
 	for i := range s.Subscripts {
 		g.Emitln("\tpush hl")
@@ -1088,14 +1197,14 @@ func (s Group) Gen(g *Gen) error {
 		if err := s.For.Start.Gen(g); err != nil {
 			return err
 		}
-		g.Emitf("\tld (%s), hl\n", s.For.Reference.Identifier)
+		g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
 
 		n := g.nextLabel()
 		g.Emitf("_for_%d:\n", n)
 		// Compare var with end (hl = end - var)
 		g.Emitln("\tpop de")                                   // de = end, stack: [step]
 		g.Emitln("\tpush de")                                  // push back, stack: [step, end]
-		g.Emitf("\tld hl, (%s)\n", s.For.Reference.Identifier) // hl = var
+		g.Emitf("\tld hl, (%s)\n", g.localSym(s.For.Reference.Identifier)) // hl = var
 		g.Emitln("\tex de, hl")                                // hl = end, de = var
 		g.Emitln("\tor a")
 		g.Emitln("\tsbc hl, de")        // hl = end - var
@@ -1113,9 +1222,9 @@ func (s Group) Gen(g *Gen) error {
 		g.Emitln("\tpop hl")  // hl = step, stack: []
 		g.Emitln("\tpush hl") // push step back, stack: [step]
 		g.Emitln("\tpush de") // push end back, stack: [step, end]
-		g.Emitf("\tld de, (%s)\n", s.For.Reference.Identifier)
+		g.Emitf("\tld de, (%s)\n", g.localSym(s.For.Reference.Identifier))
 		g.Emitln("\tadd hl, de") // hl = step + var
-		g.Emitf("\tld (%s), hl\n", s.For.Reference.Identifier)
+		g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
 		g.Emitf("\tjr _for_%d\n", n)
 		g.Emitf("_end_%d:\n", n)
 		g.Emitln("\tpop hl") // discard end
@@ -1164,12 +1273,14 @@ func (s Procedure) Gen(g *Gen) error {
 
 	// Generate body with InProcedure set so local Declare.Gen emits no storage.
 	g.InProcedure = true
+	g.procName = s.Name.Name
 	for _, stmt := range s.Statements {
 		if err := stmt.Gen(g); err != nil {
 			return err
 		}
 	}
 	g.InProcedure = false
+	g.procName = ""
 
 	// Implicit ret if the last statement is not a return.
 	if len(s.Statements) == 0 || s.Statements[len(s.Statements)-1].Return == nil {
@@ -1187,7 +1298,7 @@ func (s Return) Gen(g *Gen) error {
 		if g.ProcReturnType.Record != nil {
 			ref := s.Expressions[0].Operand.Reference
 			if ref != nil && ref.Identifier != "" && len(ref.Fields) == 0 && len(ref.Subscripts) == 0 {
-				g.Emitf("\tld hl, %s\n", ref.Identifier)
+				g.Emitf("\tld hl, %s\n", g.localSym(ref.Identifier))
 				break
 			}
 		}
@@ -1225,12 +1336,15 @@ func (s Call) Gen(g *Gen) error {
 	// genCallArg emits code to load the i-th argument into HL.
 	// For RECORD params it loads the ADDRESS (not the value).
 	genCallArg := func(i int) error {
-		if proc != nil && i < len(proc.ParamTypes) && proc.ParamTypes[i].Record != nil {
-			// Load address of record argument.
-			ref := args[i].Operand.Reference
-			if ref != nil && ref.Identifier != "" && len(ref.Fields) == 0 && len(ref.Subscripts) == 0 {
-				g.Emitf("\tld hl, %s\n", ref.Identifier)
-				return nil
+		if proc != nil && i < len(proc.ParamTypes) {
+			pt := proc.ParamTypes[i]
+			if pt.Record != nil || pt.Predeclared == PredeclaredData {
+				// Load address of record or DATA argument.
+				ref := args[i].Operand.Reference
+				if ref != nil && ref.Identifier != "" && len(ref.Fields) == 0 && len(ref.Subscripts) == 0 {
+					g.Emitf("\tld hl, %s\n", g.localSym(ref.Identifier))
+					return nil
+				}
 			}
 		}
 		return args[i].Gen(g)
@@ -1464,10 +1578,12 @@ func nextPow2(n int) int {
 }
 
 func (s Data) Gen(g *Gen) error {
-	if s.Literal.Number != nil {
-		g.Emitf("\tdb %x\n", *s.Literal.Number)
-	} else if s.Literal.Text != nil {
-		g.Emitf("\tds %s\n", strconv.Quote(*s.Literal.Text))
+	for _, lit := range s.Literals {
+		if lit.Number != nil {
+			g.Emitf("\tdb %d\n", *lit.Number)
+		} else if lit.Text != nil {
+			g.Emitf("\tds %s\n", strconv.Quote(*lit.Text))
+		}
 	}
 	return nil
 }
@@ -1480,3 +1596,165 @@ func (s Constant) Gen(g *Gen) error {
 	}
 	return nil
 }
+
+func (s Suspend) Gen(g *Gen) error {
+	idx, ok := g.Checker.Tasks[string(s.Name)]
+	if !ok {
+		return fmt.Errorf("undeclared task %q", s.Name)
+	}
+	g.Emitf("\tld a, 1\n")
+	g.Emitf("\tld (_plz_tcbs+%d), a\n", idx*8+2)
+	return nil
+}
+
+func (r Resume) Gen(g *Gen) error {
+	idx, ok := g.Checker.Tasks[string(r.Name)]
+	if !ok {
+		return fmt.Errorf("undeclared task %q", r.Name)
+	}
+	g.Emitf("\txor a\n")
+	g.Emitf("\tld (_plz_tcbs+%d), a\n", idx*8+2)
+	return nil
+}
+
+func (s Sleep) Gen(g *Gen) error {
+	if err := s.Duration.Gen(g); err != nil {
+		return err
+	}
+	n := g.nextLabel()
+	g.Emitln("\tld a, l")
+	g.Emitln("\tor a")
+	g.Emitf("\tjr z, _slp_%d\n", n)
+	g.Emitln("\tpush af")
+	g.Emitln("\tld a, (_plz_current_task)")
+	g.Emitln("\tld l, a")
+	g.Emitln("\tld h, 0")
+	g.Emitln("\tadd hl, hl")
+	g.Emitln("\tadd hl, hl")
+	g.Emitln("\tadd hl, hl")
+	g.Emitln("\tld de, _plz_tcbs+2")
+	g.Emitln("\tadd hl, de")
+	g.Emitln("\tld (hl), 2")   // state = SLEEPING
+	g.Emitln("\tinc hl")        // HL = &sleep counter
+	g.Emitln("\tpop af")
+	g.Emitln("\tld (hl), a")
+	g.Emitln("\tcall _plz_scheduler")
+	g.Emitf("_slp_%d:\n", n)
+	return nil
+}
+
+func (y Yield) Gen(g *Gen) error {
+	g.Emitln("\tcall _plz_scheduler")
+	return nil
+}
+
+func (t Task) Gen(g *Gen) error {
+	// Task bodies are emitted in Program.Gen, not inline.
+	return nil
+}
+
+const SchedulerCode = `
+// -------------------------------------------------------------------
+// Task scheduler: save current SP, pick next ready task, restore SP
+// -------------------------------------------------------------------
+_plz_scheduler:
+	// Compute current TCB address = _plz_tcbs + current_task * 8
+	ld a, (_plz_current_task)
+	ld l, a
+	ld h, 0
+	add hl, hl
+	add hl, hl
+	add hl, hl
+	ld de, _plz_tcbs
+	add hl, de
+	// Save SP at TCB[0-1]
+	ld (_plz_sch_sp), sp
+	ld de, (_plz_sch_sp)
+	ld (hl), e
+	inc hl
+	ld (hl), d
+	// HL now at TCB+2 (state byte) - not needed
+
+	// Decrement all sleeping tasks' sleep counters.
+	// When a counter reaches 0, set state to ready.
+	ld hl, _plz_tcbs+3
+	ld b, 16
+	ld de, 8
+_slp_dec_loop:
+	ld a, (hl)
+	or a
+	jr z, _slp_dec_cont
+	dec (hl)
+	jr nz, _slp_dec_cont
+	// Sleep counter hit 0 => set state to ready
+	dec hl
+	ld (hl), 0
+	inc hl
+_slp_dec_cont:
+	add hl, de
+	djnz _slp_dec_loop
+
+	// Find next ready task (round-robin, start from current+1)
+	ld a, (_plz_current_task)
+	ld c, a
+	inc a
+	cp 16
+	jr c, _sch_ok
+	xor a
+_sch_ok:
+	ld (_plz_current_task), a
+	ld b, 16
+_sch_loop:
+	ld a, (_plz_current_task)
+	ld l, a
+	ld h, 0
+	add hl, hl
+	add hl, hl
+	add hl, hl
+	ld de, _plz_tcbs+2
+	add hl, de
+	ld a, (hl)
+	or a
+	jr z, _sch_found
+	ld a, (_plz_current_task)
+	inc a
+	cp 16
+	jr c, _sch_next
+	xor a
+_sch_next:
+	ld (_plz_current_task), a
+	djnz _sch_loop
+	// No ready task found - halt
+	halt
+	jp _plz_scheduler
+_sch_found:
+	// Restore SP from TCB
+	ld a, (_plz_current_task)
+	ld l, a
+	ld h, 0
+	add hl, hl
+	add hl, hl
+	add hl, hl
+	ld de, _plz_tcbs
+	add hl, de
+	ld e, (hl)
+	inc hl
+	ld d, (hl)
+	ex de, hl
+	ld sp, hl
+	ret
+
+_plz_task_done:
+	// Mark current task as dead
+	ld a, (_plz_current_task)
+	ld l, a
+	ld h, 0
+	add hl, hl
+	add hl, hl
+	add hl, hl
+	ld de, _plz_tcbs+2
+	add hl, de
+	ld (hl), 3
+	jp _plz_scheduler
+
+`

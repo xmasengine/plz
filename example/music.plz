@@ -1,0 +1,54 @@
+// music.plz — SN76489 Programmable Sound Generator driver
+// Port 0x7F = PSG data port (Sega Master System)
+
+// -------------------------------------------------------------------
+// PSG register helpers
+// -------------------------------------------------------------------
+
+// Set tone channel frequency (channel 0-2, freq = 10-bit divider).
+// For 3.58 MHz SMS:  divider = 111861 / desired_hz  (approx)
+PROCEDURE psg_freq(channel BYTE, freq WORD)
+  OUTPUT 0x7F 0x80 | (channel << 5) | (freq & 0x0F)
+  OUTPUT 0x7F (freq >> 4) & 0x3F
+END
+
+// Set tone channel volume (0 = loudest, 15 = silent).
+PROCEDURE psg_vol(channel BYTE, vol BYTE)
+  OUTPUT 0x7F 0x90 | (channel << 5) | vol
+END
+
+// Silence all tone channels and noise.
+PROCEDURE psg_silence()
+  CALL psg_vol(0, 15)
+  CALL psg_vol(1, 15)
+  CALL psg_vol(2, 15)
+  OUTPUT 0x7F 0xFF
+END
+
+// -------------------------------------------------------------------
+// Song data player
+// -------------------------------------------------------------------
+
+// Play a song from a DATA block. Call this from a task context.
+// Each note occupies 5 bytes:
+//   [0-1] freq as little-endian WORD (10-bit divider value)
+//   [2]   duration in scheduler ticks
+//   [3]   channel (0-2)
+//   [4]   volume (0=loudest, 15=silent)
+// A terminator of 5 zero bytes ends the song.
+PROCEDURE play_song(song DATA)
+  DECLARE idx WORD
+  DECLARE freq WORD
+  LET idx = 0
+  WHILE TRUE DO
+    IF song[idx] == 0 AND song[idx+1] == 0 AND song[idx+2] == 0 THEN
+      RETURN
+    END
+    LET freq = song[idx] | (song[idx+1] << 8)
+    CALL psg_freq(song[idx+3], freq)
+    CALL psg_vol(song[idx+3], song[idx+4])
+    SLEEP song[idx+2]
+    CALL psg_vol(song[idx+3], 15)
+    LET idx = idx + 5
+  END
+END

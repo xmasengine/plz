@@ -3,63 +3,130 @@ package plz
 import "fmt"
 
 type Checker struct {
-	Symbols    map[Identifier]*Declare
-	Procedures map[string]*Procedure // procedure name → definition
+	Symbols     map[Identifier]*Declare     // global symbols
+	procSymbols map[string]map[Identifier]*Declare // procedure → local symbols
+	Procedures  map[string]*Procedure       // procedure name → definition
+	Tasks       map[string]int              // task name → task index
+	TaskDefs    []*Task                     // task definitions in order
+	currentProc string                      // procedure currently being checked
 }
 
 func NewChecker() *Checker {
-	return &Checker{
-		Symbols:    make(map[Identifier]*Declare),
-		Procedures: make(map[string]*Procedure),
+	c := &Checker{
+		Symbols:     make(map[Identifier]*Declare),
+		procSymbols: make(map[string]map[Identifier]*Declare),
+		Procedures:  make(map[string]*Procedure),
+		Tasks:       make(map[string]int),
 	}
+	c.Symbols["INPUT"] = &Declare{
+		Identifier: "INPUT",
+		Type:       Type{Predeclared: PredeclaredWord},
+	}
+	return c
+}
+
+// lookup resolves an identifier within the current procedure scope.
+func (c *Checker) lookup(id Identifier) *Declare {
+	if c.currentProc != "" {
+		if m, ok := c.procSymbols[c.currentProc]; ok {
+			if d, ok := m[id]; ok {
+				return d
+			}
+		}
+	}
+	return c.Symbols[id]
 }
 
 func (c *Checker) Errorf(pos string, form string, args ...any) error {
 	return fmt.Errorf("check: %s: %s", pos, fmt.Sprintf(form, args...))
 }
 
+// ProcSymbols returns the per-procedure symbol map for the given procedure.
+func (c *Checker) ProcSymbols(procName string) (map[Identifier]*Declare, bool) {
+	m, ok := c.procSymbols[procName]
+	return m, ok
+}
+
 // Check runs semantic analysis on the program.
 func (p Program) Check(c *Checker) error {
-	// First pass: collect declarations and procedure parameters.
+	// First pass: collect declarations, labels, and procedure parameters.
 	for _, stmt := range p.Statements {
+		if stmt.Label != nil && stmt.Label.Name != "" {
+			if _, ok := c.Symbols[Identifier(stmt.Label.Name)]; !ok {
+				kind := PredeclaredWord
+				if stmt.Data != nil {
+					kind = PredeclaredByte
+				}
+				c.Symbols[Identifier(stmt.Label.Name)] = &Declare{
+					Identifier: Identifier(stmt.Label.Name),
+					Type:       Type{Predeclared: kind},
+				}
+			}
+		}
 		if stmt.Declare != nil {
-			if existing, ok := c.Symbols[stmt.Declare.Identifier]; ok {
+			if existing, ok := c.Symbols[stmt.Declare.Identifier]; ok && existing.ProcName == "" {
 				return c.Errorf("", "duplicate declaration of %s (first at %s)",
 					stmt.Declare.Identifier, existing.Identifier)
 			}
 			c.Symbols[stmt.Declare.Identifier] = stmt.Declare
 		}
+		if stmt.Task != nil {
+			name := stmt.Task.Name.Name
+			if _, ok := c.Tasks[name]; ok {
+				return c.Errorf("", "duplicate task %q", name)
+			}
+			idx := len(c.TaskDefs)
+			c.Tasks[name] = idx
+			c.TaskDefs = append(c.TaskDefs, stmt.Task)
+		}
 		if stmt.Procedure != nil {
+			proc := stmt.Procedure
 			// Store procedure definition for call-site lookup.
-			c.Procedures[stmt.Procedure.Name.Name] = stmt.Procedure
+			c.Procedures[proc.Name.Name] = proc
 			// Register procedure name so it can be used in call expressions.
-			if _, ok := c.Symbols[Identifier(stmt.Procedure.Name.Name)]; !ok {
-				c.Symbols[Identifier(stmt.Procedure.Name.Name)] = &Declare{
-					Identifier: Identifier(stmt.Procedure.Name.Name),
+			if _, ok := c.Symbols[Identifier(proc.Name.Name)]; !ok {
+				c.Symbols[Identifier(proc.Name.Name)] = &Declare{
+					Identifier: Identifier(proc.Name.Name),
 					Type:       Type{Predeclared: PredeclaredWord},
 				}
 			}
-			for i, param := range stmt.Procedure.Parameters {
-				if _, ok := c.Symbols[param]; !ok {
-					ptype := Type{Predeclared: PredeclaredWord}
-					if i < len(stmt.Procedure.ParamTypes) {
-						ptype = stmt.Procedure.ParamTypes[i]
-					}
-					isRef := ptype.Record != nil // records passed by reference
-					c.Symbols[param] = &Declare{
-						Identifier: param,
-						Type:       ptype,
-						ParamRef:   isRef,
-					}
+			// Create per-procedure symbol map.
+			pm := make(map[Identifier]*Declare)
+			dup := func(name Identifier) error {
+				if _, ok := pm[name]; ok {
+					return c.Errorf("", "duplicate parameter %q in procedure %s",
+						name, proc.Name.Name)
 				}
+				return nil
 			}
-			for _, local := range stmt.Procedure.Locals {
-				if existing, ok := c.Symbols[local.Identifier]; ok {
-					return c.Errorf("", "duplicate declaration of %s (first at %s)",
-						local.Identifier, existing.Identifier)
+			for i, param := range proc.Parameters {
+				if err := dup(param); err != nil {
+					return err
 				}
+				ptype := Type{Predeclared: PredeclaredWord}
+				if i < len(proc.ParamTypes) {
+					ptype = proc.ParamTypes[i]
+				}
+				isRef := ptype.Record != nil || ptype.Predeclared == PredeclaredData
+				d := &Declare{
+					Identifier: param,
+					Type:       ptype,
+					ParamRef:   isRef,
+					ProcName:   proc.Name.Name,
+				}
+				pm[param] = d
+				c.Symbols[param] = d
+			}
+			for _, local := range proc.Locals {
+				if _, ok := pm[local.Identifier]; ok {
+					return c.Errorf("", "duplicate declaration of %s in procedure %s",
+						local.Identifier, proc.Name.Name)
+				}
+				local.ProcName = proc.Name.Name
+				pm[local.Identifier] = &local
 				c.Symbols[local.Identifier] = &local
 			}
+			c.procSymbols[proc.Name.Name] = pm
 		}
 	}
 	// Second pass: check all statements.
@@ -96,6 +163,16 @@ func (s Statement) Check(c *Checker) error {
 	case s.Halt != nil:
 	case s.Enable != nil:
 	case s.Disable != nil:
+	case s.Task != nil:
+		return s.Task.Check(c)
+	case s.Suspend != nil:
+		return s.Suspend.Check(c)
+	case s.Resume != nil:
+		return s.Resume.Check(c)
+	case s.Sleep != nil:
+		return s.Sleep.Check(c)
+	case s.Yield != nil:
+	case s.Label != nil:
 	}
 	return nil
 }
@@ -166,12 +243,43 @@ func (s Let) Check(c *Checker) error {
 }
 
 func (s Procedure) Check(c *Checker) error {
+	save := c.currentProc
+	c.currentProc = s.Name.Name
 	for i := range s.Statements {
 		if err := s.Statements[i].Check(c); err != nil {
+			c.currentProc = save
+			return err
+		}
+	}
+	c.currentProc = save
+	return nil
+}
+
+func (t Task) Check(c *Checker) error {
+	for i := range t.Body {
+		if err := t.Body[i].Check(c); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s Suspend) Check(c *Checker) error {
+	if _, ok := c.Tasks[string(s.Name)]; !ok {
+		return c.Errorf("", "undeclared task %q", s.Name)
+	}
+	return nil
+}
+
+func (r Resume) Check(c *Checker) error {
+	if _, ok := c.Tasks[string(r.Name)]; !ok {
+		return c.Errorf("", "undeclared task %q", r.Name)
+	}
+	return nil
+}
+
+func (s Sleep) Check(c *Checker) error {
+	return s.Duration.Check(c)
 }
 
 func (s Return) Check(c *Checker) error {
@@ -249,8 +357,8 @@ func (r *Reference) Check(c *Checker) error {
 	if r.Identifier == "" {
 		return nil
 	}
-	d, ok := c.Symbols[r.Identifier]
-	if !ok {
+	d := c.lookup(r.Identifier)
+	if d == nil {
 		return c.Errorf("", "undeclared variable %q", r.Identifier)
 	}
 	for _, sub := range r.Subscripts {

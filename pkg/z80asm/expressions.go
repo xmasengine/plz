@@ -29,6 +29,11 @@ func (ei exprInt) evalAs(asm *Assembler, a arg, top bool) ([]byte, bool, error) 
 			return nil, false, asm.scanErrorf("0x%x is not a valid argument", ei.i)
 		}
 		return nil, ei.i == argVals[a], nil
+	case argTypeString:
+		if ei.i < 0 {
+			return nil, false, asm.scanErrorf("negative size: %d", ei.i)
+		}
+		return make([]byte, ei.i), true, nil
 	}
 	return nil, false, nil
 }

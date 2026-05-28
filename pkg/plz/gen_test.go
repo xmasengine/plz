@@ -400,7 +400,7 @@ CALL foo(5)`)
 	if !strings.Contains(asm, "_plz_foo_frame: db 0, 0, 0, 0") {
 		t.Error("expected frame with 4 bytes (param + local)")
 	}
-	if !strings.Contains(asm, "const t = _plz_foo_frame+2") {
+	if !strings.Contains(asm, "const _plz_foo_t = _plz_foo_frame+2") {
 		t.Error("expected const mapping for local t")
 	}
 	if strings.Contains(asm, "\nt: db ") {
@@ -413,7 +413,7 @@ func TestGenProcByteParam(t *testing.T) {
 	if !strings.Contains(asm, "ld a, l") {
 		t.Error("expected byte truncation for BYTE param save")
 	}
-	if !strings.Contains(asm, "const x = _plz_double_frame+0") {
+	if !strings.Contains(asm, "const _plz_double_x = _plz_double_frame+0") {
 		t.Error("expected x at offset 0 in frame")
 	}
 	if !strings.Contains(asm, "_plz_double_frame: db 0") {
@@ -433,7 +433,7 @@ func TestGenProcRecordParam(t *testing.T) {
 	if !strings.Contains(asm, "ld hl, s") {
 		t.Error("expected address load for record arg at call site")
 	}
-	if !strings.Contains(asm, "ld hl, (rv)") {
+	if !strings.Contains(asm, "ld hl, (_plz_useRec_rv)") {
 		t.Error("expected dereference for record param field access")
 	}
 }

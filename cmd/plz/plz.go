@@ -32,9 +32,10 @@ type arguments struct {
 		Run       bool
 		Help      bool
 	}
-	Sources []string
-	Timeout time.Duration
-	Ctx     context.Context
+	IncludeDirs string
+	Sources     []string
+	Timeout     time.Duration
+	Ctx         context.Context
 }
 
 func (args arguments) emuOpts() []emu.CPUOption {
@@ -89,6 +90,7 @@ func main() {
 	flag.IntVar(&args.OutputPort, "p", 0, "output port for emulation")
 	flag.StringVar(&args.Input, "i", "", "input file name")
 	flag.StringVar(&args.Format, "f", "bin", "output file format")
+	flag.StringVar(&args.IncludeDirs, "d", "", "inclucde directories")
 	flag.IntVar(&args.InputPort, "q", 0, "input port for emulation")
 	flag.Parse()
 	if args.Mode.Help {

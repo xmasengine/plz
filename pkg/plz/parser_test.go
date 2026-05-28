@@ -1,6 +1,7 @@
 package plz
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -646,6 +647,104 @@ func TestParseReturnMulti(t *testing.T) {
 	}
 }
 
+func TestInclude(t *testing.T) {
+	dir := t.TempDir()
+	// Write the included file.
+	incPath := dir + "/lib.plz"
+	if err := os.WriteFile(incPath, []byte("DECLARE x BYTE\nCONSTANT FOO = 42\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Write the main file with an INCLUDE directive.
+	mainPath := dir + "/main.plz"
+	mainSrc := "INCLUDE \"lib.plz\"\nDECLARE y WORD\n"
+	if err := os.WriteFile(mainPath, []byte(mainSrc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	prog, err := ParseFile(mainPath)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(prog.Statements) != 3 {
+		t.Fatalf("expected 3 statements (DECLARE x, CONSTANT FOO, DECLARE y), got %d", len(prog.Statements))
+	}
+	if prog.Statements[0].Declare == nil || prog.Statements[0].Declare.Identifier != Identifier("x") {
+		t.Error("expected DECLARE x as first statement")
+	}
+	if prog.Statements[1].Constant == nil || prog.Statements[1].Constant.Name != "FOO" {
+		t.Error("expected CONSTANT FOO as second statement")
+	}
+	if prog.Statements[2].Declare == nil || prog.Statements[2].Declare.Identifier != Identifier("y") {
+		t.Error("expected DECLARE y as third statement")
+	}
+}
+
+func TestIncludeTypeAliases(t *testing.T) {
+	// Verify that type aliases from DEFINE in the including file
+	// are visible in the included file (shared TypeAliases map).
+	dir := t.TempDir()
+	incPath := dir + "/lib.plz"
+	// This file uses TYPE TEXT (a built-in alias) and TYPE my_point from the main file.
+	if err := os.WriteFile(incPath, []byte("DECLARE msg TYPE TEXT\nDECLARE point TYPE my_point\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := dir + "/main.plz"
+	mainSrc := "DEFINE my_point RECORD x BYTE, y BYTE END\nINCLUDE \"lib.plz\"\n"
+	if err := os.WriteFile(mainPath, []byte(mainSrc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	prog, err := ParseFile(mainPath)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(prog.Statements) != 3 {
+		t.Fatalf("expected 3 statements, got %d", len(prog.Statements))
+	}
+	// stmt[0] is DEFINE, stmt[1] is DECLARE msg TEXT, stmt[2] is DECLARE point my_point
+	if prog.Statements[1].Declare == nil || prog.Statements[1].Declare.Identifier != Identifier("msg") {
+		t.Error("expected DECLARE msg")
+	}
+	if prog.Statements[1].Declare.Type.Record == nil {
+		t.Error("expected TEXT record type")
+	}
+	if prog.Statements[2].Declare == nil || prog.Statements[2].Declare.Identifier != Identifier("point") {
+		t.Error("expected DECLARE point")
+	}
+}
+
+func TestIncludeNested(t *testing.T) {
+	// Verify nested includes work.
+	dir := t.TempDir()
+	// inner.plz — included by middle.plz
+	if err := os.WriteFile(dir+"/inner.plz", []byte("DECLARE inner_var BYTE\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// middle.plz — includes inner.plz, included by main.plz
+	if err := os.WriteFile(dir+"/middle.plz", []byte("INCLUDE \"inner.plz\"\nDECLARE middle_var BYTE\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// main.plz — includes middle.plz
+	mainPath := dir + "/main.plz"
+	if err := os.WriteFile(mainPath, []byte("INCLUDE \"middle.plz\"\nDECLARE main_var BYTE\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	prog, err := ParseFile(mainPath)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(prog.Statements) != 3 {
+		t.Fatalf("expected 3 statements, got %d", len(prog.Statements))
+	}
+	if prog.Statements[0].Declare == nil || prog.Statements[0].Declare.Identifier != Identifier("inner_var") {
+		t.Error("expected DECLARE inner_var as first statement")
+	}
+	if prog.Statements[1].Declare == nil || prog.Statements[1].Declare.Identifier != Identifier("middle_var") {
+		t.Error("expected DECLARE middle_var as second statement")
+	}
+	if prog.Statements[2].Declare == nil || prog.Statements[2].Declare.Identifier != Identifier("main_var") {
+		t.Error("expected DECLARE main_var as third statement")
+	}
+}
+
 func TestSubscriptNoIndex(t *testing.T) {
 	// arr[] should parse with just the array as the only operand (no index)
 	expr, err := parseLetExpr("LET x = arr[]")
@@ -657,5 +756,54 @@ func TestSubscriptNoIndex(t *testing.T) {
 	}
 	if len(expr.Suffix.Operands) != 1 {
 		t.Fatalf("expected 1 operand for empty subscript, got %d", len(expr.Suffix.Operands))
+	}
+}
+
+func TestParseInterruptProc(t *testing.T) {
+	src := "INTERRUPT PROCEDURE my_isr\nEND"
+	tokens, err := Scan(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	var p Program
+	parser := NewParser(tokens)
+	if err := p.Parse(parser); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(p.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(p.Statements))
+	}
+	proc := p.Statements[0].Procedure
+	if proc == nil {
+		t.Fatal("expected PROCEDURE")
+	}
+	if proc.Interrupt == nil || proc.Interrupt.NMI || proc.Interrupt.Interrupt != 1 {
+		t.Fatal("expected INTERRUPT procedure")
+	}
+	if proc.Name.Name != "my_isr" {
+		t.Fatalf("expected name my_isr, got %s", proc.Name.Name)
+	}
+}
+
+func TestParseNMIProc(t *testing.T) {
+	src := "NMI PROCEDURE my_nmi\nEND"
+	tokens, err := Scan(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	var p Program
+	parser := NewParser(tokens)
+	if err := p.Parse(parser); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(p.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(p.Statements))
+	}
+	proc := p.Statements[0].Procedure
+	if proc == nil {
+		t.Fatal("expected PROCEDURE")
+	}
+	if proc.Interrupt == nil || !proc.Interrupt.NMI {
+		t.Fatal("expected NMI procedure")
 	}
 }

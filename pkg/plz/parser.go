@@ -1,6 +1,9 @@
 package plz
 
-import "fmt"
+import (
+	"fmt"
+	"path/filepath"
+)
 
 type Error struct {
 	Position
@@ -28,7 +31,33 @@ type Parser struct {
 }
 
 func NewParser(tokens []Token) *Parser {
-	return &Parser{Tokens: tokens, TypeAliases: make(map[string]Type)}
+	return &Parser{
+		Tokens:      tokens,
+		TypeAliases: builtinTypeAliases(),
+	}
+}
+
+func builtinTypeAliases() map[string]Type {
+	return map[string]Type{
+		"TEXT": {
+			Record: &Record{
+				Fields: []Field{
+					{
+						Identifier: "length",
+						Type:       Type{Predeclared: PredeclaredByte},
+					},
+					{
+						Identifier: "text",
+						Type: Type{
+							Array: &Array{
+								ElemType: Type{Predeclared: PredeclaredByte},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 }
 
 func (p Parser) Peek() Token {
@@ -95,7 +124,7 @@ func ParseFile(name string) (*Program, error) {
 		return nil, err
 	}
 	var res Program
-	parser := &Parser{Tokens: tokens}
+	parser := NewParser(tokens)
 	err = res.Parse(parser)
 	if err != nil {
 		return nil, err
@@ -105,6 +134,39 @@ func ParseFile(name string) (*Program, error) {
 
 func (p *Program) Parse(parser *Parser) error {
 	for !parser.End() {
+		// Handle INCLUDE "filename"
+		if parser.Peek().TokenKind == KeywordInclude {
+			includeTok := parser.Next() // consume INCLUDE
+			filenameTok, err := parser.Accept(TokenString)
+			if err != nil {
+				return err
+			}
+			parser.Skip(TokenKind(';')) // skip optional semicolon
+
+			// Resolve path relative to the including file's directory.
+			incPath := filenameTok.Text
+			if dir := filepath.Dir(includeTok.Position.Filename); dir != "." && dir != "" {
+				if !filepath.IsAbs(incPath) {
+					incPath = filepath.Join(dir, incPath)
+				}
+			}
+
+			incTokens, err := ScanFile(incPath)
+			if err != nil {
+				return filenameTok.Errorf("include: %v", err)
+			}
+			incParser := &Parser{
+				Tokens:      incTokens,
+				TypeAliases: parser.TypeAliases,
+			}
+			incProg := Program{}
+			if err := incProg.Parse(incParser); err != nil {
+				return err
+			}
+			p.Statements = append(p.Statements, incProg.Statements...)
+			continue
+		}
+
 		var s Statement
 		err := s.Parse(parser)
 		if err != nil {
@@ -169,12 +231,30 @@ func (s *Statement) Parse(parser *Parser) error {
 	case KeywordOutput:
 		s.Output = &Output{}
 		return s.Output.Parse(parser)
+	case KeywordInterrupt, KeywordNMI:
+		s.Procedure = &Procedure{}
+		return s.Procedure.Parse(parser)
 	case KeywordProc:
 		s.Procedure = &Procedure{}
 		return s.Procedure.Parse(parser)
 	case KeywordReturn:
 		s.Return = &Return{}
 		return s.Return.Parse(parser)
+	case KeywordTask:
+		s.Task = &Task{}
+		return s.Task.Parse(parser)
+	case KeywordSuspend:
+		s.Suspend = &Suspend{}
+		return s.Suspend.Parse(parser)
+	case KeywordResume:
+		s.Resume = &Resume{}
+		return s.Resume.Parse(parser)
+	case KeywordSleep:
+		s.Sleep = &Sleep{}
+		return s.Sleep.Parse(parser)
+	case KeywordYield:
+		s.Yield = &Yield{}
+		return s.Yield.Parse(parser)
 	default:
 		return tok.Errorf("Statement: unexpected token %v", tok)
 	}
@@ -225,7 +305,8 @@ func (g *Constant) Parse(parser *Parser) error {
 
 	parser.Skip(TokenKind('=')) // Skip optional =
 
-	return g.Literal.Parse(parser)
+	g.Literal.Parse(parser) // Ignore error — optional value
+	return nil
 }
 
 func (g *Data) Parse(parser *Parser) error {
@@ -233,9 +314,39 @@ func (g *Data) Parse(parser *Parser) error {
 	if err != nil {
 		return nil
 	}
-	return g.Literal.Parse(parser)
+	for {
+		var lit Literal
+		if err := lit.Parse(parser); err != nil {
+			break
+		}
+		if lit.Text == nil && lit.Number == nil && lit.Reference == nil {
+			break
+		}
+		g.Literals = append(g.Literals, lit)
+		if parser.Peek().TokenKind != ',' {
+			break
+		}
+		parser.Next() // consume ','
+	}
+	return nil
 }
 
+func (g *Literal) Parse(parser *Parser) error {
+	tok, err := parser.Accept(TokenInt, TokenString, TokenIdent)
+	if err != nil {
+		return err
+	}
+
+	if tok.TokenKind == TokenInt {
+		g.Number = &tok.Number
+	} else if tok.TokenKind == TokenString {
+		g.Text = &tok.Text
+	} else if tok.TokenKind == TokenIdent {
+		ref := &Reference{Identifier: Identifier(tok.Text)}
+		g.Reference = ref
+	}
+	return nil
+}
 func (i *Identifier) Parse(parser *Parser) error {
 	tok, err := parser.Accept(TokenIdent)
 	if err != nil {
@@ -275,23 +386,6 @@ func (r *Reference) Parse(parser *Parser) error {
 	}
 }
 
-func (g *Literal) Parse(parser *Parser) error {
-	tok, err := parser.Accept(TokenInt, TokenString, TokenIdent)
-	if err != nil {
-		return nil
-	}
-
-	if tok.TokenKind == TokenInt {
-		g.Number = &tok.Number
-	} else if tok.TokenKind == TokenString {
-		g.Text = &tok.Text
-		println("string literal", *g.Text)
-	} else if tok.TokenKind == TokenIdent {
-		ref := &Reference{Identifier: Identifier(tok.Text)}
-		g.Reference = ref
-	}
-	return nil
-}
 
 func (g *Disable) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordDisable)
@@ -364,7 +458,7 @@ func (g *Return) Parse(parser *Parser) error {
 		}
 		// Check if next token looks like the start of an expression.
 		switch tok.TokenKind {
-		case TokenInt, TokenString, TokenChar, TokenIdent, '(', '+', '-', '!':
+		case TokenInt, TokenString, TokenChar, TokenIdent, KeywordInput, '(', '+', '-', '!':
 			var expr Expression
 			if err := expr.Parse(parser); err != nil {
 				return err
@@ -448,7 +542,7 @@ func (t *Type) Parse(parser *Parser) error {
 		}
 		return t.Array.ElemType.Parse(parser)
 	}
-	tok, err := parser.Accept(KeywordByte, KeywordWord)
+	tok, err := parser.Accept(KeywordByte, KeywordWord, KeywordData)
 	if err != nil {
 		return err
 	}
@@ -457,6 +551,8 @@ func (t *Type) Parse(parser *Parser) error {
 		t.Predeclared = PredeclaredByte
 	case KeywordWord:
 		t.Predeclared = PredeclaredWord
+	case KeywordData:
+		t.Predeclared = PredeclaredData
 	}
 	return nil
 }
@@ -512,6 +608,10 @@ func (g *Declare) Parse(parser *Parser) error {
 	if err != nil {
 		return err
 	}
+	if parser.Skip(TokenKind('=')) != nil {
+		g.Initializer = &Initializer{}
+		g.Initializer.Literal.Parse(parser) // Ignore error — optional value
+	}
 	return nil
 }
 
@@ -563,10 +663,16 @@ func (p *Parser) PeekOperator() Operator {
 		if p.PeekAt(1).TokenKind == '=' {
 			return OperatorLTE
 		}
+		if p.PeekAt(1).TokenKind == '<' {
+			return OperatorShiftLeft
+		}
 		return OperatorLT
 	case '>':
 		if p.PeekAt(1).TokenKind == '=' {
 			return OperatorGTE
+		}
+		if p.PeekAt(1).TokenKind == '>' {
+			return OperatorShiftRight
 		}
 		return OperatorGT
 	}
@@ -579,7 +685,7 @@ func (p *Parser) PeekOperator() Operator {
 func (p *Parser) ReadOperator() (op Operator) {
 	op = p.PeekOperator()
 	switch op {
-	case OperatorEQU, OperatorNEQ, OperatorGTE, OperatorLTE:
+	case OperatorEQU, OperatorNEQ, OperatorGTE, OperatorLTE, OperatorShiftLeft, OperatorShiftRight:
 		p.Next()
 		p.Next()
 	case OperatorNone:
@@ -603,12 +709,18 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 		num := tok.Number
 		left.Operand = &Operand{Literal: &Literal{Number: &num}}
 
-	case TokenString, TokenChar:
+	case TokenString:
+		p.Next()
+		text := tok.Text
+		n := tok.Number
+		left.Operand = &Operand{Literal: &Literal{Text: &text, Number: &n}}
+
+	case TokenChar:
 		p.Next()
 		n := tok.Number
 		left.Operand = &Operand{Literal: &Literal{Number: &n}}
 
-	case TokenIdent:
+	case TokenIdent, KeywordInput:
 		p.Next()
 		left.Operand = &Operand{Reference: &Reference{Identifier: Identifier(tok.Text)}}
 
@@ -856,6 +968,12 @@ func (g *Group) Parse(parser *Parser) error {
 }
 
 func (p *Procedure) Parse(parser *Parser) error {
+	// Optional INTERRUPT or NMI modifier.
+	if parser.Skip(KeywordInterrupt) != nil {
+		p.Interrupt = &Interrupt{Interrupt: 1}
+	} else if parser.Skip(KeywordNMI) != nil {
+		p.Interrupt = &Interrupt{NMI: true}
+	}
 	if _, err := parser.Accept(KeywordProc); err != nil {
 		return err
 	}
@@ -920,8 +1038,82 @@ func (p *Procedure) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordEnd); err != nil {
 		return err
 	}
-	parser.Skip(TokenIdent) // optional label after END
+	// Optional label after END — only consume if it's NOT followed by ':'
+	// (which would be a label for the next statement).
+	if parser.Peek().TokenKind == TokenIdent && parser.PeekAt(1).TokenKind != ':' {
+		parser.Next()
+	}
 	return nil
+}
+
+func (t *Task) Parse(parser *Parser) error {
+	if _, err := parser.Accept(KeywordTask); err != nil {
+		return err
+	}
+	nameTok, err := parser.Accept(TokenIdent)
+	if err != nil {
+		return err
+	}
+	t.Name = Label{Name: nameTok.Text}
+	if parser.Skip(KeywordPriority) != nil {
+		tok, err := parser.Accept(TokenInt)
+		if err != nil {
+			return err
+		}
+		t.Priority = tok.Number
+	}
+	// Parse body statements.
+	for !parser.End() && parser.Peek().TokenKind != KeywordEnd {
+		var s Statement
+		if err := s.Parse(parser); err != nil {
+			return err
+		}
+		t.Body = append(t.Body, s)
+		parser.Skip(TokenKind(';'))
+	}
+	if _, err := parser.Accept(KeywordEnd); err != nil {
+		return err
+	}
+	if parser.Peek().TokenKind == TokenIdent && parser.PeekAt(1).TokenKind != ':' {
+		parser.Next()
+	}
+	return nil
+}
+
+func (s *Suspend) Parse(parser *Parser) error {
+	if _, err := parser.Accept(KeywordSuspend); err != nil {
+		return err
+	}
+	tok, err := parser.Accept(TokenIdent)
+	if err != nil {
+		return err
+	}
+	s.Name = Identifier(tok.Text)
+	return nil
+}
+
+func (r *Resume) Parse(parser *Parser) error {
+	if _, err := parser.Accept(KeywordResume); err != nil {
+		return err
+	}
+	tok, err := parser.Accept(TokenIdent)
+	if err != nil {
+		return err
+	}
+	r.Name = Identifier(tok.Text)
+	return nil
+}
+
+func (s *Sleep) Parse(parser *Parser) error {
+	if _, err := parser.Accept(KeywordSleep); err != nil {
+		return err
+	}
+	return s.Duration.Parse(parser)
+}
+
+func (y *Yield) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordYield)
+	return err
 }
 
 func (f *For) Parse(parser *Parser) error {

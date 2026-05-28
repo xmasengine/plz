@@ -28,6 +28,11 @@ type Statement struct {
 	Enable    *Enable
 	Disable   *Disable
 	Output    *Output
+	Task      *Task
+	Suspend   *Suspend
+	Resume    *Resume
+	Sleep     *Sleep
+	Yield     *Yield
 }
 
 type Enable struct {
@@ -152,7 +157,7 @@ type Define struct {
 }
 
 type Data struct {
-	Literal
+	Literals []Literal
 }
 
 type Literally struct {
@@ -167,6 +172,7 @@ type Declare struct {
 	Size        int
 	Initializer *Initializer
 	ParamRef    bool   // true when this is a record/array parameter (passed by reference)
+	ProcName    string // procedure this param/local belongs to (empty = global)
 }
 
 type Initializer struct {
@@ -237,6 +243,8 @@ const (
 	OperatorINDEX Operator = '[' + ']'<<8
 	OperatorCALL  Operator = '(' + ')'<<8
 	OperatorFIELD Operator = '.'
+	OperatorShiftLeft  Operator = '<' + '<'<<8
+	OperatorShiftRight Operator = '>' + '>'<<8
 )
 
 // Priority returns the piority of the operator, mostly for Pratt parsing.
@@ -259,6 +267,10 @@ func (o Operator) Priority() int {
 		return 200
 	case OperatorADD:
 		return 210
+	case OperatorShiftLeft:
+		return 220
+	case OperatorShiftRight:
+		return 230
 
 	case OperatorDIV:
 		return 310
@@ -298,4 +310,30 @@ type Reference struct {
 
 type LogicalExpression struct {
 	*Reference
+}
+
+// Task declaration: TASK name PRIORITY n ... END
+type Task struct {
+	Name     Label
+	Priority int
+	Body     []Statement
+}
+
+// Suspend another task: SUSPEND taskname
+type Suspend struct {
+	Name Identifier
+}
+
+// Resume another task: RESUME taskname
+type Resume struct {
+	Name Identifier
+}
+
+// Sleep for N cycles: SLEEP expression
+type Sleep struct {
+	Duration Expression
+}
+
+// Yield control: YIELD
+type Yield struct {
 }
