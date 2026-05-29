@@ -5,31 +5,40 @@ import (
 	"path/filepath"
 )
 
+// Error represents a parse error with a source position and a descriptive
+// message. It implements the error interface.
 type Error struct {
 	Position
 	Message string
 }
 
+// Error returns the formatted error string in the form "filename:line:col: message".
 func (e Error) Error() string {
 	return fmt.Sprintf("%s: %s", e.Position, e.Message)
 }
 
+// Errorf creates an Error from the receiver Token's position and a formatted
+// message. It is a convenience method for reporting parse errors at a token's
+// source location.
 func (t Token) Errorf(form string, args ...any) Error {
 	return Error{Position: t.Position, Message: fmt.Sprintf(form, args...)}
 }
 
-// Parser for PL?Z.
-// The design is a peek/parse parser with unlimited lookahead.
-// Each AST node parses itself using the parser and a Parse method.
-// For child nodes each AST node has has to peek which child node it is,
-// It is an error to call Parse on a AST node that is not currently available
-// in the parser.
+// Parser for PL/Z.
+//
+// The design is a peek/parse parser with unlimited lookahead. Each AST node
+// parses itself using the parser and a Parse method. For child nodes each AST
+// node has to peek which child node it is. It is an error to call Parse on an
+// AST node that is not currently available in the parser.
 type Parser struct {
 	Tokens      []Token
 	Current     int
 	TypeAliases map[string]Type
 }
 
+// NewParser creates a new Parser that reads from the given token slice. It
+// initialises the TypeAliases map with the built-in type aliases (such as
+// TEXT).
 func NewParser(tokens []Token) *Parser {
 	return &Parser{
 		Tokens:      tokens,
@@ -37,20 +46,23 @@ func NewParser(tokens []Token) *Parser {
 	}
 }
 
+// builtinTypeAliases returns the map of pre-defined type aliases. Currently
+// only "TEXT" is provided, which is a record with a length byte and a
+// byte-array text field.
 func builtinTypeAliases() map[string]Type {
 	return map[string]Type{
 		"TEXT": {
-			Record: &Record{
+			Typ: &Record{
 				Fields: []Field{
 					{
 						Identifier: "length",
-						Type:       Type{Predeclared: PredeclaredByte},
+						Type:       Type{Typ: &PredeclaredType{Kind: PredeclaredByte}},
 					},
 					{
 						Identifier: "text",
 						Type: Type{
-							Array: &Array{
-								ElemType: Type{Predeclared: PredeclaredByte},
+							Typ: &Array{
+								ElemType: Type{Typ: &PredeclaredType{Kind: PredeclaredByte}},
 							},
 						},
 					},
@@ -60,6 +72,8 @@ func builtinTypeAliases() map[string]Type {
 	}
 }
 
+// Peek returns the current token without consuming it. If the parser has
+// reached the end of the token stream, it returns a Token with kind TokenEOF.
 func (p Parser) Peek() Token {
 	if p.Current >= len(p.Tokens) {
 		return Token{TokenKind: TokenEOF}
@@ -68,6 +82,9 @@ func (p Parser) Peek() Token {
 	return p.Tokens[p.Current]
 }
 
+// PeekAt returns the token at the given offset from the current position
+// without consuming any tokens. If the offset goes beyond the end of the
+// token stream, it returns a Token with kind TokenEOF.
 func (p Parser) PeekAt(offset int) Token {
 	if p.Current+offset >= len(p.Tokens) {
 		return Token{TokenKind: TokenEOF}
@@ -75,6 +92,8 @@ func (p Parser) PeekAt(offset int) Token {
 	return p.Tokens[p.Current+offset]
 }
 
+// Next consumes and returns the current token, advancing the parser position.
+// If the parser has reached the end, it returns a Token with kind TokenEOF.
 func (p *Parser) Next() Token {
 	if p.Current >= len(p.Tokens) {
 		return Token{TokenKind: TokenEOF}
@@ -85,10 +104,14 @@ func (p *Parser) Next() Token {
 	return res
 }
 
+// End reports whether the parser has consumed all tokens.
 func (p *Parser) End() bool {
 	return p.Current >= len(p.Tokens)
 }
 
+// Accept consumes the next token and returns it if its kind matches any of
+// the given kinds. If none match, it returns an error describing the
+// unexpected token.
 func (p *Parser) Accept(kinds ...TokenKind) (*Token, error) {
 	token := p.Next()
 	for _, kind := range kinds {
@@ -99,16 +122,22 @@ func (p *Parser) Accept(kinds ...TokenKind) (*Token, error) {
 	return nil, token.Errorf("Accept: unexpected token, not in %v", kinds)
 }
 
+// Have reports whether any of the given token kinds appear at the current
+// position (or at subsequent offsets). It does not consume any tokens.
+// Have reports whether the next len(kinds) tokens match the given kinds in
+// sequence. All kinds must match at successive positions.
 func (p Parser) Have(kinds ...TokenKind) bool {
 	for offset, kind := range kinds {
 		token := p.PeekAt(offset)
-		if kind == token.TokenKind {
-			return true
+		if kind != token.TokenKind {
+			return false
 		}
 	}
-	return false
+	return len(kinds) > 0
 }
 
+// Skip consumes and returns the next token only if its kind matches the given
+// kind. Otherwise it returns nil without consuming anything.
 func (p *Parser) Skip(kind TokenKind) *Token {
 	t := p.Peek()
 	if t.TokenKind == kind {
@@ -118,6 +147,8 @@ func (p *Parser) Skip(kind TokenKind) *Token {
 	return nil
 }
 
+// ParseFile scans, parses and returns a PL/Z source file as a Program AST.
+// The name parameter specifies the file path to read.
 func ParseFile(name string) (*Program, error) {
 	tokens, err := ScanFile(name)
 	if err != nil {
@@ -132,6 +163,10 @@ func ParseFile(name string) (*Program, error) {
 	return &res, nil
 }
 
+// Parse parses a complete PL/Z program from the token stream. It handles
+// INCLUDE directives by recursively parsing the referenced file and
+// appending its statements. All other top-level statements are parsed via
+// Statement.Parse.
 func (p *Program) Parse(parser *Parser) error {
 	for !parser.End() {
 		// Handle INCLUDE "filename"
@@ -178,17 +213,17 @@ func (p *Program) Parse(parser *Parser) error {
 	return nil
 }
 
+// Parse parses a single statement from the token stream. It first attempts
+// to parse an optional named label (e.g. "loop:"), then dispatches on the
+// leading keyword to parse the appropriate command type.
 func (s *Statement) Parse(parser *Parser) error {
 	var l Label
-	// allow two labels , numeric and name
-	for i := 0; i < 2; i++ {
-		if l.Have(*parser) {
-			err := l.Parse(parser)
-			if err != nil {
-				return nil
-			}
-			s.Label = &l
+	if l.Have(*parser) {
+		err := l.Parse(parser)
+		if err != nil {
+			return err
 		}
+		s.Label = &l
 	}
 	tok := parser.Peek()
 	var err error
@@ -247,9 +282,15 @@ func (s *Statement) Parse(parser *Parser) error {
 		err = cmd.Parse(parser)
 		s.Command = cmd
 	case KeywordInterrupt, KeywordNMI:
-		cmd := Procedure{}
-		err = cmd.Parse(parser)
-		s.Command = cmd
+		if parser.Have(KeywordInterrupt, KeywordProc) || parser.Have(KeywordNMI, KeywordProc) {
+			cmd := Procedure{}
+			err = cmd.Parse(parser)
+			s.Command = cmd
+		} else {
+			cmd := InterruptStmt{}
+			err = cmd.Parse(parser)
+			s.Command = cmd
+		}
 	case KeywordProc:
 		cmd := Procedure{}
 		err = cmd.Parse(parser)
@@ -278,6 +319,10 @@ func (s *Statement) Parse(parser *Parser) error {
 		cmd := Yield{}
 		err = cmd.Parse(parser)
 		s.Command = cmd
+	case KeywordAt:
+		cmd := At{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	default:
 		return tok.Errorf("Statement: unexpected token %v", tok)
 	}
@@ -285,38 +330,65 @@ func (s *Statement) Parse(parser *Parser) error {
 	return err
 }
 
-// Returns true if we have a label false if not. May only peek, peekAt or Have.
+// Have reports whether the parser's current position contains a named label
+// (an identifier followed by a colon). It peeks at tokens but does not
+// consume them.
 func (l *Label) Have(parser Parser) bool {
-	if parser.Have(TokenInt, ':') {
-		return true
-	}
-	if parser.Have(TokenIdent, ':') {
-		return true
-	}
-	return false
+	return parser.Have(TokenIdent, ':')
 }
 
+// Parse parses a named label from the token stream. An identifier (e.g.
+// "loop") followed by a colon is consumed, and the label's Name field is
+// set to the identifier text.
 func (l *Label) Parse(parser *Parser) error {
-	tok, err := parser.Accept(TokenInt, TokenIdent)
+	tok, err := parser.Accept(TokenIdent)
 	if err != nil {
 		return err
-	} else if tok.TokenKind == TokenInt {
-		l.Location = tok.Number
-	} else if tok.TokenKind == TokenIdent {
-		l.Name = tok.Text
 	}
+	l.Name = tok.Text
 	_, err = parser.Accept(TokenKind(':'))
 	return err
 }
 
+// Parse parses a HALT statement. It consumes the HALT keyword and returns.
 func (g *Halt) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordHalt)
 	return err
 }
 
-func (g *Constant) Parse(parser *Parser) error {
-	_, err := parser.Accept(KeywordConstant)
+// Parse parses an INTERRUPT or NMI install statement. The keyword has already
+// been consumed by Statement.Parse (the caller decides which keyword it is).
+// This method consumes the procedure name identifier that follows.
+func (s *InterruptStmt) Parse(parser *Parser) error {
+	tok := parser.Next()
+	if tok.TokenKind == KeywordNMI {
+		s.NMI = true
+	}
+	ident, err := parser.Accept(TokenIdent)
 	if err != nil {
+		return err
+	}
+	s.Target = Identifier(ident.Text)
+	return nil
+}
+
+// Parse parses an AT directive. The syntax is AT literal, where literal
+// is a numeric value or a named constant. The AT directive sets the
+// absolute memory address for subsequent data declarations.
+func (a *At) Parse(parser *Parser) error {
+	if _, err := parser.Accept(KeywordAt); err != nil {
+		return err
+	}
+	return a.Address.Parse(parser)
+}
+
+// Parse parses a CONSTANT declaration. The syntax is:
+//
+//	CONSTANT name [=] literal
+//
+// The equals sign is optional, and the literal value is also optional.
+func (g *Constant) Parse(parser *Parser) error {
+	if _, err := parser.Accept(KeywordConstant); err != nil {
 		return nil
 	}
 
@@ -328,10 +400,18 @@ func (g *Constant) Parse(parser *Parser) error {
 
 	parser.Skip(TokenKind('=')) // Skip optional =
 
-	g.Literal.Parse(parser) // Ignore error — optional value
+	// Optional literal value.
+	if err := g.Literal.Parse(parser); err != nil {
+		return err
+	}
 	return nil
 }
 
+// Parse parses a DATA statement. The syntax is:
+//
+//	name: DATA literal [, literal ...]
+//
+// Each literal may be a number, a string, or an identifier reference.
 func (g *Data) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordData)
 	if err != nil {
@@ -340,9 +420,9 @@ func (g *Data) Parse(parser *Parser) error {
 	for {
 		var lit Literal
 		if err := lit.Parse(parser); err != nil {
-			break
+			return err
 		}
-		if lit.Text == nil && lit.Number == nil && lit.Reference == nil {
+		if lit.Lit == nil {
 			break
 		}
 		g.Literals = append(g.Literals, lit)
@@ -354,6 +434,10 @@ func (g *Data) Parse(parser *Parser) error {
 	return nil
 }
 
+// Parse parses a literal value from the token stream. A literal is one of:
+//   - an integer (TokenInt), stored as a NumberLit
+//   - a string token (TokenString), stored as a TextLit
+//   - an identifier (TokenIdent), stored as a ReferenceLit
 func (g *Literal) Parse(parser *Parser) error {
 	tok, err := parser.Accept(TokenInt, TokenString, TokenIdent)
 	if err != nil {
@@ -361,15 +445,17 @@ func (g *Literal) Parse(parser *Parser) error {
 	}
 
 	if tok.TokenKind == TokenInt {
-		g.Number = &tok.Number
+		g.Lit = &NumberLit{Value: tok.Number}
 	} else if tok.TokenKind == TokenString {
-		g.Text = &tok.Text
+		g.Lit = &TextLit{Value: tok.Text}
 	} else if tok.TokenKind == TokenIdent {
-		ref := &Reference{Identifier: Identifier(tok.Text)}
-		g.Reference = ref
+		g.Lit = &ReferenceLit{Value: &Reference{Identifier: Identifier(tok.Text)}}
 	}
 	return nil
 }
+
+// Parse parses an identifier token from the stream and stores it in the
+// receiver. The identifier text is captured as an Identifier value.
 func (i *Identifier) Parse(parser *Parser) error {
 	tok, err := parser.Accept(TokenIdent)
 	if err != nil {
@@ -379,6 +465,10 @@ func (i *Identifier) Parse(parser *Parser) error {
 	return nil
 }
 
+// Parse parses a reference from the token stream. A reference is an identifier
+// optionally followed by array subscripts (e.g. "[index]") and/or field
+// accesses (e.g. ".field"). Subscripts and fields are parsed greedily in a
+// loop until neither is found.
 func (r *Reference) Parse(parser *Parser) error {
 	err := r.Identifier.Parse(parser)
 	if err != nil {
@@ -409,32 +499,40 @@ func (r *Reference) Parse(parser *Parser) error {
 	}
 }
 
+// Parse parses a DISABLE statement. It consumes the DISABLE keyword and returns.
 func (g *Disable) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordDisable)
 	return err
 }
 
+// Parse parses an ENABLE statement. It consumes the ENABLE keyword and returns.
 func (g *Enable) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordEnable)
 	return err
 }
 
+// Parse parses a GOTO statement. The syntax is:
+//
+//	GOTO label
+//
+// where label is a named label (identifier).
 func (g *GoTo) Parse(parser *Parser) error {
-	_, err := parser.Accept(KeywordGoTo)
+	if _, err := parser.Accept(KeywordGoTo); err != nil {
+		return err
+	}
+	tok, err := parser.Accept(TokenIdent)
 	if err != nil {
 		return err
 	}
-	tok, err := parser.Accept(TokenInt, TokenIdent)
-	if err != nil {
-		return err
-	} else if tok.TokenKind == TokenInt {
-		g.Location = tok.Number
-	} else if tok.TokenKind == TokenIdent {
-		g.Name = tok.Text
-	}
+	g.Name = tok.Text
 	return nil
 }
 
+// Parse parses a CALL statement. The syntax is:
+//
+//	CALL name [(arg [, arg ...])]
+//
+// The argument list is optional. Each argument is parsed as an Expression.
 func (g *Call) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordCall)
 	if err != nil {
@@ -444,7 +542,6 @@ func (g *Call) Parse(parser *Parser) error {
 	if err != nil {
 		return err
 	}
-	g.Name = tok.Text
 	g.Reference = Reference{Identifier: Identifier(tok.Text)}
 
 	// Optional argument list: (expr1, expr2, ...)
@@ -468,6 +565,12 @@ func (g *Call) Parse(parser *Parser) error {
 	return nil
 }
 
+// Parse parses a RETURN statement. The syntax is:
+//
+//	RETURN [expr [, expr ...]]
+//
+// The return expressions are optional and comma-separated. Parsing stops at
+// EOF, semicolon, or the END keyword.
 func (g *Return) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordReturn); err != nil {
 		return err
@@ -487,7 +590,7 @@ func (g *Return) Parse(parser *Parser) error {
 			}
 			g.Expressions = append(g.Expressions, expr)
 		default:
-			return nil
+			return tok.Errorf("Return: unexpected token %v", tok)
 		}
 		if parser.Peek().TokenKind != ',' {
 			break
@@ -497,6 +600,11 @@ func (g *Return) Parse(parser *Parser) error {
 	return nil
 }
 
+// Parse parses an OUTPUT statement. The syntax is:
+//
+//	OUTPUT port expr
+//
+// where port is a numeric literal and expr is the value to write to the port.
 func (g *Output) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordOutput)
 	if err != nil {
@@ -510,11 +618,15 @@ func (g *Output) Parse(parser *Parser) error {
 	return g.Value.Parse(parser)
 }
 
+// Parse parses a type expression from the token stream. It handles:
+//   - RECORD fields END (inline record definition)
+//   - TYPE name (type alias reference)
+//   - ARRAY [size] elemtype (array type with optional size)
+//   - BYTE, WORD, or DATA (predeclared types)
 func (t *Type) Parse(parser *Parser) error {
 	if parser.Peek().TokenKind == KeywordRecord {
 		parser.Next()
-		t.Predeclared = PredeclaredNone
-		t.Record = &Record{}
+		rec := &Record{}
 		for parser.Peek().TokenKind == TokenIdent {
 			var f Field
 			if err := f.Identifier.Parse(parser); err != nil {
@@ -523,7 +635,7 @@ func (t *Type) Parse(parser *Parser) error {
 			if err := f.Type.Parse(parser); err != nil {
 				return err
 			}
-			t.Record.Fields = append(t.Record.Fields, f)
+			rec.Fields = append(rec.Fields, f)
 			if parser.Peek().TokenKind != TokenKind(',') {
 				break
 			}
@@ -532,6 +644,7 @@ func (t *Type) Parse(parser *Parser) error {
 		if _, err := parser.Accept(KeywordEnd); err != nil {
 			return err
 		}
+		t.Typ = rec
 		return nil
 	}
 	if parser.Peek().TokenKind == KeywordType {
@@ -549,20 +662,23 @@ func (t *Type) Parse(parser *Parser) error {
 	}
 	if parser.Peek().TokenKind == KeywordArray {
 		parser.Next()
-		t.Predeclared = PredeclaredNone
-		t.Array = &Array{}
+		arr := &Array{}
 		if parser.Peek().TokenKind == '[' {
 			parser.Next()
 			tok := parser.Peek()
 			if tok.TokenKind == TokenInt {
 				parser.Next()
-				t.Array.Size = tok.Number
+				arr.Size = tok.Number
 			}
 			if _, err := parser.Accept(TokenKind(']')); err != nil {
 				return err
 			}
 		}
-		return t.Array.ElemType.Parse(parser)
+		if err := arr.ElemType.Parse(parser); err != nil {
+			return err
+		}
+		t.Typ = arr
+		return nil
 	}
 	tok, err := parser.Accept(KeywordByte, KeywordWord, KeywordData)
 	if err != nil {
@@ -570,15 +686,21 @@ func (t *Type) Parse(parser *Parser) error {
 	}
 	switch tok.TokenKind {
 	case KeywordByte:
-		t.Predeclared = PredeclaredByte
+		t.Typ = &PredeclaredType{Kind: PredeclaredByte}
 	case KeywordWord:
-		t.Predeclared = PredeclaredWord
+		t.Typ = &PredeclaredType{Kind: PredeclaredWord}
 	case KeywordData:
-		t.Predeclared = PredeclaredData
+		t.Typ = &PredeclaredType{Kind: PredeclaredData}
 	}
 	return nil
 }
 
+// Parse parses a DEFINE statement. The syntax is:
+//
+//	DEFINE name type
+//
+// It creates a type alias, registering it in the parser's TypeAliases map so
+// that subsequent code can refer to the type by name using the TYPE keyword.
 func (d *Define) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordDefine); err != nil {
 		return err
@@ -595,6 +717,17 @@ func (d *Define) Parse(parser *Parser) error {
 	return nil
 }
 
+// Parse parses a DECLARE statement. The syntax is:
+//
+//	DECLARE name type
+//	DECLARE name ARRAY [OF] [size] type
+//	DECLARE name type [= literal]
+//	DECLARE name type AT literal
+//
+// For array declarations, the optional size may be given in brackets.
+// If present, an optional initializer follows an equals sign. The AT
+// suffix places the variable at an absolute address instead; no
+// initializer is allowed in that case.
 func (g *Declare) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordDeclare)
 	if err != nil {
@@ -630,13 +763,28 @@ func (g *Declare) Parse(parser *Parser) error {
 	if err != nil {
 		return err
 	}
+
+	// Optional AT suffix for absolute address (no initializer allowed).
+	if parser.Skip(KeywordAt) != nil {
+		g.At = &Literal{}
+		return g.At.Parse(parser)
+	}
+
 	if parser.Skip(TokenKind('=')) != nil {
 		g.Initializer = &Initializer{}
-		g.Initializer.Literal.Parse(parser) // Ignore error — optional value
+		if err := g.Initializer.Literal.Parse(parser); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
+// Parse parses a LET assignment statement. The syntax is:
+//
+//	LET reference = expression
+//
+// The reference is parsed first (supporting subscripts and field access),
+// followed by the equals sign and the value expression.
 func (g *Let) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordLet)
 	if err != nil {
@@ -653,8 +801,12 @@ func (g *Let) Parse(parser *Parser) error {
 	return g.Expression.Parse(parser)
 }
 
-// PeekOperator looks at the next token(s) without consuming them.
-// If not an operator returns OperatorNone.
+// PeekOperator looks at the next token(s) without consuming them and returns
+// the corresponding Operator value. If the next token(s) do not form a
+// recognised operator, it returns OperatorNone.
+//
+// Multi-character operators ('<=', '>=', '<>', '!=', '<<', '>>') are detected
+// by inspecting the current and subsequent token kinds.
 func (p *Parser) PeekOperator() Operator {
 	tok := p.Peek()
 	switch tok.TokenKind {
@@ -701,9 +853,9 @@ func (p *Parser) PeekOperator() Operator {
 	return OperatorNone
 }
 
-// ReadOperator consumestokens and returns the operator found.
-// Multi-character operators consume two or three tokens.
-// If no operator is present, returns OperatorNone and consumes no tokens.
+// ReadOperator consumes tokens and returns the operator found. Multi-character
+// operators (e.g. "==", "!=", "<=", ">=", "<<", ">>") consume two tokens.
+// If no operator is present, it returns OperatorNone and consumes no tokens.
 func (p *Parser) ReadOperator() (op Operator) {
 	op = p.PeekOperator()
 	switch op {
@@ -718,33 +870,57 @@ func (p *Parser) ReadOperator() (op Operator) {
 	return op
 }
 
-// ParseExpr is the core Pratt parser. It reads tokens starting from the
-// current position and builds an Expression tree.  The minBp parameter sets
-// the minimum binding-power that the expression must have; operators with
-// lower priority cause the loop to stop.
+// ParseExpr is the core Pratt parser for expressions. It reads tokens
+// starting from the current position and builds an Expression tree.
+//
+// The minBp (minimum binding power) parameter sets the minimum precedence
+// that subsequent operators must have; operators with a lower priority than
+// minBp cause the loop to stop and the current expression to be returned.
+//
+// The parse proceeds in two phases:
+//
+//  1. Prefix (nud) phase: dispatches on the current token to parse atomic
+//     expressions (literals, identifiers, parenthesised sub-expressions) or
+//     prefix operators (unary '-', unary '!', unary '+' as a no-op).
+//
+//  2. Infix/suffix (led) phase: loops while the next token is a postfix
+//     operator ('[' for array indexing, '(' for function calls, '.' for field
+//     access) or an infix operator. Each iteration wraps the current left-hand
+//     expression into a larger expression node using the operator's precedence
+//     to recursively parse the right-hand side.
 func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 	tok := p.Peek()
 
 	switch tok.TokenKind {
 	case TokenInt:
 		p.Next()
-		num := tok.Number
-		left.Operand = &Operand{Literal: &Literal{Number: &num}}
+		left.Expr = &Operand{Op: &Literal{Lit: &NumberLit{Value: tok.Number}}}
 
 	case TokenString:
 		p.Next()
-		text := tok.Text
-		n := tok.Number
-		left.Operand = &Operand{Literal: &Literal{Text: &text, Number: &n}}
+		left.Expr = &Operand{Op: &Literal{Lit: &TextLit{Value: tok.Text}}}
 
 	case TokenChar:
 		p.Next()
-		n := tok.Number
-		left.Operand = &Operand{Literal: &Literal{Number: &n}}
+		left.Expr = &Operand{Op: &Literal{Lit: &NumberLit{Value: tok.Number}}}
 
-	case TokenIdent, KeywordInput:
+	case TokenIdent:
 		p.Next()
-		left.Operand = &Operand{Reference: &Reference{Identifier: Identifier(tok.Text)}}
+		left.Expr = &Operand{Op: &Reference{Identifier: Identifier(tok.Text)}}
+
+	case KeywordInput:
+		p.Next()
+		if _, err := p.Accept(TokenKind('(')); err != nil {
+			return err
+		}
+		var port Expression
+		if err := port.Parse(p); err != nil {
+			return err
+		}
+		if _, err := p.Accept(TokenKind(')')); err != nil {
+			return err
+		}
+		left.Expr = &Operand{Op: &Input{Port: port}}
 
 	case '(':
 		p.Next()
@@ -773,9 +949,9 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 		if err != nil {
 			return err
 		}
-		left.Prefix = &Prefix{
+		left.Expr = &Prefix{
 			Operator: OperatorNEG,
-			Operand:  Operand{Expression: &right},
+			Operand:  Operand{Op: &right},
 		}
 
 	case '!':
@@ -785,9 +961,9 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 		if err != nil {
 			return err
 		}
-		left.Prefix = &Prefix{
+		left.Expr = &Prefix{
 			Operator: OperatorNOT,
-			Operand:  Operand{Expression: &right},
+			Operand:  Operand{Op: &right},
 		}
 
 	default:
@@ -801,15 +977,7 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 		if tok.TokenKind == '[' {
 			p.Next()
 			if p.Peek().TokenKind == ']' {
-				p.Next()
-				prev := new(Expression)
-				*prev = *left
-				*left = Expression{}
-				left.Suffix = &Suffix{
-					Operator: OperatorINDEX,
-					Operands: []Operand{{Expression: prev}},
-				}
-				continue
+				return tok.Errorf("empty array subscript")
 			}
 			var index Expression
 			if err := index.Parse(p); err != nil {
@@ -823,11 +991,11 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 			indexCopy := new(Expression)
 			*indexCopy = index
 			*left = Expression{}
-			left.Suffix = &Suffix{
+			left.Expr = &Suffix{
 				Operator: OperatorINDEX,
 				Operands: []Operand{
-					{Expression: prev},
-					{Expression: indexCopy},
+					{Op: prev},
+					{Op: indexCopy},
 				},
 			}
 			continue
@@ -858,14 +1026,14 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 			prev := new(Expression)
 			*prev = *left
 			operands := make([]Operand, 0, 1+len(args))
-			operands = append(operands, Operand{Expression: prev})
+			operands = append(operands, Operand{Op: prev})
 			for i := range args {
 				ac := new(Expression)
 				*ac = args[i]
-				operands = append(operands, Operand{Expression: ac})
+				operands = append(operands, Operand{Op: ac})
 			}
 			*left = Expression{}
-			left.Suffix = &Suffix{
+			left.Expr = &Suffix{
 				Operator: OperatorCALL,
 				Operands: operands,
 			}
@@ -882,11 +1050,11 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 			prev := new(Expression)
 			*prev = *left
 			*left = Expression{}
-			left.Suffix = &Suffix{
+			left.Expr = &Suffix{
 				Operator: OperatorFIELD,
 				Operands: []Operand{
-					{Expression: prev},
-					{Reference: &Reference{Identifier: Identifier(fieldTok.Text)}},
+					{Op: prev},
+					{Op: &Reference{Identifier: Identifier(fieldTok.Text)}},
 				},
 			}
 			continue
@@ -909,11 +1077,11 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 		*rightCopy = right
 
 		*left = Expression{}
-		left.Infix = &Infix{
+		left.Expr = &Infix{
 			Operator: op,
 			Operands: [2]Operand{
-				{Expression: prev},
-				{Expression: rightCopy},
+				{Op: prev},
+				{Op: rightCopy},
 			},
 		}
 	}
@@ -921,6 +1089,12 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 	return nil
 }
 
+// Parse parses an IF statement. The syntax is:
+//
+//	IF condition THEN statement [ELSE statement]
+//
+// The ELSE branch is optional. The condition is parsed as an Expression and
+// both branches are parsed as Statement values.
 func (s *If) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordIf); err != nil {
 		return err
@@ -944,8 +1118,17 @@ func (s *If) Parse(parser *Parser) error {
 	return nil
 }
 
+// Parse parses a grouped statement block. It handles four forms identified by
+// the leading keyword:
+//   - WHILE condition [DO] statements END
+//   - FOR var = start TO end [BY step] [DO] statements END
+//   - CASE expr [OF] [DO] statements END
+//   - DO statements END (plain block)
+//
+// In each case, statements inside the block are parsed until END.
 func (g *Group) Parse(parser *Parser) error {
 	tok := parser.Peek()
+	isCase := false
 	switch tok.TokenKind {
 	case KeywordWhile:
 		parser.Next()
@@ -967,28 +1150,73 @@ func (g *Group) Parse(parser *Parser) error {
 		if err := g.Case.Expression.Parse(parser); err != nil {
 			return err
 		}
-		parser.Skip(KeywordOf)
-		parser.Skip(KeywordDo)
+		parser.Skip(KeywordDo) // optional DO
+
+		// Parse case branches. Each branch is introduced by OF followed
+		// by a numeric value (or DEFAULT) and the statement to execute
+		// when the selector matches.
+		isCase = true
+		for !parser.End() && parser.Peek().TokenKind != KeywordEnd {
+			if _, err := parser.Accept(KeywordOf); err != nil {
+				return parser.Peek().Errorf("expected OF or END in CASE")
+			}
+			if parser.Peek().TokenKind == KeywordDefault {
+				parser.Next()
+				var s Statement
+				if err := s.Parse(parser); err != nil {
+					return err
+				}
+				g.Case.Default = &s
+			} else {
+				var branch CaseBranch
+				// Accept either a numeric literal or a constant identifier.
+				tok, err := parser.Accept(TokenInt, TokenIdent)
+				if err != nil {
+					return tok.Errorf("expected case value or DEFAULT")
+				}
+				if tok.TokenKind == TokenInt {
+					branch.Values = append(branch.Values, CaseVal{Value: tok.Number})
+				} else {
+					branch.Values = append(branch.Values, CaseVal{Name: tok.Text})
+				}
+				if err := branch.Statement.Parse(parser); err != nil {
+					return err
+				}
+				g.Case.Branches = append(g.Case.Branches, branch)
+			}
+			parser.Skip(TokenKind(';'))
+		}
+
 	default:
 		if _, err := parser.Accept(KeywordDo); err != nil {
 			return err
 		}
 	}
-	for !parser.End() && parser.Peek().TokenKind != KeywordEnd {
-		var s Statement
-		if err := s.Parse(parser); err != nil {
-			return err
+	if !isCase {
+		for !parser.End() && parser.Peek().TokenKind != KeywordEnd {
+			var s Statement
+			if err := s.Parse(parser); err != nil {
+				return err
+			}
+			g.Statements = append(g.Statements, s)
+			parser.Skip(TokenKind(';'))
 		}
-		g.Statements = append(g.Statements, s)
-		parser.Skip(TokenKind(';'))
 	}
 	if _, err := parser.Accept(KeywordEnd); err != nil {
 		return err
 	}
-	parser.Skip(TokenIdent) // optional label after END
 	return nil
 }
 
+// Parse parses a PROCEDURE declaration. The syntax is:
+//
+//	[INTERRUPT | NMI] PROCEDURE name [(params)] [type] [REENTRANT]
+//	  statements
+//	END
+//
+// Parameters are parsed as a comma-separated list of identifier-type pairs.
+// An optional return type (BYTE, WORD, or RECORD) follows the parameter list.
+// If REENTRANT is present, the procedure uses stack-based frame allocation.
 func (p *Procedure) Parse(parser *Parser) error {
 	// Optional INTERRUPT or NMI modifier.
 	if parser.Skip(KeywordInterrupt) != nil {
@@ -1017,7 +1245,7 @@ func (p *Procedure) Parse(parser *Parser) error {
 			if err := typ.Parse(parser); err != nil {
 				return err
 			}
-			if typ.Predeclared == PredeclaredNone && typ.Record == nil {
+			if typ.Predeclared() == PredeclaredNone && typ.Record() == nil {
 				return fmt.Errorf("expected type after parameter name")
 			}
 			p.Parameters = append(p.Parameters, id)
@@ -1044,14 +1272,11 @@ func (p *Procedure) Parse(parser *Parser) error {
 		p.Reentrant = true
 	}
 
-	// Parse body statements; collect DECLARE statements into Locals.
+	// Parse body statements.
 	for !parser.End() && parser.Peek().TokenKind != KeywordEnd {
 		var s Statement
 		if err := s.Parse(parser); err != nil {
 			return err
-		}
-		if decl, ok := s.Command.(Declare); ok {
-			p.Locals = append(p.Locals, decl)
 		}
 		p.Statements = append(p.Statements, s)
 		parser.Skip(TokenKind(';'))
@@ -1060,14 +1285,17 @@ func (p *Procedure) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordEnd); err != nil {
 		return err
 	}
-	// Optional label after END — only consume if it's NOT followed by ':'
-	// (which would be a label for the next statement).
-	if parser.Peek().TokenKind == TokenIdent && parser.PeekAt(1).TokenKind != ':' {
-		parser.Next()
-	}
 	return nil
 }
 
+// Parse parses a TASK declaration. The syntax is:
+//
+//	TASK name [PRIORITY n]
+//	  statements
+//	END
+//
+// The priority is optional; if present, it is a numeric value. Body
+// statements are parsed until END is reached.
 func (t *Task) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordTask); err != nil {
 		return err
@@ -1096,12 +1324,14 @@ func (t *Task) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordEnd); err != nil {
 		return err
 	}
-	if parser.Peek().TokenKind == TokenIdent && parser.PeekAt(1).TokenKind != ':' {
-		parser.Next()
-	}
 	return nil
 }
 
+// Parse parses a SUSPEND statement. The syntax is:
+//
+//	SUSPEND task_name
+//
+// The task name is parsed as an identifier.
 func (s *Suspend) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordSuspend); err != nil {
 		return err
@@ -1114,6 +1344,11 @@ func (s *Suspend) Parse(parser *Parser) error {
 	return nil
 }
 
+// Parse parses a RESUME statement. The syntax is:
+//
+//	RESUME task_name
+//
+// The task name is parsed as an identifier.
 func (r *Resume) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordResume); err != nil {
 		return err
@@ -1126,6 +1361,11 @@ func (r *Resume) Parse(parser *Parser) error {
 	return nil
 }
 
+// Parse parses a SLEEP statement. The syntax is:
+//
+//	SLEEP duration
+//
+// The duration is parsed as an Expression.
 func (s *Sleep) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordSleep); err != nil {
 		return err
@@ -1133,11 +1373,17 @@ func (s *Sleep) Parse(parser *Parser) error {
 	return s.Duration.Parse(parser)
 }
 
+// Parse parses a YIELD statement. It consumes the YIELD keyword and returns.
 func (y *Yield) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordYield)
 	return err
 }
 
+// Parse parses the loop header of a FOR statement. The syntax is:
+//
+//	var = start TO end [BY step]
+//
+// The start, end, and optional step are parsed as Expression values.
 func (f *For) Parse(parser *Parser) error {
 	if err := f.Reference.Parse(parser); err != nil {
 		return err
@@ -1163,6 +1409,8 @@ func (f *For) Parse(parser *Parser) error {
 	return nil
 }
 
+// Parse parses an Expression from the token stream by delegating to
+// ParseExpr with a minimum binding power of 0.
 func (e *Expression) Parse(p *Parser) error {
 	err := e.ParseExpr(p, 0)
 	if err != nil {
@@ -1170,185 +1418,3 @@ func (e *Expression) Parse(p *Parser) error {
 	}
 	return nil
 }
-
-/*
-
-
-<PROGRAM> ::= <STATEMENT LIST>
-<STATEMENT LIST> := <STATEMENT> | <STATEMENT LIST> <STATEMENT>
-<STATEMENT> := <BASIC STATEMENT> | <IF STATEMENT>
-
-<BASIC STATEMENT> := <ASSIGNMENT> ;
-	| <GROUP> ;
-	| <PROCEDURE DEFINITION> ;
-	| <RETURN STATEMENT> ;
-	| <CALL STATEMENT> ;
-	| <GO TO STATEMENT> ;
-	| <DECLARATION STATEMENT> ;
-	| HALT i ;
-	| ;
-	| <LABEL DEFINITION> <BASIC STATEMENT>
-s
-
-
-<IF STATEMENT> := <IF CLAUSE> <STATEMENT>
-	| <IF CLAUSE> <ELSE PART> <STATEMENT>
-	| <LABEL DEFINITION> <BASIC STATEMENT>
-
-<IF CLAUSE> := "IF" <EXPRESSION> "THEN"
-<ELSE PART> := <BASIC STATEMENT> "ELSE"
-<GROUP> := <GROUP HEAD> <ENDING>
-
-<GROUP HEAD> := "DO"
-	| "DO <STEP DEFINITION>
-	| "DO" <WHILE CLAUSE> ;
-	| "DO" <CASE SELECTOR> ;
-	| <GROUP HEAD> <STATEM//ENT>
-
-<STEP DEFINITION> := <VARIABLE> <REPLACE> <EXPRESSION> <ITERATION CONTROL>
-
-<ITERATION CONTROL> := "TO" <EXPRESSION>
-					| "TO" <EXPRESSION> "BY" <EXPRESSION>
-<WHILE CLAUSE> := "WHILE" <EXPRESSION>
-<CASE SELECTOR> :=  "CASE" <EXPRESSION>
-
-<PROCEDURE DEFINITION> := < PROCEDURE HEAD> <STATEMENT LIST> <ENDING>
-<PROCEDURE HEAD> ::= <PROCEDURE NAME> ;
-	| <PROCEDURE NAME>
-	| <PROCEDURE NAME> <TYPE>
-	| <PROCEDURE NAME> <PARAMETER LIST>
-	| <PROCEDURE NAME> <PARAMETER LIST> <TYPE>
-	| <PROCEDURE NAME> <LABEL DEFINITION)
-
-<PARAMETER LIST> := <PARAMETER HEAD> <IDENTIFIER>
-<PARAMET ER HEAD) : :T (
-<PARAMETER HEAD) < 10 ENT I FIE R) ,
-<ENDING) END
-END <IDENTIFIER)
-<LABEL DEFINITION> <ENDING>
-<LABEL DEFINITION)
-<RETURN STATE~ENT>
-<CALL STATEMENT)
-<GO TO STATEMENT>
-<GO TO) GO TO
-GOTD
-"T
-< ID E NT I FIE R) :
-<NUMBER) :
-RETURN
-RETURN <EXPRESSION>
-CALL <VARIABLE>
-<GO TO) <IDENTIFIER>
-<GO TO) <NUMBER>
-LIST>
-;
-<TYPE)
-<DECLARATION STATEMENT> DECLARE <DECLARATION ELEMENT)
-<ENDING>
-<DECLARATION STATEMENT> , <CECLARATION ELEMENT>
-<DECLARATION ELEMENT) ::= <TYPE DECLARATION> "
-<IDENTIFIER> LIT2RALLY <STRING>
-<IDENTIFIER> <DATA LIST>.
-<DATA LIST> ::= <DATA HEAD> <CONSTANT> )
-<DATA HEAD> DATA (
-", <DATA HEAD> <CONSTANT> ,
-<TYPE DECLARATION> ::=, <IDENTIFIER SPECIFICATION> <TYPE>
-<BOUND HEAD> <NUMBER> ) <TYPE>
-<TYPE DECLARATION> <INITIAL LIST>
-49
-64
-65
-66
-67
-68
-69
-70
-71
-72
-73
-74
-75
-76
-71
-78
-79
-<TVPE> :: =
-\ BYTE
-ADDRESS
-LABEl
-<BOUND HEAD> .. -.. - <IDENTIFIER SPECIFICATION> (
-<IDENTIFIER SPECIFICATION> ::= <VARIABLE NAME>
-I <IDENTIFIER LIST> <VARIAELE NAME> )
-<IDENTIFIER LIST> .. -•• T (
-<VARIABLE NAME>
-<BASED VARIABLE>
-<INITIAL LIST>
-< INITIAL HEAD>
-<A SSI GNf.1ENT>
-: : T
-.. -o .-
-• 0_
-• 0-
-<IDENTIFIER LIST> <VARIABLE NAME> t
-<IDENTIFIER>
-<BASED VARIABLE> <IDENTIFIER>
-<IDENTIFIER> BASED
-<INITIAL HEAD> <CONSTANT>
-I t\ITIAL (
-<INITIAL HEAD> <CONSTANT> t
-<VARIABLE> <REPLACE> <EXPRESSION>
-<LEFT PART> <ASSIGNMENT>
-80 <REPLACE> ::= =
-81 <LEFT PART> ::= <VARIABLE>,
-82 <EXPRESSION> <LOGICAL EXPRESSION>
-83 •• , <VARIABLE>: = <LOGICAL EXPRESSION>
-84 <LOGICAL EXPRESSION> •• - <LOGICAL FACTOR>
-85 • ·-1 <LOGICAL EXPRESSION> OR <LOGICAL FACTOR>
-86 <LOGICAL EXPRESSION> XOR <LOGICAL FACTOR>
-<LOGICAL FACTOR> : : j <LOGICAL SECONDARY>
-<LOGICAL FACTOR> AND <LOGICAL SECONDARY>
-<LOGICAL SECONCARY> <LOGICAL PRIMARY>
-NOT <LOGICAL PRIMARY>
-<LOGICAL PRIMARY> <ARITHMETIC EXPRESSION>
-<RELATION>
-<ARITHMETIC
-<TERM> .0_.. -
-I<PRIMARY>
-"I =<
->
-< >
-< => =
-EXPRESSION>
-<PRIMARY>
-<ARI THME TI C EXPRE SS ION> <RELAT! ON> <ARITHMETIC EXPRESS ION)
-:: = <T ERM>
-<ARITHMETIC EXPRESSION> + <TERM>
-<ARITHMETIC EXPRESSION> - <TERM)
-<ARITHMETIC EXPRESSION> PLUS <TERM>
-<ARITHMETIC EXPRESSION> MINUS <TERM>
-- <TERM>
-<TERM> * <PRIMARY>
-<TERM> I <PRIMARY>
-<TER~> MOD <PRIMARY>
-00= <CONSTANT>
-o 0.\ . <CONS TANT> •
-~~~~n~~J>HEAD> <CONSl ANT> )
-• <VARIABLE>
-( <EXPRESSION> )
-<COr--STANT HEAD> . (
-<VARI ABL E> o 0,
-<SUBSCRI PT HE AC>
-<COt\ST ANT> : : =
-I
-<CONSTANT HEAD> <CONSTANT> t
-< IOENT I FI ER>
-<SUBSCRIPT HEAD> <EXPRESSION> )
-00_ <IDENT IFIER> (
-00, <SUBSCRI PT HEAD> <E:XPRESS ION> ,
-<STRING>
-<NUMBER>
-123 <TO> ::. TO
-124 <BY> ::= BY
-125 <WHILE> ::= WHILE
-
-*/

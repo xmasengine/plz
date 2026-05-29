@@ -1,6 +1,6 @@
 package isa
 
-include "testing"
+import "testing"
 
 func TestISA(t *testing.T) {
 

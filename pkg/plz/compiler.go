@@ -1,7 +1,19 @@
 package plz
 
-import asm "github.com/xmasengine/plz/pkg/z80asm"
+import (
+	"fmt"
 
+	asm "github.com/xmasengine/plz/pkg/z80asm"
+)
+
+// Compile runs the full PL/Z compilation pipeline on the given source file:
+// scanning, parsing, semantic checking, code generation, and finally
+// assembling the generated Z80 assembly into the specified output format.
+//
+// The src argument is the path to the PL/Z source file. The out argument is
+// the output binary path (without extension). The format argument selects the
+// output format: "bin" for a flat binary, or "sms" for a Sega Master System
+// ROM image.
 func Compile(out, format, src string) error {
 	tokens, err := ScanFile(src)
 	if err != nil {
@@ -25,10 +37,13 @@ func Compile(out, format, src string) error {
 		return err
 	}
 
-	if format == "bin" {
-		err = asm.AssembleFiles(out, []string{gen.File.Name()})
-	} else if format == "sms" {
-		err = asm.AssembleSMS(out, []string{gen.File.Name()})
+	switch format {
+	case "bin":
+		err = asm.AssembleFiles(out, []string{gen.FileName()})
+	case "sms":
+		err = asm.AssembleSMS(out, []string{gen.FileName()})
+	default:
+		return fmt.Errorf("unknown output format %q", format)
 	}
 	if err != nil {
 		return err

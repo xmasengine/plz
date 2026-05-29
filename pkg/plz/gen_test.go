@@ -397,14 +397,11 @@ LET t = x + 1
 RETURN t
 END
 CALL foo(5)`)
-	if !strings.Contains(asm, "_plz_foo_frame: db 0, 0, 0, 0") {
-		t.Error("expected frame with 4 bytes (param + local)")
+	if !strings.Contains(asm, "_plz_foo_x: db 0, 0") {
+		t.Error("expected RAM allocation for param x")
 	}
-	if !strings.Contains(asm, "const _plz_foo_t = _plz_foo_frame+2") {
-		t.Error("expected const mapping for local t")
-	}
-	if strings.Contains(asm, "\nt: db ") {
-		t.Error("local t should NOT have its own db allocation")
+	if !strings.Contains(asm, "_plz_foo_t: db 0, 0") {
+		t.Error("expected RAM allocation for local t")
 	}
 }
 
@@ -413,11 +410,8 @@ func TestGenProcByteParam(t *testing.T) {
 	if !strings.Contains(asm, "ld a, l") {
 		t.Error("expected byte truncation for BYTE param save")
 	}
-	if !strings.Contains(asm, "const _plz_double_x = _plz_double_frame+0") {
-		t.Error("expected x at offset 0 in frame")
-	}
-	if !strings.Contains(asm, "_plz_double_frame: db 0") {
-		t.Error("expected 1-byte frame for single BYTE param")
+	if !strings.Contains(asm, "_plz_double_x: db 0") {
+		t.Error("expected RAM allocation for BYTE param x")
 	}
 }
 

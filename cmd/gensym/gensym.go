@@ -144,8 +144,8 @@ const MinLine = 42
 func main() {
 	knownOperands := []string{}
 	out := os.Stdout
-	fmt.Fprintln(out, header)
-	defer fmt.Fprintln(out, footer)
+	fmt.Fprint(out, header)
+	defer fmt.Fprint(out, footer)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {

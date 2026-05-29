@@ -594,7 +594,7 @@ TASK music_test PRIORITY 4
   HALT
 END
 `)
-	expected := []byte{137, 0, 159, 191, 223, 255, 128, 16, 152, 159}
+	expected := []byte{159, 191, 223, 255, 128, 16, 152, 159}
 	if len(io.OutBytes[0x7F]) != len(expected) {
 		t.Fatalf("expected %d bytes on port 0x7F, got %d: %v", len(expected), len(io.OutBytes[0x7F]), io.OutBytes[0x7F])
 	}

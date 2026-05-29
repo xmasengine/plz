@@ -1,75 +1,86 @@
+// Package plz implements a compiler for the PL/Z programming language targeting
+// the Z80 CPU. It provides a complete frontend including lexing, parsing,
+// semantic analysis, and code generation.
 package plz
 
-import "text/scanner"
-import "errors"
-import "strconv"
-import "io"
-import "os"
-
-type Position = scanner.Position
-
-type TokenKind rune
-
-const (
-	TokenEOF TokenKind = -(iota + 1)
-	TokenIdent
-	TokenInt
-	TokenFloat // to match Scanner token kinds
-	TokenChar
-	TokenString
-	TokenRawString // to match Scanner token kinds
-	TokenComment
-	KeywordArray
-	KeywordByte
-	KeywordCall
-	KeywordConstant
-	KeywordData
-	KeywordDeclare
-	KeywordDisable
-	KeywordDo
-	KeywordEnable
-	KeywordEnd
-	KeywordHalt
-	KeywordGoTo
-	KeywordIf
-	KeywordThen
-	KeywordElse
-	KeywordInput
-	KeywordLet
-	KeywordReturn
-	KeywordRecord
-	KeywordOutput
-	KeywordProc
-	KeywordReentrant
-	KeywordWord
-	KeywordWhile
-	KeywordFor
-	KeywordTo
-	KeywordBy
-	KeywordCase
-	KeywordOf
-	KeywordDefine
-	KeywordType
-	KeywordInclude
-	KeywordInterrupt
-	KeywordNMI
-	KeywordTask
-	KeywordPriority
-	KeywordSuspend
-	KeywordSleep
-	KeywordYield
-	KeywordResume
+import (
+	"errors"
+	"io"
+	"os"
+	"strconv"
+	"text/scanner"
 )
 
-func (t TokenKind) String() string {
-	for k, v := range Keywords {
-		if t == v {
-			return k
-		}
-	}
-	return scanner.TokenString(rune(t))
-}
+// Position represents a source position in a file.
+type Position = scanner.Position
 
+// TokenKind identifies the type of a lexical token.
+type TokenKind rune
+
+// Token kinds for special and literal tokens.
+const (
+	TokenEOF        TokenKind = -(iota + 1) // End of input.
+	TokenIdent                               // An identifier.
+	TokenInt                                 // An integer literal.
+	TokenFloat                               // A floating-point literal (matching Scanner token kinds).
+	TokenChar                                // A character literal.
+	TokenString                              // A string literal.
+	TokenRawString                           // A raw string literal (matching Scanner token kinds).
+	TokenComment                             // A comment (retained when SkipComments is disabled).
+)
+
+// keywordBase is the offset for keyword TokenKind values, chosen to avoid
+// collisions with token kind constants (TokenEOF, TokenIdent, etc.) and
+// with character runes returned by the scanner (such as '(' and ')').
+const keywordBase TokenKind = -200
+
+// Keyword token kinds. Each constant represents a reserved word in the PL/Z language.
+const (
+	KeywordArray     TokenKind = keywordBase - (iota + 1) // ARRAY
+	KeywordByte                                            // BYTE
+	KeywordCall                               // CALL
+	KeywordConstant                           // CONSTANT
+	KeywordData                               // DATA
+	KeywordDeclare                            // DECLARE
+	KeywordDisable                            // DISABLE
+	KeywordDo                                 // DO
+	KeywordEnable                             // ENABLE
+	KeywordEnd                                // END
+	KeywordHalt                               // HALT
+	KeywordGoTo                               // GOTO
+	KeywordIf                                 // IF
+	KeywordThen                               // THEN
+	KeywordElse                               // ELSE
+	KeywordInput                              // INPUT
+	KeywordLet                                // LET
+	KeywordReturn                             // RETURN
+	KeywordRecord                             // RECORD
+	KeywordOutput                             // OUTPUT
+	KeywordProc                               // PROCEDURE
+	KeywordReentrant                          // REENTRANT
+	KeywordWord                               // WORD
+	KeywordWhile                              // WHILE
+	KeywordFor                                // FOR
+	KeywordTo                                 // TO
+	KeywordBy                                 // BY
+	KeywordCase                               // CASE
+	KeywordOf                                 // OF
+	KeywordDefine                             // DEFINE
+	KeywordType                               // TYPE
+	KeywordInclude                            // INCLUDE
+	KeywordInterrupt                          // INTERRUPT
+	KeywordNMI                                // NMI
+	KeywordTask                               // TASK
+	KeywordPriority                           // PRIORITY
+	KeywordSuspend                            // SUSPEND
+	KeywordSleep                              // SLEEP
+	KeywordYield                              // YIELD
+	KeywordResume                             // RESUME
+	KeywordAt                                 // AT
+	KeywordDefault                            // DEFAULT
+)
+
+// Keywords maps keyword strings to their corresponding TokenKind values.
 var Keywords = map[string]TokenKind{
 	"ARRAY":   KeywordArray,
 	"BYTE":    KeywordByte,
@@ -111,23 +122,41 @@ var Keywords = map[string]TokenKind{
 	"SLEEP":   KeywordSleep,
 	"YIELD":   KeywordYield,
 	"RESUME":  KeywordResume,
+	"AT":      KeywordAt,
+	"DEFAULT": KeywordDefault,
 }
 
+// String returns the human-readable name for a TokenKind.
+func (t TokenKind) String() string {
+	for k, v := range Keywords {
+		if t == v {
+			return k
+		}
+	}
+	return scanner.TokenString(rune(t))
+}
+
+// Token represents a single lexical token with its kind, source position, text, and optional numeric value.
 type Token struct {
-	TokenKind TokenKind
-	Position  Position
-	Text      string
-	Number    int
+	TokenKind TokenKind // The kind of token.
+	Position  Position  // The source position of the token.
+	Text      string    // The literal text of the token.
+	Number    int       // The numeric value, valid for TokenInt and TokenChar tokens.
 }
 
+// String returns a formatted representation of the token including position, kind, and text.
 func (t Token) String() string {
 	return t.Position.String() + " " + t.TokenKind.String() + " " + t.Text
 }
 
+// Scan tokenizes a stream of PL/Z source code read from r and returns the
+// resulting token slice. It delegates to scan with an empty filename.
 func Scan(rd io.Reader) ([]Token, error) {
 	return scan(rd, "")
 }
 
+// ScanFile opens the named file, tokenizes its contents, and returns the
+// resulting token slice. The filename is recorded in each token's Position.
 func ScanFile(name string) ([]Token, error) {
 	f, err := os.Open(name)
 	if err != nil {
@@ -137,6 +166,11 @@ func ScanFile(name string) ([]Token, error) {
 	return scan(f, name)
 }
 
+// scan performs the actual scanning, converting a byte stream into a slice of
+// Tokens. It configures the text/scanner to recognize identifiers, integers,
+// characters, strings, raw strings, and comments. Identifiers matching a
+// keyword string are converted to the corresponding keyword TokenKind. Integer
+// and character tokens have their numeric value populated.
 func scan(rd io.Reader, name string) ([]Token, error) {
 	var err error
 	var res []Token
