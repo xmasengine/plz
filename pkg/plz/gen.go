@@ -373,12 +373,15 @@ func (p Program) Gen(g *Gen) error {
 	}
 	var dataItems []dataItem
 	var procedures []Procedure
+	var dataStmts []Data
 	for _, statement := range p.Statements {
 		switch cmd := statement.Command.(type) {
 		case At:
 			dataItems = append(dataItems, dataItem{at: &cmd})
 		case Declare:
 			dataItems = append(dataItems, dataItem{declare: &cmd})
+		case Data:
+			dataStmts = append(dataStmts, cmd)
 		case Procedure:
 			procedures = append(procedures, cmd)
 		case Task:
@@ -402,7 +405,14 @@ func (p Program) Gen(g *Gen) error {
 		}
 	}
 
-	// Emit task bodies after procedures.
+	// Emit data statements after procedures (must not be reachable by fall-through).
+	for _, ds := range dataStmts {
+		if err := ds.Gen(g); err != nil {
+			return err
+		}
+	}
+
+	// Emit task bodies after procedures and data.
 	for i := range c.TaskDefs {
 		t := c.TaskDefs[i]
 		g.Emitf("_plz_task_%d:\n", i)
@@ -981,7 +991,11 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 			if pt.Record() != nil || pt.Predeclared() == PredeclaredData {
 				refArg := args[i].Ref()
 				if refArg != nil && refArg.Identifier != "" && len(refArg.Fields) == 0 && len(refArg.Subscripts) == 0 {
-					g.Emitf("\tld hl, %s\n", g.localSym(refArg.Identifier))
+					if g.isParamRef(refArg.Identifier) {
+						g.Emitf("\tld hl, (%s)\n", g.localSym(refArg.Identifier))
+					} else {
+						g.Emitf("\tld hl, %s\n", g.localSym(refArg.Identifier))
+					}
 					return nil
 				}
 			}
@@ -1540,7 +1554,11 @@ func (s Call) Gen(g *Gen) error {
 				// Load address of record or DATA argument.
 				ref := args[i].Ref()
 				if ref != nil && ref.Identifier != "" && len(ref.Fields) == 0 && len(ref.Subscripts) == 0 {
-					g.Emitf("\tld hl, %s\n", g.localSym(ref.Identifier))
+					if g.isParamRef(ref.Identifier) {
+						g.Emitf("\tld hl, (%s)\n", g.localSym(ref.Identifier))
+					} else {
+						g.Emitf("\tld hl, %s\n", g.localSym(ref.Identifier))
+					}
 					return nil
 				}
 			}
