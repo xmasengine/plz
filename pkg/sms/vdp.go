@@ -164,6 +164,7 @@ func (v *VDP) ReadControl() byte {
 		s |= 0x20
 	}
 	v.framePending = false
+	v.vblankPending = false
 	v.sprOverflow = false
 	v.sprCollision = false
 	v.linePending = false
@@ -293,8 +294,10 @@ func (v *VDP) endScanline() {
 	}
 
 	if v.scanline == v.frameHeight {
-		v.vblankPending = true
 		v.framePending = true
+		if v.frameIntEnable {
+			v.vblankPending = true
+		}
 	}
 
 	if v.scanline >= v.totalLines {
@@ -311,24 +314,12 @@ func (v *VDP) FrameReady() bool {
 }
 
 func (v *VDP) Framebuffer() []byte {
-	return v.framebuffer[:v.frameHeight*ScreenWidth*4]
+	return v.framebuffer[:int(v.frameHeight)*ScreenWidth*4]
 }
 
 func (v *VDP) VCounter() byte   { return v.vCounter }
 func (v *VDP) HCounter() byte   { return v.hCounter }
-func (v *VDP) IntPending() bool { return v.linePending || v.vblankPending }
-
-func (v *VDP) AckInterrupt() bool {
-	if v.linePending || v.vblankPending {
-		if v.vblankPending {
-			v.framePending = true
-		}
-		v.linePending = false
-		v.vblankPending = false
-		return true
-	}
-	return false
-}
+func (v *VDP) IntPending() bool { return v.vblankPending || v.linePending }
 
 func (v *VDP) renderScanline(y uint16) {
 	if !v.displayEnable {
@@ -502,6 +493,13 @@ func (v *VDP) setPixel(x, y uint16, r, g, b byte) {
 	v.framebuffer[off+2] = b
 	v.framebuffer[off+3] = 255
 }
+
+func (v *VDP) Reg(i int) byte          { return v.reg[i] }
+func (v *VDP) AddrReg() uint16         { return v.addrReg }
+func (v *VDP) CodeReg() byte           { return v.codeReg }
+func (v *VDP) VRAMAt(addr uint16) byte { return v.VRAM[addr] }
+func (v *VDP) CRAMAt(addr uint16) byte { return v.CRAM[addr] }
+func (v *VDP) Scanline() uint16        { return v.scanline }
 
 func smsColorToRGB(c byte) (r, g, b byte) {
 	r = (c & 0x03) * 85

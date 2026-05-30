@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/koron-go/z80"
+	"github.com/xmasengine/plz/pkg/sms"
 )
 
 type CPU = z80.CPU
@@ -38,6 +39,42 @@ func (b *ByteIO) In(port byte) byte {
 
 func (b *ByteIO) Out(port byte, val byte) {
 	b.OutBytes[port] = append(b.OutBytes[port], val)
+}
+
+type SMSIO struct {
+	ByteIO
+	VDP *sms.VDP
+}
+
+func (io *SMSIO) In(port byte) byte {
+	switch {
+	case port >= 0x80 && port < 0xC0:
+		if port&1 == 0 {
+			return io.VDP.ReadData()
+		}
+		return io.VDP.ReadControl()
+	case port >= 0x40 && port < 0x80:
+		if port&1 == 0 {
+			return io.VDP.VCounter()
+		}
+		return io.VDP.HCounter()
+	default:
+		return io.ByteIO.In(port)
+	}
+}
+
+func (io *SMSIO) Out(port byte, val byte) {
+	switch {
+	case port >= 0x80 && port < 0xC0:
+		if port&1 == 0 {
+			io.VDP.WriteData(val)
+		} else {
+			io.VDP.WriteControl(val)
+		}
+	case port >= 0x40 && port < 0x80:
+	default:
+		io.ByteIO.Out(port, val)
+	}
 }
 
 type ReaderWriterIO struct {
@@ -110,6 +147,46 @@ func WithWriter(port byte, wr io.Writer) func(*CPU) {
 	}
 }
 
+func WithVDP(v *sms.VDP) func(*CPU) {
+	return func(c *CPU) {
+		c.IO = &SMSIO{ByteIO: ByteIO{}, VDP: v}
+	}
+}
+
+func RunSMS(ctx context.Context, cpu *CPU, v *sms.VDP) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		if cpu.HALT {
+			// Interrupts disabled → HALT is permanent; exit.
+			if !cpu.IFF1 {
+				return nil
+			}
+			// Interrupts enabled — tick VDP until one fires.
+			if v.IntPending() {
+				cpu.Interrupt = z80.IM1Interrupt()
+				cpu.Step()
+				cpu.HALT = false
+			} else {
+				v.Tick(4)
+			}
+			continue
+		}
+
+		cpu.Interrupt = nil
+		if v.IntPending() {
+			cpu.Interrupt = z80.IM1Interrupt()
+		}
+
+		cpu.Step()
+		v.Tick(4)
+	}
+}
+
 func WithBinary(bin ...byte) func(*CPU) {
 	return func(c *CPU) {
 		for i, b := range bin {
@@ -126,4 +203,14 @@ func RunFile(ctx context.Context, name string, opts ...CPUOption) error {
 	opts = append(opts, WithBinary(buf...))
 	cpu := NewCPU(opts...)
 	return cpu.Run(ctx)
+}
+
+func RunSMSFile(ctx context.Context, name string, v *sms.VDP, opts ...CPUOption) error {
+	buf, err := os.ReadFile(name)
+	if err != nil {
+		return err
+	}
+	opts = append(opts, WithBinary(buf...), WithVDP(v))
+	cpu := NewCPU(opts...)
+	return RunSMS(ctx, cpu, v)
 }

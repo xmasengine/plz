@@ -15,6 +15,7 @@ import (
 
 import (
 	plz "github.com/xmasengine/plz/pkg/plz"
+	"github.com/xmasengine/plz/pkg/sms"
 	"github.com/xmasengine/plz/pkg/z80/emu"
 	asm "github.com/xmasengine/plz/pkg/z80asm"
 )
@@ -175,8 +176,8 @@ func main() {
 		err = plz.Compile(output.Name(), args.Format, src)
 		ExitIfError("run", err)
 
-		opts := args.emuOpts()
-		err = emu.RunFile(args.Ctx, output.Name(), opts...)
+		v := sms.New(false)
+		err = emu.RunSMSFile(args.Ctx, output.Name(), v)
 		ExitIfError("run", err)
 
 	}

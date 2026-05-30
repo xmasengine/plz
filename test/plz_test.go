@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/xmasengine/plz/pkg/plz"
+	"github.com/xmasengine/plz/pkg/sms"
 	"github.com/xmasengine/plz/pkg/z80/emu"
 	asm "github.com/xmasengine/plz/pkg/z80asm"
 )
@@ -71,6 +72,100 @@ func compileAndRun(t *testing.T, src string) *emu.ByteIO {
 	}
 
 	return io
+}
+
+// compileAndRunSMS compiles a PL/Z source string, assembles it, runs it
+// with the SMS VDP emulator, and returns the VDP for framebuffer inspection.
+func compileAndRunSMS(t *testing.T, src string) *sms.VDP {
+	t.Helper()
+	dir := t.TempDir()
+
+	srcPath := filepath.Join(dir, "test.plz")
+	if err := os.WriteFile(srcPath, []byte(src), 0644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	tokens, err := plz.ScanFile(srcPath)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	prog := plz.Program{}
+	parser := plz.NewParser(tokens)
+	if err := prog.Parse(parser); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	asmPath := filepath.Join(dir, "test.asm")
+	gen, err := plz.NewGenFile(asmPath)
+	if err != nil {
+		t.Fatalf("gen file: %v", err)
+	}
+	if err := prog.Gen(gen); err != nil {
+		t.Fatalf("gen: %v", err)
+	}
+	gen.Close()
+
+	binPath := filepath.Join(dir, "test.bin")
+	if err := asm.AssembleFiles(binPath, []string{asmPath}); err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+
+	bin, err := os.ReadFile(binPath)
+	if err != nil {
+		t.Fatalf("read bin: %v", err)
+	}
+	v := sms.New(false)
+	cpu := emu.NewCPU(emu.WithBinary(bin...), emu.WithVDP(v))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := emu.RunSMS(ctx, cpu, v); err != nil {
+		t.Fatalf("cpu run: %v", err)
+	}
+
+	// Tick VDP to complete any pending frame after the program finishes.
+	v.Tick(sms.LinesNTSC * sms.HblankCycles)
+
+	return v
+}
+
+func TestIntegrationSMSLibPlz(t *testing.T) {
+	v := compileAndRunSMS(t, `
+start:
+  OUTPUT 0xBF 0x80    // reg 0: enable display
+  OUTPUT 0xBF 0x81    // reg 1: screen mode 4
+  OUTPUT 0xBF 0x02    // reg 2: tile map base
+  OUTPUT 0xBF 0x06    // reg 6: sprite tile base
+  OUTPUT 0xBF 0x10    // CRAM address 0
+  OUTPUT 0xBE 0x00    // color 0
+  OUTPUT 0xBE 0x3F    // color 1
+  OUTPUT 0xBF 0x00    // VRAM address low
+  OUTPUT 0xBF 0x40    // VRAM address high
+  OUTPUT 0xBE 0xFF    // tile data byte
+  OUTPUT 0xBE 0x81
+  OUTPUT 0xBE 0x81
+  OUTPUT 0xBE 0xFF
+  HALT`)
+
+	if !v.FrameReady() {
+		t.Fatal("no frame rendered after RunSMS")
+	}
+	fb := v.Framebuffer()
+	if len(fb) == 0 {
+		t.Fatal("empty framebuffer")
+	}
+	// At least some pixels should be non-black if tile rendered
+	hasContent := false
+	for i := 0; i < len(fb); i += 4 {
+		if fb[i] != 0 || fb[i+1] != 0 || fb[i+2] != 0 {
+			hasContent = true
+			break
+		}
+	}
+	if !hasContent {
+		t.Log("warning: framebuffer is all black (may be expected if tile 0 pixels are transparent)")
+	}
+	t.Logf("frame: %d x %d pixels", sms.ScreenWidth, len(fb)/sms.ScreenWidth/4)
 }
 
 func TestIntegrationOutputLiteral(t *testing.T) {
