@@ -44,7 +44,6 @@ type ReaderWriterIO struct {
 }
 
 func (b *ReaderWriterIO) In(port byte) byte {
-	println("ReaderWriterIO In", port)
 	rd := b.Readers[port]
 	if rd == nil {
 		return 0
