@@ -178,12 +178,12 @@ func (ebo exprBinaryOp) apply(asm *Assembler, n1 int64, e2 expr) (int64, error) 
 		return n1 * n2, nil
 	case '/':
 		if n2 == 0 {
-			return 0, fmt.Errorf("divide by zero")
+			return 0, asm.scanErrorf("divide by zero")
 		}
 		return n1 / n2, nil
 	case '%':
 		if n2 == 0 {
-			return 0, fmt.Errorf("second arg of %% must be non-zero")
+			return 0, asm.scanErrorf("second arg of %% must be non-zero")
 		}
 		return n1 % n2, nil
 	case '&':
@@ -206,12 +206,12 @@ func (ebo exprBinaryOp) apply(asm *Assembler, n1 int64, e2 expr) (int64, error) 
 		return bool2int(n1 > n2), nil
 	case tokGTGT:
 		if n2 < 0 {
-			return 0, fmt.Errorf("shift must be positive")
+			return 0, asm.scanErrorf("shift must be positive")
 		}
 		return n1 >> uint64(n2), nil
 	case tokLTLT:
 		if n2 < 0 {
-			return 0, fmt.Errorf("shift must be positive")
+			return 0, asm.scanErrorf("shift must be positive")
 		}
 		return n1 << uint64(n2), nil
 	case tokAndAnd, tokOrOr:

@@ -178,7 +178,7 @@ func (asm *Assembler) popScanner() (bool, error) {
 func (asm *Assembler) pushScanner(filename string) error {
 	for _, f := range asm.openFiles {
 		if f == filename {
-			return fmt.Errorf("recursive include of file %q", filename)
+			return asm.scanErrorf("recursive include of file %q", filename)
 		}
 	}
 	f, err := asm.opener(filename)

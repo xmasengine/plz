@@ -444,6 +444,94 @@ func TestParseErrors(t *testing.T) {
 	}
 }
 
+// TestErrorLocationFormat verifies all assembly errors include source location
+// (filename:line.column), a key benefit of the error-returning refactor.
+func TestErrorLocationFormat(t *testing.T) {
+	testCases := []struct {
+		desc    string
+		asm     string
+		wantErr string // substring match
+	}{
+		{"unknown command", "foobar", "a.asm:1."},
+		{"out of range db", "db 256", "a.asm:1."},
+		{"out of range dw", "dw 65536", "a.asm:1."},
+		{"bad expr", "ld hl, 1+", "a.asm:1."},
+		{"label redefined", "x: nop; x: nop", "a.asm:1."},
+		{"divide by zero", "ld hl, 6/(4-4)", "a.asm:1."},
+		{"const before def", "ld a, x; const x = 42", "a.asm:1."},
+		{"no suitable variant", "xor a, b", "a.asm:1."},
+		{"recursive include", `db 0x42; include "a.asm"`, "a.asm:1."},
+		{"bad org zero args", "org", "a.asm:1."},
+		{"bad org too many", "org 1, 2, 3", "a.asm:1."},
+		{"bad const syntax", "const x", "a.asm:1."},
+		{"const redefinition", "const x = 1; const x = 2", "a.asm:1."},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			testFailureSnippet(t, 0, ffs{"a.asm": tc.asm}, tc.wantErr)
+		})
+	}
+}
+
+func testAssembles(t *testing.T, asm string) {
+	t.Helper()
+	a, err := NewAssembler()
+	if err != nil {
+		t.Fatalf("NewAssembler failed: %v", err)
+	}
+	a.opener = ffs{"a.asm": asm}.open
+	if err := a.AssembleFile("a.asm"); err != nil {
+		t.Errorf("expected success, got error: %v", err)
+	}
+}
+
+// TestExpressionErrors verifies that edge cases in expression evaluation
+// produce clean error messages instead of crashes.
+func TestExpressionErrors(t *testing.T) {
+	testCases := []struct {
+		desc    string
+		asm     string
+		wantErr string // empty means expected to succeed
+	}{
+		{"negative shift left", "ld hl, 1<<-1", "shift must be positive"},
+		{"negative shift right", "ld hl, 1>>-1", "shift must be positive"},
+		{"shift by zero", "org 0x6000; .label ld hl, 1>>0", ""},
+		{"mod by one", "org 0x6000; .label ld hl, 7%1", ""},
+		{"complex and-shift", "org 0x6000; .label ld hl, ((16>>4)&1)", ""},
+		{"logical or short-circuit", "org 0x6000; .label ld hl, 1||(2/0)", ""},
+		{"logical and short-circuit", "org 0x6000; .label ld hl, 0&&(2/0)", ""},
+		{"nested unary", "org 0x6000; .label ld hl, -(-5)", ""},
+		{"double negation", "org 0x6000; .label ld hl, !!42", ""},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			if tc.wantErr == "" {
+				testAssembles(t, tc.asm)
+			} else {
+				testFailureSnippet(t, 0, ffs{"a.asm": tc.asm}, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestOrgEdgeCases tests the org directive with invalid inputs.
+func TestOrgEdgeCases(t *testing.T) {
+	testCases := []struct {
+		desc    string
+		asm     string
+		wantErr string
+	}{
+		{"negative", "org -1", "out of range"},
+		{"overflow", "org 65536", "out of range"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			testFailureSnippet(t, 0, ffs{"a.asm": tc.asm}, tc.wantErr)
+		})
+	}
+}
+
 func TestIntExpressions(t *testing.T) {
 	testCases := []struct {
 		expr string // An arithmetic operation.
