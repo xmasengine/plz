@@ -15,6 +15,7 @@ start:
   CALL screen_mode_4()
   CALL load_palette_default()
   CALL load_tiles(128, tiles, 2)
-  CALL set_cursor(10, 10)
-  CALL print_char('A')
+  // Display checkerboard: tile 128 at top-left, tile 129 next to it
+  CALL write_vram(0x3800, 128)
+  CALL write_vram(0x3802, 129)
   HALT

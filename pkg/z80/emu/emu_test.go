@@ -1,10 +1,17 @@
 package emu
 
-import "github.com/xmasengine/plz/pkg/z80/isa"
-
 import "testing"
 import "context"
 import "time"
+
+// Opcode constants for assembling test programs in memory.
+const (
+	opHALT       byte = 0x76
+	opNOP        byte = 0x00
+	opLD_A_Imm8  byte = 0x3E // LD A, n
+	opOUT_Port_A byte = 0xD3 // OUT (n), A
+	opJR_Disp    byte = 0x18 // JR d
+)
 
 func TestNewCPU(t *testing.T) {
 	cpu := NewCPU()
@@ -17,9 +24,9 @@ func TestNewCPU(t *testing.T) {
 	}
 }
 
-func helperTestOpcodes(t *testing.T, inPort, outPort int, in, expected string, op ...isa.Opcode) {
+func helperTestOpcodes(t *testing.T, inPort, outPort int, in, expected string, op ...byte) {
 	t.Helper()
-	program := Opcodes(op...)
+	program := Memory(op...)
 	cpu := NewCPU(program)
 	io := cpu.IO.(*ByteIO)
 	io.InBytes[inPort] = []byte(in)
@@ -36,34 +43,34 @@ func helperTestOpcodes(t *testing.T, inPort, outPort int, in, expected string, o
 }
 
 func TestEmuRunUntilHalted(t *testing.T) {
-	helperTestOpcodes(t, 0, 0, "", "", isa.HALT)
+	helperTestOpcodes(t, 0, 0, "", "", opHALT)
 	// The traditional greeting. We expect HELLO WORLD in the output.
 	helperTestOpcodes(t, 0, 7, "", "HELLO WORLD",
-		isa.LD_A_Imm8, isa.Opcode('H'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('E'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('O'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode(' '), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('W'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('O'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('R'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('D'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.HALT)
+		opLD_A_Imm8, byte('H'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('E'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('L'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('L'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('O'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte(' '), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('W'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('O'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('R'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('L'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('D'), opOUT_Port_A, byte(7),
+		opHALT)
 	helperTestOpcodes(t, 0, 7, "", "WORLD",
-		isa.JR_Disp, isa.Opcode(4*6),
-		isa.LD_A_Imm8, isa.Opcode('H'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('E'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('O'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode(' '), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('W'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('O'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('R'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('L'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.LD_A_Imm8, isa.Opcode('D'), isa.OUT_Port_A, isa.Opcode(7),
-		isa.HALT)
-	helperTestOpcodes(t, 0, 0, "", "", isa.NOP, isa.HALT)
+		opJR_Disp, byte(4*6),
+		opLD_A_Imm8, byte('H'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('E'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('L'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('L'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('O'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte(' '), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('W'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('O'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('R'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('L'), opOUT_Port_A, byte(7),
+		opLD_A_Imm8, byte('D'), opOUT_Port_A, byte(7),
+		opHALT)
+	helperTestOpcodes(t, 0, 0, "", "", opNOP, opHALT)
 }

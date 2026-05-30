@@ -15,13 +15,20 @@ END
 // Set VRAM write address (for subsequent writes to port 0xBE).
 PROCEDURE set_write_addr(addr WORD)
   OUTPUT 0xBF addr & 0xFF
-  OUTPUT 0xBF (addr / 256) | 0x40
+  OUTPUT 0xBF ((addr >> 8) & 0x3F) | 0x40
 END
 
 // Set VRAM read address (for subsequent reads from port 0xBE).
 PROCEDURE set_read_addr(addr WORD)
   OUTPUT 0xBF addr & 0xFF
-  OUTPUT 0xBF (addr / 256) & 0x3F
+  OUTPUT 0xBF (addr >> 8) & 0x3F
+END
+
+// Set CRAM (palette) write address for subsequent writes to port 0xBE.
+// addr is a 5-bit CRAM byte address (0-31).
+PROCEDURE set_cram_addr(addr BYTE)
+  OUTPUT 0xBF addr & 0x1F
+  OUTPUT 0xBF 0xC0
 END
 
 // Write a byte to VRAM at the given address.
@@ -31,8 +38,12 @@ PROCEDURE write_vram(addr WORD, value BYTE)
 END
 
 // Read a byte from VRAM at the given address.
+// VDP has a read-ahead buffer; the first read returns stale data,
+// so we do a dummy read first then return the actual value.
 PROCEDURE read_vram(addr WORD) BYTE
+  DECLARE dummy BYTE
   CALL set_read_addr(addr)
+  LET dummy = INPUT(0xBE)
   RETURN INPUT(0xBE)
 END
 
@@ -78,10 +89,15 @@ PROCEDURE load_sprites(idx BYTE, sprites DATA, count BYTE)
   CALL copy_vram(0x2000 + (idx << 5), sprites, count << 5)
 END
 
-// Load count palette entries from DATA to the SMS palette area at VRAM 0xC000.
-// Each palette entry is 2 bytes. The DATA should contain 2*count bytes.
+// Load count palette entries from DATA to the SMS palette (CRAM).
+// Each palette entry is 1 byte in SMS format (00BBGGRR).
+// count must be <= 32 (32 bytes for tile + sprite palettes).
 PROCEDURE load_palette(pal DATA, count BYTE)
-  CALL copy_vram(0xC000, pal, count << 1)
+  DECLARE ii BYTE
+  CALL set_cram_addr(0)
+  FOR ii = 0 TO count - 1 DO
+    OUTPUT 0xBE pal[ii]
+  END
 END
 
 // ============================================================
@@ -121,35 +137,36 @@ END
 
 // ============================================================
 // Palette
-// SMS palette resides in VRAM at 0xC000-0xC01F (16 entries, 2 bytes each).
-// Each entry is a 6-bit RGB value: 0bbbbbgggggrrrrr
+// SMS palette is 32 bytes of CRAM: 00BBGGRR (2-bit per channel RGB).
+// Entries 0-15 = tile palette, entries 16-31 = sprite palette.
 // ============================================================
 
-// Load a single palette entry.
-PROCEDURE load_palette_entry(entry BYTE, color WORD)
-  CALL set_write_addr(0xC000 + (entry << 1))
-  OUTPUT 0xBE color & 0xFF
-  OUTPUT 0xBE color >> 8
+// Load a single SMS palette entry.
+// entry is the 0-based palette index (0-31).
+// color is a BYTE in SMS format (00BBGGRR).
+PROCEDURE load_palette_entry(entry BYTE, color BYTE)
+  CALL set_cram_addr(entry)
+  OUTPUT 0xBE color
 END
 
-// Load the default SMS palette (16-color TMS-style palette).
+// Load the default 16-color SMS palette.
 PROCEDURE load_palette_default()
-  CALL load_palette_entry(0, 0x0000)  // Transparent
-  CALL load_palette_entry(1, 0x0000)  // Black
-  CALL load_palette_entry(2, 0x002B)  // Green
-  CALL load_palette_entry(3, 0x005F)  // Light green
-  CALL load_palette_entry(4, 0x0B00)  // Blue
-  CALL load_palette_entry(5, 0x0F00)  // Light blue
-  CALL load_palette_entry(6, 0x0B15)  // Dark red
-  CALL load_palette_entry(7, 0x0B3F)  // Cyan
-  CALL load_palette_entry(8, 0x0D80)  // Red
-  CALL load_palette_entry(9, 0x0DB6)  // Light red
-  CALL load_palette_entry(10, 0x0AD0) // Yellow
-  CALL load_palette_entry(11, 0x0B55) // Pastel green
-  CALL load_palette_entry(12, 0x0660) // Dark blue
-  CALL load_palette_entry(13, 0x0D92) // Pink
-  CALL load_palette_entry(14, 0x0AD2) // Light yellow
-  CALL load_palette_entry(15, 0x0FFF) // White
+  CALL load_palette_entry(0,  0x00)  // Transparent
+  CALL load_palette_entry(1,  0x00)  // Black
+  CALL load_palette_entry(2,  0x0C)  // Green
+  CALL load_palette_entry(3,  0x1C)  // Light green
+  CALL load_palette_entry(4,  0x30)  // Blue
+  CALL load_palette_entry(5,  0x34)  // Light blue
+  CALL load_palette_entry(6,  0x02)  // Dark red
+  CALL load_palette_entry(7,  0x3C)  // Cyan
+  CALL load_palette_entry(8,  0x03)  // Red
+  CALL load_palette_entry(9,  0x0B)  // Light red
+  CALL load_palette_entry(10, 0x0F)  // Yellow
+  CALL load_palette_entry(11, 0x2C)  // Pastel green
+  CALL load_palette_entry(12, 0x20)  // Dark blue
+  CALL load_palette_entry(13, 0x33)  // Pink
+  CALL load_palette_entry(14, 0x2F)  // Light yellow
+  CALL load_palette_entry(15, 0x3F)  // White
 END
 
 // ============================================================
