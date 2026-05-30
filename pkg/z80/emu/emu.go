@@ -5,7 +5,6 @@ import "os"
 import "context"
 
 import "github.com/koron-go/z80"
-import "github.com/xmasengine/plz/pkg/z80/isa"
 
 type CPU = z80.CPU
 
@@ -64,23 +63,10 @@ func (b *ReaderWriterIO) Out(port byte, val byte) {
 	wr.Write(buf[:])
 }
 
-func Opcodes(ops ...isa.Opcode) func(*CPU) {
+func Memory(buf ...byte) func(*CPU) {
 	return func(c *CPU) {
-		for i, op := range ops {
-			c.Memory.Set(uint16(i), byte(op))
-		}
-	}
-}
-
-func Instructions(ins ...isa.Instruction) func(*CPU) {
-	return func(c *CPU) {
-		addr := uint16(0)
-		for _, in := range ins {
-			by := in.Bytes()
-			for o, b := range by {
-				c.Memory.Set(addr+uint16(o), b)
-			}
-			addr += uint16(len(by))
+		for i, b := range buf {
+			c.Memory.Set(uint16(i), b)
 		}
 	}
 }
