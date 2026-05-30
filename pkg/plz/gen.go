@@ -1731,13 +1731,18 @@ func (s Declare) Gen(g *Gen) error {
 // Gen generates assembly for an INTERRUPT or NMI install statement.
 // It emits a JP to the named procedure at the appropriate vector address:
 // 0x0038 for maskable interrupts, 0x0066 for NMI.
+// The current ORG position is saved before and restored after, so subsequent
+// code continues at the correct address.
 func (s InterruptStmt) Gen(g *Gen) error {
 	addr := 0x0038
 	if s.NMI {
 		addr = 0x0066
 	}
+	label := fmt.Sprintf("_plz_org_%d", g.nextLabel())
+	g.Emitf("%s:\n", label)
 	g.Emitf("org 0x%04x\n", addr)
 	g.Emitf("\tjp _plz_%s\n", s.Target)
+	g.Emitf("org %s\n", label)
 	return nil
 }
 

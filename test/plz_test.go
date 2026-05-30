@@ -2,6 +2,7 @@ package plz_test
 
 import (
 	"context"
+	"image"
 	"os"
 	"path/filepath"
 	"testing"
@@ -129,7 +130,179 @@ func compileAndRunSMS(t *testing.T, src string) *sms.VDP {
 	return v
 }
 
+// compileAndRunSMSFile compiles a PL/Z source file (in its own directory so
+// INCLUDE resolves), assembles it, runs it with the SMS VDP emulator, and
+// returns the VDP for framebuffer inspection.
+func compileAndRunSMSFile(t *testing.T, path string) *sms.VDP {
+	t.Helper()
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+
+	// Parse
+	tokens, err := plz.ScanFile(path)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	prog := plz.Program{}
+	parser := plz.NewParser(tokens)
+	if err := prog.Parse(parser); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Generate assembly
+	asmPath := filepath.Join(dir, base+".asm")
+	gen, err := plz.NewGenFile(asmPath)
+	if err != nil {
+		t.Fatalf("gen file: %v", err)
+	}
+	if err := prog.Gen(gen); err != nil {
+		t.Fatalf("gen: %v", err)
+	}
+	gen.Close()
+
+	// Assemble
+	binPath := filepath.Join(dir, base+".bin")
+	if err := asm.AssembleFiles(binPath, []string{asmPath}); err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+
+	bin, err := os.ReadFile(binPath)
+	if err != nil {
+		t.Fatalf("read bin: %v", err)
+	}
+	v := sms.New(false)
+	cpu := emu.NewCPU(emu.WithBinary(bin...), emu.WithVDP(v))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := emu.RunSMS(ctx, cpu, v); err != nil {
+		t.Fatalf("cpu run: %v", err)
+	}
+
+	// Tick VDP to complete any pending frame after the program finishes.
+	v.Tick(sms.LinesNTSC * sms.HblankCycles)
+
+	return v
+}
+
 func TestIntegrationSMSLibPlz(t *testing.T) {
+	v := compileAndRunSMSFile(t, "../include/libplz_test.plz")
+	if !v.FrameReady() {
+		t.Fatal("no frame rendered")
+	}
+	img := frameImage(v)
+	// Check a few pixels near the top-left where the checkerboard tiles are.
+	// Tile 128 at name table entry (0,0) occupies pixels (0,0)-(7,7).
+	// The checkerboard pattern has both set (white) and clear (backdrop) pixels.
+	samples := []image.Point{
+		{0, 0}, {1, 0}, {2, 0}, {4, 0}, {6, 0},
+		{0, 2}, {0, 4}, {0, 6},
+		{4, 4}, {2, 6}, {6, 2},
+	}
+	nonBlack := 0
+	for _, p := range samples {
+		_, g, _, _ := img.At(p.X, p.Y).RGBA()
+		// For the 4bpp VDP, pixels with any plane bit set have non-zero G
+		// because white (0x3F) → (R,G,B)=(0xFF,0xFF,0xFF).
+		// Pixels with clear bits (idx=0) are fully transparent → show backdrop (black).
+		if g != 0 {
+			nonBlack++
+		}
+	}
+	if nonBlack == 0 {
+		t.Fatal("all sampled pixels are black — tiles not rendering correctly")
+	}
+	t.Logf("LibPlz: frame %dx%d, %d/%d sampled pixels non-black",
+		img.Bounds().Dx(), img.Bounds().Dy(), nonBlack, len(samples))
+}
+
+func frameImage(v *sms.VDP) *image.RGBA {
+	fb := v.Framebuffer()
+	h := len(fb) / (sms.ScreenWidth * 4)
+	r := image.Rect(0, 0, sms.ScreenWidth, h)
+	return &image.RGBA{Pix: fb, Stride: sms.ScreenWidth * 4, Rect: r}
+}
+
+func TestIntegrationSMSHaltWake(t *testing.T) {
+	v := compileAndRunSMS(t, `
+	ENABLE
+	HALT
+	DISABLE
+	HALT`)
+	if !v.FrameReady() {
+		t.Fatal("no frame rendered")
+	}
+	img := frameImage(v)
+	if img.Bounds().Dy() != 192 {
+		t.Fatalf("expected 192 rows, got %d", img.Bounds().Dy())
+	}
+	r, g, b, a := img.At(0, 0).RGBA()
+	if r != 0 || g != 0 || b != 0 || a != 0xffff {
+		t.Fatalf("expected black pixel at (0,0), got (%d,%d,%d,%d)", r, g, b, a)
+	}
+}
+
+func TestIntegrationSMSInterrupt(t *testing.T) {
+	v := compileAndRunSMS(t, `
+INTERRUPT PROCEDURE vblank
+  DECLARE status BYTE
+  LET status = INPUT(0xBF)
+  ENABLE
+END
+
+INTERRUPT vblank
+ENABLE
+
+  HALT
+  HALT
+  DISABLE
+  HALT`)
+	if !v.FrameReady() {
+		t.Fatal("no frame rendered")
+	}
+	img := frameImage(v)
+	if img.Bounds().Dy() != 192 {
+		t.Fatalf("expected 192 rows, got %d", img.Bounds().Dy())
+	}
+	r, g, b, a := img.At(0, 0).RGBA()
+	if r != 0 || g != 0 || b != 0 || a != 0xffff {
+		t.Fatalf("expected black pixel at (0,0), got (%d,%d,%d,%d)", r, g, b, a)
+	}
+}
+
+func TestIntegrationSMSInterruptOutputs(t *testing.T) {
+	v := compileAndRunSMS(t, `
+INTERRUPT PROCEDURE vblank
+  DECLARE status BYTE
+  LET status = INPUT(0xBF)
+  ENABLE
+END
+
+INTERRUPT vblank
+ENABLE
+
+  OUTPUT 0xBF 0x04    // reg 0 data: mode 4
+  OUTPUT 0xBF 0x80    // reg 0 select
+  OUTPUT 0xBF 0xE0    // reg 1 data: display + frame int
+  OUTPUT 0xBF 0x81    // reg 1 select
+  HALT
+  HALT
+  DISABLE
+  HALT`)
+	if !v.FrameReady() {
+		t.Fatal("no frame rendered")
+	}
+	img := frameImage(v)
+	if img.Bounds().Dy() != 240 {
+		t.Fatalf("expected 240 rows (mode 4 extended), got %d", img.Bounds().Dy())
+	}
+	r, g, b, a := img.At(0, 0).RGBA()
+	if r != 0 || g != 0 || b != 0 || a != 0xffff {
+		t.Fatalf("expected black pixel at (0,0), got (%d,%d,%d,%d)", r, g, b, a)
+	}
+}
+
+func TestIntegrationSMSInline(t *testing.T) {
 	v := compileAndRunSMS(t, `
 start:
   OUTPUT 0xBF 0x80    // reg 0: enable display
@@ -150,14 +323,13 @@ start:
 	if !v.FrameReady() {
 		t.Fatal("no frame rendered after RunSMS")
 	}
-	fb := v.Framebuffer()
-	if len(fb) == 0 {
-		t.Fatal("empty framebuffer")
-	}
-	// At least some pixels should be non-black if tile rendered
+	img := frameImage(v)
+	// Check a few pixels at center of screen
+	samples := []image.Point{{100, 100}, {128, 120}, {200, 150}}
 	hasContent := false
-	for i := 0; i < len(fb); i += 4 {
-		if fb[i] != 0 || fb[i+1] != 0 || fb[i+2] != 0 {
+	for _, p := range samples {
+		r, g, b, _ := img.At(p.X, p.Y).RGBA()
+		if r != 0 || g != 0 || b != 0 {
 			hasContent = true
 			break
 		}
@@ -165,7 +337,6 @@ start:
 	if !hasContent {
 		t.Log("warning: framebuffer is all black (may be expected if tile 0 pixels are transparent)")
 	}
-	t.Logf("frame: %d x %d pixels", sms.ScreenWidth, len(fb)/sms.ScreenWidth/4)
 }
 
 func TestIntegrationOutputLiteral(t *testing.T) {

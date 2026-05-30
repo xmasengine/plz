@@ -169,6 +169,9 @@ func RunSMS(ctx context.Context, cpu *CPU, v *sms.VDP) error {
 			// Interrupts enabled — tick VDP until one fires.
 			if v.IntPending() {
 				cpu.Interrupt = z80.IM1Interrupt()
+				// HALT rewound PC to point at itself. Advance so the
+				// interrupt pushes the address of the next instruction.
+				cpu.PC++
 				cpu.Step()
 				cpu.HALT = false
 			} else {

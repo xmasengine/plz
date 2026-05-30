@@ -4,28 +4,29 @@
 //   - SMS Power! hardware reference (sms-technical.txt, smsgg-technical.txt)
 //   - Reference implementations (all MIT-licensed, used for format/behavior
 //     understanding only, not code copying):
-//     - github.com/koron-go/vdp  (MURAOKA Taro)
-//     - github.com/mrcook/smstilemap  (Michael R. Cook)
-//     - github.com/remogatto/sms  (Andrea Fazzi)
-//     - github.com/user-none/go-chip-sn76489  (John Schember)
+//   - github.com/koron-go/vdp  (MURAOKA Taro)
+//   - github.com/mrcook/smstilemap  (Michael R. Cook)
+//   - github.com/remogatto/sms  (Andrea Fazzi)
+//   - github.com/user-none/go-chip-sn76489  (John Schember)
 package sms
 
 const (
-	VRAMSize    = 16 * 1024
-	CRAMSize    = 64
-	ScreenWidth = 256
-	MaxHeight   = 240
+	VRAMSize    = 16 * 1024 // VRAMSize is the 16K of video RAM the SMS has.
+	CRAMSize    = 64        // CRAMSize is the size of the SMS color ram.
+	ScreenWidth = 256       // ScreenWidth is the maximum screen width for the VDP.
+	MaxHeight   = 240       // MaxHeight is the maximum screen heigth for the VDP.
 
-	HblankCycles = 342
-	LinesNTSC    = 262
-	LinesPAL     = 313
+	HblankCycles = 342 // HblankCycles is the amount of cycles until the horizontal blank.
+	LinesNTSC    = 262 // LinesNTSC is the amount of lines in NTSC mode.
+	LinesPAL     = 313 // LinesPAL is the amount of lines in PAL mode.
 
-	ScreenHeightNTSC = 192
+	ScreenHeightNTSC = 192 // ScreenHeightNTSC screen heigth in NTSC mode.
 )
 
+// VDM is ane mulation of the SMS video Display processor.
 type VDP struct {
-	VRAM [VRAMSize]byte
-	CRAM [CRAMSize]byte
+	VRAM [VRAMSize]byte // VRAM is the video RAM.
+	CRAM [CRAMSize]byte // CRAM is the color RAM.
 
 	addrReg    uint16
 	codeReg    byte
@@ -45,12 +46,12 @@ type VDP struct {
 	disableHScroll   bool
 	disableVScroll   bool
 
-	nameTableAddr      uint16
+	nameTableAddr       uint16
 	spriteAttrTableAddr uint16
 	spriteTileTableAddr uint16
 
-	scrollX  int16
-	scrollY  int16
+	scrollX int16
+	scrollY int16
 
 	backdropColor byte
 	backdropIdx   byte
@@ -73,17 +74,19 @@ type VDP struct {
 	framebuffer [ScreenWidth * MaxHeight * 4]byte
 	frameReady  bool
 
-	IsGameGear  bool
-	vCounter    byte
-	hCounter    byte
+	IsGameGear bool
+	vCounter   byte
+	hCounter   byte
 }
 
+// New allocates a new VDP.
 func New(isGG bool) *VDP {
 	v := &VDP{IsGameGear: isGG}
 	v.Reset()
 	return v
 }
 
+// Reset restes the VDP to the initial state.
 func (v *VDP) Reset() {
 	v.scanline = 0
 	v.dot = 0
@@ -471,8 +474,8 @@ func (v *VDP) renderSprites(y uint16) {
 				continue
 			}
 			bit := 7 - px
-			idx := ((tile[0]>>bit)&1) | (((tile[1]>>bit)&1)<<1) |
-				(((tile[2]>>bit)&1)<<2) | (((tile[3]>>bit)&1)<<3)
+			idx := ((tile[0] >> bit) & 1) | (((tile[1] >> bit) & 1) << 1) |
+				(((tile[2] >> bit) & 1) << 2) | (((tile[3] >> bit) & 1) << 3)
 			if idx == 0 {
 				continue
 			}
@@ -500,6 +503,7 @@ func (v *VDP) CodeReg() byte           { return v.codeReg }
 func (v *VDP) VRAMAt(addr uint16) byte { return v.VRAM[addr] }
 func (v *VDP) CRAMAt(addr uint16) byte { return v.CRAM[addr] }
 func (v *VDP) Scanline() uint16        { return v.scanline }
+func (v *VDP) Dot() uint16             { return v.dot }
 
 func smsColorToRGB(c byte) (r, g, b byte) {
 	r = (c & 0x03) * 85
