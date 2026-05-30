@@ -16,12 +16,13 @@ type Scope struct {
 // It maintains the current scope chain, a registry of all declared procedures
 // and tasks, and provides helper methods for scope management and error reporting.
 type Checker struct {
-	current    *Scope              // innermost scope during checking
-	root       *Scope              // global scope
-	Procedures map[string]Procedure // procedure name → definition
-	Tasks      map[string]int      // task name → task index
-	TaskDefs   []Task              // task definitions in order
+	current    *Scope                 // innermost scope during checking
+	root       *Scope                 // global scope
+	Procedures map[string]Procedure   // procedure name → definition
+	Tasks      map[string]int         // task name → task index
+	TaskDefs   []Task                 // task definitions in order
 	Constants  map[Identifier]Literal // named constant values
+	Datas      map[Identifier]Data    // named data values
 }
 
 // NewChecker returns a new Checker with an initialized global scope.
@@ -30,6 +31,7 @@ func NewChecker() *Checker {
 		Procedures: make(map[string]Procedure),
 		Tasks:      make(map[string]int),
 		Constants:  make(map[Identifier]Literal),
+		Datas:      make(map[Identifier]Data),
 	}
 	c.root = &Scope{Name: "global", Symbols: make(map[Identifier]Declare)}
 	c.current = c.root
@@ -113,8 +115,8 @@ func (p Program) Check(c *Checker) error {
 			if _, ok := c.current.Symbols[Identifier(name)]; !ok {
 				c.current.Symbols[Identifier(name)] = Declare{
 					Identifier: Identifier(name),
-			Type:       Type{Typ: &PredeclaredType{Kind: PredeclaredWord}},
-			}
+					Type:       Type{Typ: &PredeclaredType{Kind: PredeclaredWord}},
+				}
 			}
 		}
 	}
@@ -177,6 +179,13 @@ func (s Declare) Check(c *Checker) error {
 // that references to the constant name can be resolved during code generation.
 func (s Constant) Check(c *Checker) error {
 	c.Constants[Identifier(s.Name)] = s.Literal
+	return nil
+}
+
+// Check registers a named data value in the checker's Data map so
+// that references to the data name can be resolved during code generation.
+func (d Data) Check(c *Checker) error {
+	c.Datas[Identifier(d.Name)] = d
 	return nil
 }
 
@@ -478,6 +487,14 @@ func (r *Reference) Check(c *Checker) error {
 		}
 		return nil
 	}
+	// Data is resolved during code generation; no declaration needed.
+	if _, ok := c.Datas[r.Identifier]; ok {
+		if len(r.Fields) > 0 {
+			return c.Errorf("", "data %q cannot be used with field access", r.Identifier)
+		}
+		return nil
+	}
+
 	d, ok := c.lookup(r.Identifier)
 	if !ok {
 		return c.Errorf("", "undeclared variable %q", r.Identifier)

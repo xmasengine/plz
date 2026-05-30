@@ -1795,6 +1795,7 @@ func (g *Gen) emitStorage(format string, size int, args ...any) {
 // Gen generates assembly for a DATA declaration, emitting DB directives for
 // numeric literals and DS directives for text literals.
 func (s Data) Gen(g *Gen) error {
+	g.Emitf("%s:\n", s.Name)
 	for _, lit := range s.Literals {
 		if n := lit.Number(); n != nil {
 			g.Emitf("\tdb %d\n", n.Value)

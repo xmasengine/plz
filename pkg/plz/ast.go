@@ -38,28 +38,28 @@ type Commander interface {
 	Command() Commander
 }
 
-func (c If) Command() Commander        { return c }
-func (c Constant) Command() Commander  { return c }
-func (c Data) Command() Commander      { return c }
-func (c Declare) Command() Commander   { return c }
-func (c Define) Command() Commander    { return c }
-func (c Group) Command() Commander     { return c }
-func (c Let) Command() Commander       { return c }
+func (c If) Command() Commander            { return c }
+func (c Constant) Command() Commander      { return c }
+func (c Data) Command() Commander          { return c }
+func (c Declare) Command() Commander       { return c }
+func (c Define) Command() Commander        { return c }
+func (c Group) Command() Commander         { return c }
+func (c Let) Command() Commander           { return c }
 func (c InterruptStmt) Command() Commander { return c }
-func (c Procedure) Command() Commander { return c }
-func (c Return) Command() Commander    { return c }
-func (c Call) Command() Commander      { return c }
-func (c GoTo) Command() Commander      { return c }
-func (c Halt) Command() Commander      { return c }
-func (c Enable) Command() Commander    { return c }
-func (c Disable) Command() Commander   { return c }
-func (c Output) Command() Commander    { return c }
-func (c Task) Command() Commander      { return c }
-func (c Suspend) Command() Commander   { return c }
-func (c Resume) Command() Commander    { return c }
-func (c Sleep) Command() Commander     { return c }
-func (c Yield) Command() Commander     { return c }
-func (c At) Command() Commander        { return c }
+func (c Procedure) Command() Commander     { return c }
+func (c Return) Command() Commander        { return c }
+func (c Call) Command() Commander          { return c }
+func (c GoTo) Command() Commander          { return c }
+func (c Halt) Command() Commander          { return c }
+func (c Enable) Command() Commander        { return c }
+func (c Disable) Command() Commander       { return c }
+func (c Output) Command() Commander        { return c }
+func (c Task) Command() Commander          { return c }
+func (c Suspend) Command() Commander       { return c }
+func (c Resume) Command() Commander        { return c }
+func (c Sleep) Command() Commander         { return c }
+func (c Yield) Command() Commander         { return c }
+func (c At) Command() Commander            { return c }
 
 // Statement is a labeled or unlabeled command within a PL/Z program.
 // Each statement may carry an optional named label and exactly one
@@ -100,7 +100,7 @@ type Procedure struct {
 	ParamTypes []Type
 	Statements []Statement
 	Interrupt  *Interrupt
-	Reentrant bool
+	Reentrant  bool
 }
 
 // Interrupt specifies whether a procedure is an interrupt handler and,
@@ -111,8 +111,10 @@ type Interrupt struct {
 }
 
 // InterruptStmt installs an interrupt handler at the default vector address.
-//   INTERRUPT name  — installs handler at 0x0038 (maskable interrupt)
-//   NMI name        — installs handler at 0x0066 (non-maskable interrupt)
+//
+//	INTERRUPT name  — installs handler at 0x0038 (maskable interrupt)
+//	NMI name        — installs handler at 0x0066 (non-maskable interrupt)
+//
 // The statement emits a JP to the named procedure at the vector address.
 type InterruptStmt struct {
 	NMI    bool
@@ -368,6 +370,7 @@ func (i Input) operand() Operander { return i }
 // Data represents a DATA directive that embeds literal bytes or
 // words directly into the output at the current code position.
 type Data struct {
+	Name     string
 	Literals []Literal
 }
 
@@ -496,10 +499,10 @@ func (e Expression) Ref() *Reference {
 	return op.Ref()
 }
 
-func (p *Prefix) expr() Expresser   { return p }
-func (i *Infix) expr() Expresser    { return i }
-func (s *Suffix) expr() Expresser   { return s }
-func (o *Operand) expr() Expresser  { return o }
+func (p *Prefix) expr() Expresser  { return p }
+func (i *Infix) expr() Expresser   { return i }
+func (s *Suffix) expr() Expresser  { return s }
+func (o *Operand) expr() Expresser { return o }
 
 // Prefix represents a unary operator expression such as negation (-x)
 // or logical NOT (!x). The Operator field holds the operator and the
@@ -576,10 +579,10 @@ func (o Operand) Ref() *Reference {
 	return nil
 }
 
-func (c *Call) operand() Operander      { return c }
-func (r *Reference) operand() Operander { return r }
+func (c *Call) operand() Operander       { return c }
+func (r *Reference) operand() Operander  { return r }
 func (e *Expression) operand() Operander { return e }
-func (l *Literal) operand() Operander   { return l }
+func (l *Literal) operand() Operander    { return l }
 
 // Operator is a numeric encoding of a PL/Z operator.
 // An operator can be up to 3 bytes long — the characters that form
@@ -589,27 +592,27 @@ type Operator TokenKind
 
 const (
 	OperatorNone       Operator = 0
-	OperatorADD        Operator = '+'           // +
-	OperatorSUB        Operator = '-'           // - (binary subtraction)
-	OperatorNEG        Operator = '-' + '@'<<8  // - (unary negation)
-	OperatorGT         Operator = '>'           // >
-	OperatorLT         Operator = '<'           // <
-	OperatorGTE        Operator = '>' + '='<<8  // >=
-	OperatorLTE        Operator = '<' + '='<<8  // <=
-	OperatorNEQ        Operator = '!' + '='<<8  // !=
-	OperatorEQU        Operator = '=' + '='<<8  // ==
-	OperatorMOD        Operator = '%'           // %
-	OperatorDIV        Operator = '/'           // /
-	OperatorNOT        Operator = '!'           // ! (unary logical NOT)
-	OperatorMUL        Operator = '*'           // *
-	OperatorAND        Operator = '&'           // &
-	OperatorOR         Operator = '|'           // |
-	OperatorXOR        Operator = '^'           // ^
-	OperatorINDEX      Operator = '[' + ']'<<8  // [] (array indexing)
-	OperatorCALL       Operator = '(' + ')'<<8  // () (procedure call)
-	OperatorFIELD      Operator = '.'           // . (record field access)
-	OperatorShiftLeft  Operator = '<' + '<'<<8  // <<
-	OperatorShiftRight Operator = '>' + '>'<<8  // >>
+	OperatorADD        Operator = '+'          // +
+	OperatorSUB        Operator = '-'          // - (binary subtraction)
+	OperatorNEG        Operator = '-' + '@'<<8 // - (unary negation)
+	OperatorGT         Operator = '>'          // >
+	OperatorLT         Operator = '<'          // <
+	OperatorGTE        Operator = '>' + '='<<8 // >=
+	OperatorLTE        Operator = '<' + '='<<8 // <=
+	OperatorNEQ        Operator = '!' + '='<<8 // !=
+	OperatorEQU        Operator = '=' + '='<<8 // ==
+	OperatorMOD        Operator = '%'          // %
+	OperatorDIV        Operator = '/'          // /
+	OperatorNOT        Operator = '!'          // ! (unary logical NOT)
+	OperatorMUL        Operator = '*'          // *
+	OperatorAND        Operator = '&'          // &
+	OperatorOR         Operator = '|'          // |
+	OperatorXOR        Operator = '^'          // ^
+	OperatorINDEX      Operator = '[' + ']'<<8 // [] (array indexing)
+	OperatorCALL       Operator = '(' + ')'<<8 // () (procedure call)
+	OperatorFIELD      Operator = '.'          // . (record field access)
+	OperatorShiftLeft  Operator = '<' + '<'<<8 // <<
+	OperatorShiftRight Operator = '>' + '>'<<8 // >>
 )
 
 // Priority returns the precedence of the operator for use in Pratt
@@ -679,8 +682,6 @@ type Reference struct {
 	Subscripts []Expression
 	Fields     []Identifier
 }
-
-
 
 // Task represents a TASK declaration that defines a cooperative
 // task with a static priority level. Tasks are scheduled by the

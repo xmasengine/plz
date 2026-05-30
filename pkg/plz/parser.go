@@ -238,7 +238,10 @@ func (s *Statement) Parse(parser *Parser) error {
 		err = cmd.Parse(parser)
 		s.Command = cmd
 	case KeywordData:
-		cmd := Data{}
+		if s.Label == nil {
+			return tok.Errorf("No label for DATA")
+		}
+		cmd := Data{Name: s.Label.Name}
 		err = cmd.Parse(parser)
 		s.Command = cmd
 	case KeywordDeclare:
