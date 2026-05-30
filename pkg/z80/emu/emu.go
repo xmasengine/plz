@@ -1,10 +1,13 @@
 package emu
 
-import "io"
-import "os"
-import "context"
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
 
-import "github.com/koron-go/z80"
+	"github.com/koron-go/z80"
+)
 
 type CPU = z80.CPU
 
@@ -41,6 +44,7 @@ type ReaderWriterIO struct {
 	Index   int
 	Readers [255]io.Reader
 	Writers [255]io.Writer
+	Errors  []error
 }
 
 func (b *ReaderWriterIO) In(port byte) byte {
@@ -49,7 +53,10 @@ func (b *ReaderWriterIO) In(port byte) byte {
 		return 0
 	}
 	buf := []byte{0}
-	rd.Read(buf[:])
+	_, err := rd.Read(buf[:])
+	if err != nil {
+		b.Errors = append(b.Errors, fmt.Errorf("port %d read: %w", port, err))
+	}
 	return buf[0]
 }
 
@@ -59,7 +66,10 @@ func (b *ReaderWriterIO) Out(port byte, val byte) {
 		return
 	}
 	buf := []byte{val}
-	wr.Write(buf[:])
+	_, err := wr.Write(buf[:])
+	if err != nil {
+		b.Errors = append(b.Errors, fmt.Errorf("port %d write: %w", port, err))
+	}
 }
 
 func Memory(buf ...byte) func(*CPU) {
