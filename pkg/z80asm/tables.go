@@ -2,7 +2,6 @@ package z80asm
 
 import (
 	"fmt"
-	"log"
 )
 
 func b(x ...byte) []byte {
@@ -285,7 +284,7 @@ func joinOpts(os ...args) args {
 	for _, o := range os {
 		for k, v := range o {
 			if _, ok := r[k]; ok {
-				log.Fatalf("%s found in two args", k)
+				panic(fmt.Sprintf("%s found in two args", k))
 			}
 			r[k] = v
 		}
@@ -304,7 +303,7 @@ func rmOpt(os args, o arg) args {
 		r[k] = v
 	}
 	if !found {
-		log.Fatalf("asked to remove %s, but not found", o)
+		panic(fmt.Sprintf("asked to remove %s, but not found", o))
 	}
 	return r
 }

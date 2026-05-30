@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strings"
 	"text/scanner"
@@ -481,7 +480,7 @@ func (ca commandAssembler) W(asm *Assembler) error {
 		}
 		if ok {
 			if found {
-				log.Fatalf("more than one variant of %s possible: args %#v, found alt variant %s", ca.cmd, vals, argVariant)
+				return asm.scanErrorf("more than one variant of %s possible: args %#v, found alt variant %s", ca.cmd, vals, argVariant)
 			}
 			found = true
 			// Longer instructions (bit operations on ix or iy)
@@ -729,7 +728,6 @@ func AssembleSMS(output string, sources []string) error {
 		if err != nil {
 			return err
 		}
-		println("AssembleSMS", source)
 		err = asm.AssembleFile(source)
 		if err != nil {
 			return err

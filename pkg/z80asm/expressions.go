@@ -4,7 +4,6 @@ package z80asm
 
 import (
 	"fmt"
-	"log"
 	"text/scanner"
 )
 
@@ -85,17 +84,16 @@ func bool2int(b bool) int64 {
 	return 0
 }
 
-func (euo exprUnaryOp) apply(n1 int64) int64 {
+func (euo exprUnaryOp) apply(n1 int64) (int64, error) {
 	switch euo.op {
 	case '!':
-		return bool2int(n1 == 0)
+		return bool2int(n1 == 0), nil
 	case '^':
-		return ^n1
+		return ^n1, nil
 	case '-':
-		return -n1
+		return -n1, nil
 	}
-	log.Fatalf("Unknown unary op %c", euo.op)
-	return 0
+	return 0, fmt.Errorf("unknown unary op %c", euo.op)
 }
 
 func getIntValue(asm *Assembler, e expr) (int64, bool, error) {
@@ -109,7 +107,11 @@ func getIntValue(asm *Assembler, e expr) (int64, bool, error) {
 		if !ok || err != nil {
 			return 0, ok, err
 		}
-		return v.apply(n), true, nil
+		r, err := v.apply(n)
+		if err != nil {
+			return 0, false, err
+		}
+		return r, true, nil
 	case exprInt:
 		return v.i, true, nil
 	case exprBinaryOp:
@@ -224,8 +226,7 @@ func (ebo exprBinaryOp) apply(asm *Assembler, n1 int64, e2 expr) (int64, error) 
 		}
 		return n2, nil
 	}
-	log.Fatalf("unknown binary op: %s", scanner.TokenString(ebo.op))
-	return 0, nil
+	return 0, fmt.Errorf("unknown binary op: %s", scanner.TokenString(ebo.op))
 }
 
 func (ebo exprBinaryOp) evalAs(asm *Assembler, a arg, top bool) ([]byte, bool, error) {
@@ -240,23 +241,22 @@ type exprBracket struct {
 	e expr
 }
 
-func indRegGetReg(a arg) arg {
+func indRegGetReg(a arg) (arg, error) {
 	switch a {
 	case indBC:
-		return regBC
+		return regBC, nil
 	case indHL:
-		return regHL
+		return regHL, nil
 	case indDE:
-		return regDE
+		return regDE, nil
 	case indSP:
-		return regSP
+		return regSP, nil
 	case indIX, indIXplus:
-		return regIX
+		return regIX, nil
 	case indIY, indIYplus:
-		return regIY
+		return regIY, nil
 	}
-	log.Fatalf("passed %s to indRegGetReg", a)
-	return void
+	return void, fmt.Errorf("passed %s to indRegGetReg", a)
 }
 
 func (eb exprBracket) evalAs(asm *Assembler, a arg, top bool) ([]byte, bool, error) {
@@ -267,20 +267,32 @@ func (eb exprBracket) evalAs(asm *Assembler, a arg, top bool) ([]byte, bool, err
 		}
 		return eb.e.evalAs(asm, a, false)
 	case argTypeIndReg:
-		_, ok, err := eb.e.evalAs(asm, indRegGetReg(a), false)
+		reg, err := indRegGetReg(a)
+		if err != nil {
+			return nil, false, err
+		}
+		_, ok, err := eb.e.evalAs(asm, reg, false)
 		return nil, ok, err
 	case argTypeIndAddress:
 		return eb.e.evalAs(asm, addr16, false)
 	case argTypeIndRegPlusInt:
 		switch ex := eb.e.(type) {
 		case exprIdent:
-			_, ok, err := ex.evalAs(asm, indRegGetReg(a), false)
+			reg, err := indRegGetReg(a)
+			if err != nil {
+				return nil, false, err
+			}
+			_, ok, err := ex.evalAs(asm, reg, false)
 			if !ok || err != nil {
 				return nil, ok, err
 			}
 			return []byte{0}, true, nil
 		case exprBinaryOp:
-			_, ok, err := ex.e1.evalAs(asm, indRegGetReg(a), false)
+			reg, err := indRegGetReg(a)
+			if err != nil {
+				return nil, false, err
+			}
+			_, ok, err := ex.e1.evalAs(asm, reg, false)
 			if !ok || err != nil {
 				return nil, ok, err
 			}

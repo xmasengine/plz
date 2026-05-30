@@ -2,7 +2,6 @@ package z80asm
 
 import (
 	"fmt"
-	"log"
 	"strconv"
 	"text/scanner"
 )
@@ -35,39 +34,44 @@ func getValidFixedArgs(m map[arg]int64) map[int64]bool {
 	return r
 }
 
-func argRange(a arg) (min, max, size int64) {
+func argRange(a arg) (min, max, size int64, err error) {
 	switch a {
 	case const8:
-		return -128, 255, 1 // sloppily allow signed or unsigned bytes
+		return -128, 255, 1, nil // sloppily allow signed or unsigned bytes
 	case const16:
-		return -32768, 65535, 2
+		return -32768, 65535, 2, nil
 	case const16be:
-		return -32768, 65535, 2
+		return -32768, 65535, 2, nil
 	case constS8:
-		return -128, 127, 1
+		return -128, 127, 1, nil
 	case addr16:
-		return 0, 65535, 2
+		return 0, 65535, 2, nil
 	case reladdr8:
-		return -128, 127, 1
+		return -128, 127, 1, nil
 	case port8:
-		return 0, 255, 1
+		return 0, 255, 1, nil
 	case ind16:
-		return 0, 65535, 2
+		return 0, 65535, 2, nil
 	}
-	log.Fatalf("argRange(%s)", a)
-	return 0, 0, 0
+	return 0, 0, 0, fmt.Errorf("argRange(%s)", a)
 }
 
-func writesBigEndian(a arg) bool {
-	_, _, sz := argRange(a)
-	if sz != 2 {
-		log.Fatalf("got unexpected request for big-endianness for non-2-byte arg %v", a)
+func writesBigEndian(a arg) (bool, error) {
+	_, _, sz, err := argRange(a)
+	if err != nil {
+		return false, err
 	}
-	return a == const16be
+	if sz != 2 {
+		return false, fmt.Errorf("got unexpected request for big-endianness for non-2-byte arg %v", a)
+	}
+	return a == const16be, nil
 }
 
 func serializeIntArg(asm *Assembler, i int64, a arg) ([]byte, bool, error) {
-	min, max, size := argRange(a)
+	min, max, size, err := argRange(a)
+	if err != nil {
+		return nil, false, err
+	}
 	if i < min || i > max {
 		return nil, false, asm.scanErrorf("%d is not in the range %d...%d", i, min, max)
 	}
@@ -76,15 +80,18 @@ func serializeIntArg(asm *Assembler, i int64, a arg) ([]byte, bool, error) {
 	case 1:
 		return []byte{byte(ui)}, true, nil
 	case 2:
-		if writesBigEndian(a) {
+		be, err := writesBigEndian(a)
+		if err != nil {
+			return nil, false, err
+		}
+		if be {
 			return []byte{byte(ui / 256), byte(ui % 256)}, true, nil
 		} else {
 			return []byte{byte(ui % 256), byte(ui / 256)}, true, nil
 		}
 	default:
-		log.Fatalf("weird size %d", size)
+		return nil, false, fmt.Errorf("serializeIntArg: weird size %d", size)
 	}
-	return nil, false, fmt.Errorf("internal error")
 
 }
 
