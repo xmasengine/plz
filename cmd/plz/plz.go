@@ -66,10 +66,11 @@ func (args arguments) emuOpts() []emu.CPUOption {
 	}
 	if args.Output != "" {
 		var output *os.File
+		var err error
 		if args.Output == "-" {
 			output = os.Stdout
 		} else {
-			output, err := os.Create(args.Output)
+			output, err = os.Create(args.Output)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: cannot open output %s: %s", args.Output, err)
 				os.Exit(2)
