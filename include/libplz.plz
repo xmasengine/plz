@@ -8,27 +8,23 @@
 
 // Write a VDP register.
 PROCEDURE write_vdp_reg(reg BYTE, value BYTE)
-  OUTPUT 0xBF value
-  OUTPUT 0xBF reg | 0x80
+  OUTPUT WORD 0xBF value | ((reg | 0x80) << 8)
 END
 
 // Set VRAM write address (for subsequent writes to port 0xBE).
 PROCEDURE set_write_addr(addr WORD)
-  OUTPUT 0xBF addr & 0xFF
-  OUTPUT 0xBF ((addr >> 8) & 0x3F) | 0x40
+  OUTPUT WORD 0xBF (addr | 0x4000)
 END
 
 // Set VRAM read address (for subsequent reads from port 0xBE).
 PROCEDURE set_read_addr(addr WORD)
-  OUTPUT 0xBF addr & 0xFF
-  OUTPUT 0xBF (addr >> 8) & 0x3F
+  OUTPUT WORD 0xBF (addr & 0x3FFF)
 END
 
 // Set CRAM (palette) write address for subsequent writes to port 0xBE.
 // addr is a 5-bit CRAM byte address (0-31).
 PROCEDURE set_cram_addr(addr BYTE)
-  OUTPUT 0xBF addr & 0x1F
-  OUTPUT 0xBF 0xC0
+  OUTPUT WORD 0xBF (addr & 0x1F) | 0xC000
 END
 
 // Write a byte to VRAM at the given address.
@@ -135,6 +131,12 @@ PROCEDURE screen_mode_4()
   CALL enable_screen()
 END
 
+
+// border_color sets the border color
+PROCEDURE border_color(color BYTE)
+  CALL write_vdp_reg(7, color)
+END
+
 // ============================================================
 // Palette
 // SMS palette is 32 bytes of CRAM: 00BBGGRR (2-bit per channel RGB).
@@ -191,11 +193,38 @@ END
 // Timing / Frame sync
 // ============================================================
 
-// Wait for vertical blanking interval (start of next frame).
+// Wait for vertical blanking interval (start of next frame) by polling.
+// This procedure should be called before writing to the screen
+// to avoid screen flashing.
 PROCEDURE wait_vsync()
   WHILE (INPUT(0xBF) & 0x80) == 0 DO
   END
 END
+
+
+DECLARE vsync_flag BYTE
+DECLARE vsync_status BYTE
+
+// Install this interrupt handler to be able to use halt_vsync.
+//
+INTERRUPT PROCEDURE int_vsync()
+    // Acknowledge the VDP interrupt by reading port $BF
+	LET vsync_status = INPUT(0xBF)
+	LET vsync_flag = vsync_flag + 1
+	ENABLE
+END
+
+// Wait for vertical blanking interval (start of next frame) by interrupt.
+// You must install int_vsync as the interrupt handler.
+// This procedure should be called before writing to the screen
+// to avoid screen flashing.
+PROCEDURE halt_vsync()
+	ENABLE
+	HALT
+END
+
+
+
 
 // ============================================================
 // Text output

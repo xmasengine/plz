@@ -398,6 +398,10 @@ func (p Program) Gen(g *Gen) error {
 		}
 	}
 
+	// Emit loop to stop fallthough.
+	g.Emitln("_plz_all_done:")
+	g.Emitln("\tjp _plz_all_done")
+
 	// Emit procedure bodies after main code (must not be reachable by fall-through).
 	for _, proc := range procedures {
 		if err := proc.Gen(g); err != nil {
@@ -1787,14 +1791,19 @@ func (s Disable) Gen(g *Gen) error {
 	return nil
 }
 
-// Gen generates assembly for an OUTPUT statement. It evaluates the value, moves
-// it to A, then emits an OUT instruction to the given port.
+// Gen generates assembly for an OUTPUT statement. It evaluates the value into
+// HL, then writes the low byte (and optionally the high byte for WORD output)
+// to the given port.
 func (s Output) Gen(g *Gen) error {
 	if err := s.Value.Gen(g); err != nil {
 		return err
 	}
 	g.Emitf("\tld a, l\n")
 	g.Emitf("\tout (%d), a\n", s.Port)
+	if s.IsWord {
+		g.Emitf("\tld a, h\n")
+		g.Emitf("\tout (%d), a\n", s.Port)
+	}
 	return nil
 }
 

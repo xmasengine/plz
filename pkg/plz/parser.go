@@ -605,13 +605,18 @@ func (g *Return) Parse(parser *Parser) error {
 
 // Parse parses an OUTPUT statement. The syntax is:
 //
-//	OUTPUT port expr
+//	OUTPUT [WORD] port expr
 //
 // where port is a numeric literal and expr is the value to write to the port.
+// When WORD is specified, both low and high bytes of expr are written (low first).
 func (g *Output) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordOutput)
 	if err != nil {
 		return err
+	}
+	if parser.Peek().TokenKind == KeywordWord {
+		parser.Next()
+		g.IsWord = true
 	}
 	tok, err := parser.Accept(TokenInt)
 	if err != nil {

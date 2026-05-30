@@ -79,8 +79,9 @@ type Disable struct {
 
 // Output represents an OUTPUT statement that writes a value to an I/O port.
 type Output struct {
-	Port  int
-	Value Expression
+	Port   int
+	Value  Expression
+	IsWord bool // if true, writes low byte then high byte (WORD output)
 }
 
 // Let represents an assignment statement (LET) that stores a value into

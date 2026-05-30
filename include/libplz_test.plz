@@ -11,11 +11,21 @@ tiles: DATA
   0x81, 0xFF, 0x81, 0x81, 0xFF, 0x81, 0x81, 0xFF,
   0x81, 0x81, 0xFF, 0x81, 0x81, 0xFF, 0x81, 0x81
 
+INTERRUPT int_vsync // install the interrupt handler.
+
 start:
+  DISABLE
+
   CALL screen_mode_4()
+  CALL halt_vsync() // To avoid flashing and tearing
+  // Cluld also poll using:
+  // CALL wait_vsync()
   CALL load_palette_default()
+  CALL border_color(7)
   CALL load_tiles(128, tiles, 2)
   // Display checkerboard: tile 128 at top-left, tile 129 next to it
   CALL write_vram(0x3800, 128)
   CALL write_vram(0x3802, 129)
-  HALT
+  // Show the screen contents.
+  CALL enable_screen()
+  CALL halt_vsync() // To avoid flashing and tearing
