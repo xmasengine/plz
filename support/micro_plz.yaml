@@ -1,0 +1,38 @@
+---
+filetype: plz
+detect:
+    filename: "\\.plz$"
+
+rules:
+    - type: "\\b(ARRAY|BYTE|WORD|DATA|TEXT)\\b"
+    - statement: "\\b(CALL|DECLARE|DISABLE|DO|ENABLE)\\b"
+    - statement: "\\b(GOTO|END|IF|THEN|ELSE)\\b"
+    - statement: "\\b(HALT|LET|RETURN|OUTPUT)\\b"
+    - statement: "\\b(PROCEDURE|REENTRANT|RECORD|WHILE|FOR)\\b"
+    - statement: "\\b(TO|BY|CASE|OF|DEFAULT)\\b"
+    - statement: "\\b(DEFINE|TYPE)\\b"
+    - statement: "\\b(INTERRUPT|NMI)\\b"
+    - statement: "\\b(TASK|PRIORITY|SUSPEND|SLEEP|YIELD|RESUME)\\b"
+    - statement: "\\b(AT)\\b"
+    - special: "\\b(INCLUDE)"
+    - preproc: "\\b(IMPORT)\\b"
+    - symbol: "(\\||&|!|=|\\\\|;|\\(\\)|||\\[|\\])"
+    - symbol.operator: "(==|/=|&&|\\|\\||<|>|<=|>=)"
+    - constant: "\\b(CONSTANT)\\b"
+    - constant.number: '\b([0-9]+)\b'
+    - constant.number: '\b0x([0-9a-fA-F]+)\b'
+    - constant.char: '\$0x[0-9a-fA-F]+'
+    - constant.string: "\"(\\\\.|[^\"])*\"|'(\\\\.|[^'])*'"
+    - constant.string: "`(\\\\.|[^\\\\`])*`"
+    - indent-char.whitespace: "[[:space:]]+$"
+    - indent-char: "	+ +| +	+"
+    - comment:
+        start: "//"
+        end: "$"
+        rules:
+            - todo: "(TODO|XXX|FIXME):?"
+    - comment:
+        start: "/\\*"
+        end: "\\*/"
+        rules:
+            - todo: "(TODO|XXX|FIXME):?"
