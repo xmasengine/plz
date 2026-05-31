@@ -208,7 +208,7 @@ DECLARE vsync_status BYTE
 // Install this interrupt handler to be able to use halt_vsync.
 //
 INTERRUPT PROCEDURE int_vsync()
-    // Acknowledge the VDP interrupt by reading port $BF
+	// Acknowledge the VDP interrupt by reading port $BF
 	LET vsync_status = INPUT(0xBF)
 	LET vsync_flag = vsync_flag + 1
 	ENABLE

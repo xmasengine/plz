@@ -21,9 +21,9 @@ Although PLZ is inspired by PL/M, it differs in several ways:
 - **CONSTANT, DATA** are head keywords instead of the convoluted `DECLARE` syntax
 - **One declaration per statement** (BYTE, WORD) to simplify the parser
 - **Types BYTE and WORD** instead of BYTE and ADDRESS
-- **No semicolons required** — statements end at keywords or newlines; `;` is allowed
-- **SWITCH statement** with proper CASE blocks and default handling
-- **Up to 2 labels per statement** (one named, one numeric)
+- **No semicolons required**, statements end at keywords, `;` is allowed
+- **SWITCH statement** with proper OF blocks and DEFAULT handling
+- **Only one named label per statement** AT is used for locating code precisely.
 
 ## Planned Features
 

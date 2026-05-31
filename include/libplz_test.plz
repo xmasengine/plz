@@ -13,19 +13,32 @@ tiles: DATA
 
 INTERRUPT int_vsync // install the interrupt handler.
 
+font: DATA
+	0b00000000,0b00000000,0b00000000,0b00000000,
+	0b00011000,0b00011000,0b00011000,0b00011000,
+	0b00100100,0b00100100,0b00100100,0b00100100,
+	0b01000010,0b01000010,0b01000010,0b01000010,
+	0b01111110,0b01111110,0b01111110,0b01111110,
+	0b01000010,0b01000010,0b01000010,0b01000010,
+	0b01000010,0b01000010,0b01000010,0b01000010,
+	0b00000000,0b00000000,0b00000000,0b00000000
+
 start:
   DISABLE
 
-  CALL screen_mode_4()
-  CALL halt_vsync() // To avoid flashing and tearing
+  CALL screen_mode_4
+  CALL halt_vsync // To avoid flashing and tearing
   // Cluld also poll using:
   // CALL wait_vsync()
-  CALL load_palette_default()
+  CALL load_palette_default
   CALL border_color(7)
+  CALL load_tiles('A', font, 1)
   CALL load_tiles(128, tiles, 2)
   // Display checkerboard: tile 128 at top-left, tile 129 next to it
   CALL write_vram(0x3800, 128)
   CALL write_vram(0x3802, 129)
+  CALL set_cursor(10,10)
+  CALL print_char('A')
   // Show the screen contents.
-  CALL enable_screen()
-  CALL halt_vsync() // To avoid flashing and tearing
+  CALL enable_screen
+  CALL halt_vsync // To avoid flashing and tearing
