@@ -1,0 +1,119 @@
+// Mary Had a Little Lamb — PL/Z music test
+// Uses SMS PSG (SN76489) on I/O port 0x7F.
+// Note frequency constants (C4, D4, E4, G4, etc.) are defined in include/music.plz.
+//
+// Timing approaches:
+//
+// 1. Busy-wait (used here) — works with the basic emulator (no interrupts).
+//    CALL delay(song[idx+2] * 8000) spins the CPU for ~0.2s per unit.
+//    Good for the plain "plz -E" emulator.
+//
+// 2. SLEEP + VBlank interrupt — correct for real SMS hardware or plz -R.
+//    Replace CALL delay(...) with SLEEP song[idx+2].
+//    Add a VBlank handler and enable interrupts:
+//
+//      INTERRUPT PROCEDURE tick()
+//        CALL _plz_scheduler
+//      END
+//
+//      ENABLE
+//      OUTPUT 0xBF 0xE0   // VDP reg 1: display + VBlank int enable
+//      OUTPUT 0xBF 0x81   // select reg 1
+//
+//    Then each VBlank (60 Hz) calls the scheduler, which decrements all
+//    sleeping tasks' counters — SLEEP 60 ≈ 1 second on NTSC.
+//
+// 3. Timer task — cooperative heartbeat without real-time guarantees.
+//    A low-priority YIELD-spinning task advances all SLEEP counters:
+//
+//      TASK timer PRIORITY 1
+//        WHILE 1 DO YIELD END
+//      END
+
+// Note frequency constants for SN76489 at 3.579545 MHz.
+// These are also available in include/music.plz.
+CONSTANT C4 = 0x1AB
+CONSTANT CS4 = 0x194
+CONSTANT D4 = 0x17D
+CONSTANT DS4 = 0x168
+CONSTANT E4 = 0x153
+CONSTANT F4 = 0x140
+CONSTANT FS4 = 0x12E
+CONSTANT G4 = 0x11D
+CONSTANT GS4 = 0x10D
+CONSTANT A4 = 0xFE
+CONSTANT AS4 = 0xF0
+CONSTANT B4 = 0xE2
+CONSTANT C5 = 0xD5
+
+PROCEDURE psg_freq(channel BYTE, freq WORD)
+  OUTPUT 0x7F 0x80 | (channel << 5) | (freq & 0x0F)
+  OUTPUT 0x7F (freq >> 4) & 0x3F
+END
+
+PROCEDURE psg_vol(channel BYTE, vol BYTE)
+  OUTPUT 0x7F 0x90 | (channel << 5) | vol
+END
+
+// Busy-wait delay. Each unit is ~25us at 3.58 MHz.
+// 1 unit = ~90 T-state iterations = ~25 microseconds.
+PROCEDURE delay(units WORD)
+  DECLARE i WORD
+  LET i = 0
+  WHILE i < units DO
+    LET i = i + 1
+  END
+END
+
+// Song data: freq_lo, freq_hi, duration, channel, volume
+// Note constants (C4, D4, E4, G4) are defined above.
+// Expressions like E4 & 0xFF and E4 >> 8 are evaluated at compile time.
+my_song: DATA
+  E4 & 0xFF, E4 >> 8, 1, 0, 10,
+  D4 & 0xFF, D4 >> 8, 1, 0, 10,
+  C4 & 0xFF, C4 >> 8, 1, 0, 10,
+  D4 & 0xFF, D4 >> 8, 1, 0, 10,
+  E4 & 0xFF, E4 >> 8, 1, 0, 10,
+  E4 & 0xFF, E4 >> 8, 1, 0, 10,
+  E4 & 0xFF, E4 >> 8, 2, 0, 10,
+  D4 & 0xFF, D4 >> 8, 1, 0, 10,
+  D4 & 0xFF, D4 >> 8, 1, 0, 10,
+  D4 & 0xFF, D4 >> 8, 2, 0, 10,
+  E4 & 0xFF, E4 >> 8, 1, 0, 10,
+  G4 & 0xFF, G4 >> 8, 1, 0, 10,
+  G4 & 0xFF, G4 >> 8, 2, 0, 10,
+  E4 & 0xFF, E4 >> 8, 1, 0, 10,
+  D4 & 0xFF, D4 >> 8, 1, 0, 10,
+  C4 & 0xFF, C4 >> 8, 1, 0, 10,
+  D4 & 0xFF, D4 >> 8, 1, 0, 10,
+  E4 & 0xFF, E4 >> 8, 1, 0, 10,
+  E4 & 0xFF, E4 >> 8, 1, 0, 10,
+  E4 & 0xFF, E4 >> 8, 1, 0, 10,
+  E4 & 0xFF, E4 >> 8, 1, 0, 10,
+  D4 & 0xFF, D4 >> 8, 1, 0, 10,
+  D4 & 0xFF, D4 >> 8, 1, 0, 10,
+  E4 & 0xFF, E4 >> 8, 1, 0, 10,
+  D4 & 0xFF, D4 >> 8, 1, 0, 10,
+  C4 & 0xFF, C4 >> 8, 3, 0, 10,
+  0, 0, 0, 0, 0xFF
+
+// Playback routine using busy-wait delay
+PROCEDURE play_song(song DATA)
+  DECLARE idx WORD
+  DECLARE freq WORD
+  LET idx = 0
+  WHILE 1 DO
+    IF song[idx+4] == 0xFF THEN RETURN
+    LET freq = song[idx] | (song[idx+1] << 8)
+    CALL psg_freq(song[idx+3], freq)
+    CALL psg_vol(song[idx+3], song[idx+4])
+    CALL delay(song[idx+2] * 8000)
+    CALL psg_vol(song[idx+3], 15)
+    LET idx = idx + 5
+  END
+END
+
+TASK music PRIORITY 4
+  CALL play_song(my_song)
+  HALT
+END
