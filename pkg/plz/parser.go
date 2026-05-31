@@ -387,9 +387,9 @@ func (a *At) Parse(parser *Parser) error {
 
 // Parse parses a CONSTANT declaration. The syntax is:
 //
-//	CONSTANT name [=] literal
+//	CONSTANT name [=] expr
 //
-// The equals sign is optional, and the literal value is also optional.
+// The equals sign is optional, and the expression value is also optional.
 func (g *Constant) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordConstant); err != nil {
 		return nil
@@ -403,32 +403,42 @@ func (g *Constant) Parse(parser *Parser) error {
 
 	parser.Skip(TokenKind('=')) // Skip optional =
 
-	// Optional literal value.
-	if err := g.Literal.Parse(parser); err != nil {
-		return err
+	// Optional expression value.
+	tok := parser.Peek()
+	switch tok.TokenKind {
+	case TokenInt, TokenString, TokenChar, TokenIdent, KeywordInput, '(', '+', '-', '!':
+		return g.Expr.Parse(parser)
 	}
 	return nil
 }
 
 // Parse parses a DATA statement. The syntax is:
 //
-//	name: DATA literal [, literal ...]
+//	name: DATA expr [, expr ...]
 //
-// Each literal may be a number, a string, or an identifier reference.
+// Each expr may be a number, a string, a constant reference, or
+// a constant expression. Strings are emitted as DS directives;
+// numeric values are emitted as DB directives.
 func (g *Data) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordData)
 	if err != nil {
 		return nil
 	}
 	for {
-		var lit Literal
-		if err := lit.Parse(parser); err != nil {
-			return err
-		}
-		if lit.Lit == nil {
+		tok := parser.Peek()
+		switch tok.TokenKind {
+		case TokenInt, TokenString, TokenChar, TokenIdent, KeywordInput, '(', '+', '-', '!':
+			var expr Expression
+			if err := expr.Parse(parser); err != nil {
+				return err
+			}
+			g.Values = append(g.Values, expr)
+		default:
+			if len(g.Values) == 0 {
+				return tok.Errorf("DATA: expected expression")
+			}
 			break
 		}
-		g.Literals = append(g.Literals, lit)
 		if parser.Peek().TokenKind != ',' {
 			break
 		}
@@ -778,13 +788,13 @@ func (g *Declare) Parse(parser *Parser) error {
 
 	// Optional AT suffix for absolute address (no initializer allowed).
 	if parser.Skip(KeywordAt) != nil {
-		g.At = &Literal{}
+		g.At = &Expression{}
 		return g.At.Parse(parser)
 	}
 
 	if parser.Skip(TokenKind('=')) != nil {
 		g.Initializer = &Initializer{}
-		if err := g.Initializer.Literal.Parse(parser); err != nil {
+		if err := g.Initializer.Expr.Parse(parser); err != nil {
 			return err
 		}
 	}

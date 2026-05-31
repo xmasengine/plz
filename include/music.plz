@@ -1,5 +1,22 @@
 // music.plz — SN76489 Programmable Sound Generator driver
 // Port 0x7F = PSG data port (Sega Master System)
+//
+// Note frequency constants for SN76489 at 3.579545 MHz:
+//   divider = 111861 / frequency
+// These are the divider values (10-bit) to load into the PSG tone registers.
+CONSTANT C4 = 0x1AB   // 261.63 Hz
+CONSTANT CS4 = 0x194  // 277.18 Hz
+CONSTANT D4 = 0x17D   // 293.66 Hz
+CONSTANT DS4 = 0x168  // 311.13 Hz
+CONSTANT E4 = 0x153   // 329.63 Hz
+CONSTANT F4 = 0x140   // 349.23 Hz
+CONSTANT FS4 = 0x12E  // 369.99 Hz
+CONSTANT G4 = 0x11D   // 392.00 Hz
+CONSTANT GS4 = 0x10D  // 415.30 Hz
+CONSTANT A4 = 0xFE    // 440.00 Hz
+CONSTANT AS4 = 0xF0   // 466.16 Hz
+CONSTANT B4 = 0xE2    // 493.88 Hz
+CONSTANT C5 = 0xD5    // 523.25 Hz
 
 // -------------------------------------------------------------------
 // PSG register helpers

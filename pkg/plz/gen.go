@@ -1870,7 +1870,7 @@ func (s GoTo) Gen(g *Gen) error {
 // the specified address and updating the heap pointer so subsequent data
 // declarations are placed there.
 func (s At) Gen(g *Gen) error {
-	addr, err := g.evalConstLiteral(s.Address)
+	addr, err := g.Checker.EvalConstExpr(s.Address)
 	if err != nil {
 		return err
 	}
@@ -1894,24 +1894,11 @@ func (g *Gen) resolveCaseVal(cv CaseVal) (int, error) {
 	return 0, fmt.Errorf("CASE: constant %q is not a number", cv.Name)
 }
 
-// evalConstLiteral evaluates a Literal to an integer at codegen time.
-// The literal must be a number (NumberLit) or a reference to a named
-// constant (ReferenceLit) that has been registered during semantic checking.
-func (g *Gen) evalConstLiteral(l Literal) (int, error) {
-	if n := l.Number(); n != nil {
-		return n.Value, nil
-	}
-	if r := l.Reference(); r != nil {
-		id := r.Value.Identifier
-		if lit, ok := g.Checker.Constants[id]; ok {
-			if n := lit.Number(); n != nil {
-				return n.Value, nil
-			}
-			return 0, fmt.Errorf("AT: constant %q is not a number", id)
-		}
-		return 0, fmt.Errorf("AT: undefined constant %q", id)
-	}
-	return 0, fmt.Errorf("AT: expected a number or constant, got text literal")
+// evalConstExpr evaluates an Expression to an integer at codegen time.
+// It delegates to the Checker's EvalConstExpr which resolves constants and
+// evaluates all compile-time operators.
+func (g *Gen) evalConstExpr(e Expression) (int, error) {
+	return g.Checker.EvalConstExpr(e)
 }
 
 // Gen generates assembly for a DECLARE statement. Inside a procedure body it
@@ -1942,7 +1929,7 @@ func (s Declare) Gen(g *Gen) error {
 	// If AT is set, the variable is at a fixed absolute address.
 	// Do not advance g.Heap so subsequent declarations are unaffected.
 	if s.At != nil {
-		addr, err := g.evalConstLiteral(*s.At)
+		addr, err := g.evalConstExpr(*s.At)
 		if err != nil {
 			return err
 		}
@@ -2038,26 +2025,41 @@ func (g *Gen) emitStorage(format string, size int, args ...any) {
 }
 
 // Gen generates assembly for a DATA declaration, emitting DB directives for
-// numeric literals and DS directives for text literals.
+// numeric expressions and DS directives for text literals.
 func (s Data) Gen(g *Gen) error {
 	g.Emitf("%s:\n", s.Name)
-	for _, lit := range s.Literals {
-		if n := lit.Number(); n != nil {
-			g.Emitf("\tdb %d\n", n.Value)
-		} else if t := lit.Text(); t != nil {
-			g.Emitf("\tds %s\n", strconv.Quote(t.Value))
+	for _, val := range s.Values {
+		if v, err := g.Checker.EvalConstExpr(val); err == nil {
+			g.Emitf("\tdb %d\n", v)
+		} else if op := val.Operand(); op != nil {
+			if lit := op.Literal(); lit != nil {
+				if t := lit.Text(); t != nil {
+					g.Emitf("\tds %s\n", strconv.Quote(t.Value))
+					continue
+				}
+			}
+			return fmt.Errorf("data: cannot evaluate value %v", val)
+		} else {
+			return fmt.Errorf("data: cannot evaluate expression")
 		}
 	}
 	return nil
 }
 
 // Gen generates assembly for a CONSTANT declaration, emitting a const directive
-// with the literal value in hexadecimal or quoted form.
+// with the evaluated expression value.
 func (s Constant) Gen(g *Gen) error {
-	if n := s.Literal.Number(); n != nil {
-		g.Emitf("\tconst %s = %x\n", s.Name, n.Value)
-	} else if t := s.Literal.Text(); t != nil {
-		g.Emitf("\tconst %s = %s\n", s.Name, strconv.Quote(t.Value))
+	if s.Expr.Expr == nil {
+		return nil
+	}
+	if v, err := g.Checker.EvalConstExpr(s.Expr); err == nil {
+		g.Emitf("\tconst %s = %d\n", s.Name, v)
+	} else if op := s.Expr.Operand(); op != nil {
+		if lit := op.Literal(); lit != nil {
+			if t := lit.Text(); t != nil {
+				g.Emitf("\tconst %s = %s\n", s.Name, strconv.Quote(t.Value))
+			}
+		}
 	}
 	return nil
 }

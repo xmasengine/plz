@@ -371,15 +371,15 @@ func (i Input) operand() Operander { return i }
 // Data represents a DATA directive that embeds literal bytes or
 // words directly into the output at the current code position.
 type Data struct {
-	Name     string
-	Literals []Literal
+	Name   string
+	Values []Expression
 }
 
 // At represents an AT directive that sets the absolute memory address
-// for subsequent data declarations. The address must be a numeric
-// literal or a named constant.
+// for subsequent data declarations. The address must be a constant
+// expression.
 type At struct {
-	Address Literal
+	Address Expression
 }
 
 // Declare represents a DECLARE statement that introduces a variable,
@@ -393,14 +393,14 @@ type Declare struct {
 	Type        Type
 	Size        int
 	Initializer *Initializer
-	At          *Literal // absolute address (no initializer allowed)
-	ParamRef    bool     // true when this is a record/array parameter (passed by reference)
+	At          *Expression // absolute address (no initializer allowed)
+	ParamRef    bool        // true when this is a record/array parameter (passed by reference)
 }
 
-// Initializer wraps a Literal to provide an initial value for a
+// Initializer wraps an Expression to provide an initial value for a
 // DECLARE statement.
 type Initializer struct {
-	Literal
+	Expr Expression
 }
 
 // Literaler is a marker interface for the three variants of Literal.
@@ -449,10 +449,10 @@ func (l Literal) Text() *TextLit { t, _ := l.Lit.(*TextLit); return t }
 func (l Literal) Reference() *ReferenceLit { r, _ := l.Lit.(*ReferenceLit); return r }
 
 // Constant represents a CONSTANT declaration that binds a name to a
-// compile-time literal value.
+// compile-time expression value.
 type Constant struct {
 	Name string
-	Literal
+	Expr Expression
 }
 
 // Expresser is a marker interface for the four variants of Expression.

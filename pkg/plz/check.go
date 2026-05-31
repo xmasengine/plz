@@ -82,6 +82,144 @@ func (c *Checker) Errorf(pos string, form string, args ...any) error {
 	return fmt.Errorf("check: %s: %s", pos, fmt.Sprintf(form, args...))
 }
 
+// EvalConstExpr evaluates an Expression to an integer at compile time.
+// It resolves references to previously defined constants, evaluates all
+// standard arithmetic, bitwise, comparison, shift, and logical operators,
+// and rejects non-constant sub-expressions (variables, CALL, INPUT, etc.).
+func (c *Checker) EvalConstExpr(e Expression) (int, error) {
+	switch {
+	case e.Operand() != nil:
+		op := e.Operand()
+		switch {
+		case op.Literal() != nil:
+			lit := op.Literal()
+			if n := lit.Number(); n != nil {
+				return n.Value, nil
+			}
+			if r := lit.Reference(); r != nil {
+				id := r.Value.Identifier
+				if lit2, ok := c.Constants[id]; ok {
+					if n := lit2.Number(); n != nil {
+						return n.Value, nil
+					}
+					return 0, fmt.Errorf("constant %q is not a number", id)
+				}
+				return 0, fmt.Errorf("undefined constant %q", id)
+			}
+			return 0, fmt.Errorf("text literal cannot be used in a numeric constant expression")
+		case op.Expr() != nil:
+			return c.EvalConstExpr(*op.Expr())
+		case op.Reference() != nil:
+			ref := op.Reference()
+			if len(ref.Subscripts) > 0 || len(ref.Fields) > 0 {
+				return 0, fmt.Errorf("cannot evaluate reference %q as constant expression", ref.Identifier)
+			}
+			if lit, ok := c.Constants[ref.Identifier]; ok {
+				if n := lit.Number(); n != nil {
+					return n.Value, nil
+				}
+				return 0, fmt.Errorf("constant %q is not a number", ref.Identifier)
+			}
+			return 0, fmt.Errorf("undefined identifier %q in constant expression", ref.Identifier)
+		default:
+			return 0, fmt.Errorf("CALL and INPUT cannot be used in constant expressions")
+		}
+
+	case e.Prefix() != nil:
+		p := e.Prefix()
+		v, err := c.EvalConstExpr(Expression{Expr: &p.Operand})
+		if err != nil {
+			return 0, err
+		}
+		switch p.Operator {
+		case OperatorNEG:
+			return -v, nil
+		case OperatorNOT:
+			if v == 0 {
+				return 1, nil
+			}
+			return 0, nil
+		default:
+			return 0, fmt.Errorf("unknown prefix operator in constant expression")
+		}
+
+	case e.Infix() != nil:
+		i := e.Infix()
+		l, err := c.EvalConstExpr(Expression{Expr: &i.Operands[0]})
+		if err != nil {
+			return 0, err
+		}
+		r, err := c.EvalConstExpr(Expression{Expr: &i.Operands[1]})
+		if err != nil {
+			return 0, err
+		}
+		switch i.Operator {
+		case OperatorADD:
+			return l + r, nil
+		case OperatorSUB:
+			return l - r, nil
+		case OperatorMUL:
+			return l * r, nil
+		case OperatorDIV:
+			if r == 0 {
+				return 0, fmt.Errorf("division by zero")
+			}
+			return l / r, nil
+		case OperatorMOD:
+			if r == 0 {
+				return 0, fmt.Errorf("modulo by zero")
+			}
+			return l % r, nil
+		case OperatorAND:
+			return l & r, nil
+		case OperatorOR:
+			return l | r, nil
+		case OperatorXOR:
+			return l ^ r, nil
+		case OperatorShiftLeft:
+			return l << uint(r), nil
+		case OperatorShiftRight:
+			return l >> uint(r), nil
+		case OperatorEQU:
+			if l == r {
+				return 1, nil
+			}
+			return 0, nil
+		case OperatorNEQ:
+			if l != r {
+				return 1, nil
+			}
+			return 0, nil
+		case OperatorLT:
+			if l < r {
+				return 1, nil
+			}
+			return 0, nil
+		case OperatorGT:
+			if l > r {
+				return 1, nil
+			}
+			return 0, nil
+		case OperatorLTE:
+			if l <= r {
+				return 1, nil
+			}
+			return 0, nil
+		case OperatorGTE:
+			if l >= r {
+				return 1, nil
+			}
+			return 0, nil
+		default:
+			return 0, fmt.Errorf("unknown operator in constant expression")
+		}
+
+	case e.Suffix() != nil:
+		return 0, fmt.Errorf("suffix operators (index, call, field) cannot be used in constant expressions")
+	}
+	return 0, fmt.Errorf("empty expression")
+}
+
 // Check runs semantic analysis on the program using a two-pass approach.
 //
 // Pass 1 collects procedure and task signatures into the Checker's
@@ -175,10 +313,26 @@ func (s Declare) Check(c *Checker) error {
 	return nil
 }
 
-// Check registers a named constant value in the checker's Constants map so
-// that references to the constant name can be resolved during code generation.
+// Check evaluates the constant expression and registers the result in the
+// checker's Constants map. Numeric values are stored as NumberLit for use
+// by later constant and code generation passes.
 func (s Constant) Check(c *Checker) error {
-	c.Constants[Identifier(s.Name)] = s.Literal
+	if s.Expr.Expr == nil {
+		return nil
+	}
+	if v, err := c.EvalConstExpr(s.Expr); err == nil {
+		c.Constants[Identifier(s.Name)] = Literal{Lit: &NumberLit{Value: v}}
+	} else if op := s.Expr.Operand(); op != nil {
+		if lit := op.Literal(); lit != nil {
+			if t := lit.Text(); t != nil {
+				c.Constants[Identifier(s.Name)] = *lit
+				return nil
+			}
+		}
+		return err
+	} else {
+		return err
+	}
 	return nil
 }
 
