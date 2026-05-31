@@ -400,6 +400,8 @@ func (p Program) Gen(g *Gen) error {
 
 	// Emit loop to stop fallthough.
 	g.Emitln("_plz_all_done:")
+	g.Emitln("\tdi")
+	g.Emitln("\thalt")
 	g.Emitln("\tjp _plz_all_done")
 
 	// Emit procedure bodies after main code (must not be reachable by fall-through).
@@ -679,6 +681,23 @@ func (p Prefix) Gen(g *Gen) error {
 	return nil
 }
 
+// constShift returns the constant shift amount if the operand is a numeric
+// literal (possibly wrapped in Expression/Operand chains as produced by the
+// parser), or -1 if it is not a compile-time constant.
+func constShift(op Operand) int {
+	if lit := op.Literal(); lit != nil {
+		if n := lit.Number(); n != nil {
+			return n.Value
+		}
+	}
+	if expr := op.Expr(); expr != nil {
+		if op2 := expr.Operand(); op2 != nil {
+			return constShift(*op2)
+		}
+	}
+	return -1
+}
+
 // Gen generates assembly for an infix expression. It evaluates the left operand
 // into HL, pushes it, evaluates the right operand into HL, moves it to DE, pops
 // the left operand back into HL, then emits the operation-specific code. Binary
@@ -708,29 +727,42 @@ func (i Infix) Gen(g *Gen) error {
 		g.Emitln("\tsbc hl, de")
 
 	case OperatorShiftLeft:
-		loop := g.nextLabel()
-		end := g.nextLabel()
-		g.Emitln("\tld a, e")
-		g.Emitf("_lbl_%d:\n", loop)
-		g.Emitln("\tor a")
-		g.Emitf("\tjr z, _lbl_%d\n", end)
-		g.Emitln("\tadd hl, hl")
-		g.Emitln("\tdec a")
-		g.Emitf("\tjr _lbl_%d\n", loop)
-		g.Emitf("_lbl_%d:\n", end)
+		if n := constShift(i.Operands[1]); n >= 0 {
+			for j := 0; j < n; j++ {
+				g.Emitln("\tadd hl, hl")
+			}
+		} else {
+			loop := g.nextLabel()
+			end := g.nextLabel()
+			g.Emitln("\tld a, e")
+			g.Emitf("_lbl_%d:\n", loop)
+			g.Emitln("\tor a")
+			g.Emitf("\tjr z, _lbl_%d\n", end)
+			g.Emitln("\tadd hl, hl")
+			g.Emitln("\tdec a")
+			g.Emitf("\tjr _lbl_%d\n", loop)
+			g.Emitf("_lbl_%d:\n", end)
+		}
 
 	case OperatorShiftRight:
-		loop := g.nextLabel()
-		end := g.nextLabel()
-		g.Emitln("\tld a, e")
-		g.Emitf("_lbl_%d:\n", loop)
-		g.Emitln("\tor a")
-		g.Emitf("\tjr z, _lbl_%d\n", end)
-		g.Emitln("\tsrl h")
-		g.Emitln("\trr l")
-		g.Emitln("\tdec a")
-		g.Emitf("\tjr _lbl_%d\n", loop)
-		g.Emitf("_lbl_%d:\n", end)
+		if n := constShift(i.Operands[1]); n >= 0 {
+			for j := 0; j < n; j++ {
+				g.Emitln("\tsrl h")
+				g.Emitln("\trr l")
+			}
+		} else {
+			loop := g.nextLabel()
+			end := g.nextLabel()
+			g.Emitln("\tld a, e")
+			g.Emitf("_lbl_%d:\n", loop)
+			g.Emitln("\tor a")
+			g.Emitf("\tjr z, _lbl_%d\n", end)
+			g.Emitln("\tsrl h")
+			g.Emitln("\trr l")
+			g.Emitln("\tdec a")
+			g.Emitf("\tjr _lbl_%d\n", loop)
+			g.Emitf("_lbl_%d:\n", end)
+		}
 
 	case OperatorAND:
 		g.Emitln("\tld a, h")
@@ -1002,6 +1034,20 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 					}
 					return nil
 				}
+				// Non-trivial argument: compute address instead of value.
+				if expr := args[i].Expr(); expr != nil {
+					if suff := expr.Suffix(); suff != nil {
+						switch suff.Operator {
+						case OperatorINDEX:
+							_, err := g.genIndexAddr(suff.Operands)
+							return err
+						case OperatorFIELD:
+							_, err := g.genFieldAddr(suff.Operands)
+							return err
+						}
+					}
+				}
+				return fmt.Errorf("cannot take address of argument %d", i)
 			}
 		}
 		return args[i].Expr().Gen(g)
@@ -1514,6 +1560,18 @@ func (s Return) Gen(g *Gen) error {
 				g.Emitf("\tld hl, %s\n", g.localSym(ref.Identifier))
 				break
 			}
+			// Non-trivial expression: compute address instead of value.
+			if expr := s.Expressions[0].Suffix(); expr != nil {
+				switch expr.Operator {
+				case OperatorINDEX:
+					_, err := g.genIndexAddr(expr.Operands)
+					return err
+				case OperatorFIELD:
+					_, err := g.genFieldAddr(expr.Operands)
+					return err
+				}
+			}
+			return fmt.Errorf("cannot take address of return expression")
 		}
 		if err := s.Expressions[0].Gen(g); err != nil {
 			return err
@@ -1565,6 +1623,18 @@ func (s Call) Gen(g *Gen) error {
 					}
 					return nil
 				}
+				// Non-trivial argument: compute address instead of value.
+				if suff, ok := args[i].Expr.(*Suffix); ok {
+					switch suff.Operator {
+					case OperatorINDEX:
+						_, err := g.genIndexAddr(suff.Operands)
+						return err
+					case OperatorFIELD:
+						_, err := g.genFieldAddr(suff.Operands)
+						return err
+					}
+				}
+				return fmt.Errorf("cannot take address of argument %d", i)
 			}
 		}
 		return args[i].Gen(g)
