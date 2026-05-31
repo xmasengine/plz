@@ -117,8 +117,11 @@ func TestGenLetMod(t *testing.T) {
 
 func TestGenLetComparison(t *testing.T) {
 	asm := genTest(t, "DECLARE a WORD\nDECLARE b WORD\nLET x = a > b")
-	if !strings.Contains(asm, "call _plz_gt") {
-		t.Error("expected call _plz_gt")
+	if !strings.Contains(asm, "sbc hl, de") {
+		t.Error("expected sbc hl, de for comparison")
+	}
+	if !strings.Contains(asm, "ld hl, 1") {
+		t.Error("expected ld hl, 1 for true result")
 	}
 }
 

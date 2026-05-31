@@ -529,17 +529,73 @@ func (l Label) Gen(g *Gen) error {
 	return nil
 }
 
+// genCondBranch evaluates an expression and emits a conditional jump to
+// falseLabel when the expression is false (zero). For comparison infix
+// expressions (==, !=, <, >, <=, >=) it emits optimized inline code that
+// uses the Z80 flags directly instead of calling a runtime helper and then
+// testing HL for zero.
+func (g *Gen) genCondBranch(e Expression, falseLabel string) error {
+	inf := e.Infix()
+	if inf != nil {
+		switch inf.Operator {
+		case OperatorEQU, OperatorNEQ, OperatorGT, OperatorLT, OperatorGTE, OperatorLTE:
+			if err := inf.Operands[0].Gen(g); err != nil {
+				return err
+			}
+			useDE := isSimpleOperand(inf.Operands[1])
+			if useDE {
+				g.Emitln("\tex de, hl")
+			} else {
+				g.Emitln("\tpush hl")
+			}
+			if err := inf.Operands[1].Gen(g); err != nil {
+				return err
+			}
+			g.Emitln("\tex de, hl")
+			if !useDE {
+				g.Emitln("\tpop hl")
+			}
+			g.Emitln("\tor a")
+			g.Emitln("\tsbc hl, de")
+
+			switch inf.Operator {
+			case OperatorEQU:
+				g.Emitf("\tjr nz, %s\n", falseLabel)
+			case OperatorNEQ:
+				g.Emitf("\tjr z, %s\n", falseLabel)
+			case OperatorGT:
+				g.Emitf("\tjr c, %s\n", falseLabel)
+				g.Emitf("\tjr z, %s\n", falseLabel)
+			case OperatorLT:
+				g.Emitf("\tjr nc, %s\n", falseLabel)
+			case OperatorGTE:
+				g.Emitf("\tjr c, %s\n", falseLabel)
+			case OperatorLTE:
+				g.Emitf("\tjr z, _lte_%d\n", g.nextLabel())
+				g.Emitf("\tjr nc, %s\n", falseLabel)
+				g.Emitf("_lte_%d:\n", g.nextLabel()-1)
+			}
+			return nil
+		}
+	}
+	if err := e.Gen(g); err != nil {
+		return err
+	}
+	g.Emitln("\tld a, h")
+	g.Emitln("\tor l")
+	g.Emitf("\tjr z, %s\n", falseLabel)
+	return nil
+}
+
 // Gen generates assembly for an IF statement. It evaluates the condition, jumps
 // to the else branch if false, emits the then-body, optionally emits the else-
 // body, then jumps past the else to end.
 func (s If) Gen(g *Gen) error {
-	if err := s.Condition.Gen(g); err != nil {
+	n := g.nextLabel()
+	elseLabel := fmt.Sprintf("_else_%d", n)
+	if err := g.genCondBranch(s.Condition, elseLabel); err != nil {
 		return err
 	}
-	n := g.nextLabel()
-	g.Emitln("\tld a, h")
-	g.Emitln("\tor l")
-	g.Emitf("\tjr z, _else_%d\n", n)
 	if err := s.Then.Gen(g); err != nil {
 		return err
 	}
@@ -842,17 +898,61 @@ func (i Infix) Gen(g *Gen) error {
 		g.Emitln("\tcall _plz_mod")
 
 	case OperatorEQU:
-		g.Emitln("\tcall _plz_eq")
+		n := g.nextLabel()
+		g.Emitln("\tor a")
+		g.Emitln("\tsbc hl, de")
+		g.Emitln("\tld hl, 0")
+		g.Emitf("\tjr nz, _cmp_%d\n", n)
+		g.Emitln("\tinc l")
+		g.Emitf("_cmp_%d:\n", n)
 	case OperatorNEQ:
-		g.Emitln("\tcall _plz_ne")
+		n := g.nextLabel()
+		g.Emitln("\tor a")
+		g.Emitln("\tsbc hl, de")
+		g.Emitln("\tld hl, 0")
+		g.Emitf("\tjr z, _cmp_%d\n", n)
+		g.Emitln("\tinc l")
+		g.Emitf("_cmp_%d:\n", n)
 	case OperatorGT:
-		g.Emitln("\tcall _plz_gt")
+		n := g.nextLabel()
+		g.Emitln("\tor a")
+		g.Emitln("\tsbc hl, de")
+		g.Emitf("\tjr c, _cmp_%d\n", n)
+		g.Emitf("\tjr z, _cmp_%d\n", n)
+		g.Emitln("\tld hl, 1")
+		g.Emitf("\tjr _cmpd_%d\n", n)
+		g.Emitf("_cmp_%d:\n", n)
+		g.Emitln("\tld hl, 0")
+		g.Emitf("_cmpd_%d:\n", n)
 	case OperatorLT:
-		g.Emitln("\tcall _plz_lt")
+		n := g.nextLabel()
+		g.Emitln("\tor a")
+		g.Emitln("\tsbc hl, de")
+		g.Emitf("\tjr nc, _cmp_%d\n", n)
+		g.Emitln("\tld hl, 1")
+		g.Emitf("\tjr _cmpd_%d\n", n)
+		g.Emitf("_cmp_%d:\n", n)
+		g.Emitln("\tld hl, 0")
+		g.Emitf("_cmpd_%d:\n", n)
 	case OperatorGTE:
-		g.Emitln("\tcall _plz_gte")
+		n := g.nextLabel()
+		g.Emitln("\tor a")
+		g.Emitln("\tsbc hl, de")
+		g.Emitf("\tjr c, _cmp_%d\n", n)
+		g.Emitln("\tld hl, 1")
+		g.Emitf("\tjr _cmpd_%d\n", n)
+		g.Emitf("_cmp_%d:\n", n)
+		g.Emitln("\tld hl, 0")
+		g.Emitf("_cmpd_%d:\n", n)
 	case OperatorLTE:
-		g.Emitln("\tcall _plz_lte")
+		n := g.nextLabel()
+		g.Emitln("\tor a")
+		g.Emitln("\tsbc hl, de")
+		g.Emitln("\tld hl, 1")
+		g.Emitf("\tjr z, _cmp_%d\n", n)
+		g.Emitf("\tjr c, _cmp_%d\n", n)
+		g.Emitln("\tdec l")
+		g.Emitf("_cmp_%d:\n", n)
 	}
 
 	return nil
@@ -1379,12 +1479,9 @@ func (s Group) Gen(g *Gen) error {
 	case s.While != nil:
 		n := g.nextLabel()
 		g.Emitf("_while_%d:\n", n)
-		if err := s.While.Expression.Gen(g); err != nil {
+		if err := g.genCondBranch(s.While.Expression, fmt.Sprintf("_end_%d", n)); err != nil {
 			return err
 		}
-		g.Emitln("\tld a, h")
-		g.Emitln("\tor l")
-		g.Emitf("\tjr z, _end_%d\n", n)
 		g.pushScope()
 		defer g.popScope()
 		for _, stmt := range s.Statements {
