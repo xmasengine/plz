@@ -17,6 +17,7 @@ var baseCommandTable = map[string]instrAssembler{
 	"ds":      cmdData(argstring),
 	"const":   commandConst{},
 	"include": commandInclude{},
+	"jmp":     commandJmp{},
 }
 
 type commandAssembler struct {
@@ -529,6 +530,86 @@ func joinCommands(cmdss ...map[string]args) map[string]args {
 		}
 	}
 	return r
+}
+
+type commandJmp struct{}
+
+// jr-to-jp opcode mapping for the same condition code.
+var jmpOpcodes = [...]struct {
+	cond arg
+	jr   byte
+	jp   byte
+}{
+	{ccNZ, 0x20, 0xC2},
+	{ccZ, 0x28, 0xCA},
+	{ccNC, 0x30, 0xD2},
+	{ccC, 0x38, 0xDA},
+}
+
+// W implements the jmp pseudo-instruction. It emits jr+NOP (3 bytes) when the
+// relative offset is in [-128,127] and jp (3 bytes) otherwise. Using jr for
+// nearby jumps produces slightly faster code. The 3-byte encoding is consistent
+// across both assembler passes so label addresses don't shift.
+func (commandJmp) W(asm *Assembler) error {
+	vals, err := asm.parseArgs(false)
+	if err != nil {
+		return err
+	}
+	if len(vals) < 1 || len(vals) > 2 {
+		return asm.scanErrorf("jmp requires a label, or a condition and a label")
+	}
+
+	jrOp := byte(0x18) // unconditional
+	jpOp := byte(0xC3)
+	addrIdx := 0
+
+	if len(vals) == 2 {
+		// Try to match the first argument as a condition code.
+		matched := false
+		for _, oc := range jmpOpcodes {
+			_, ok, _ := vals[0].evalAs(asm, oc.cond, false)
+			if ok {
+				jrOp = oc.jr
+				jpOp = oc.jp
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return asm.scanErrorf("jmp: unknown condition in %v", vals[0])
+		}
+		addrIdx = 1
+	}
+
+	// Evaluate the address (label or expression) as a 16-bit target.
+	argData, ok, err := vals[addrIdx].evalAs(asm, addr16, true)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return asm.scanErrorf("jmp: cannot evaluate address expression")
+	}
+	target := uint16(argData[0]) | uint16(argData[1])<<8
+
+	// We always emit exactly 3 bytes (same on both passes) so label addresses
+	// computed on pass 0 remain valid on pass 1.
+	if asm.pass == 0 {
+		asm.writeByte(jpOp)
+		asm.writeBytes(argData)
+		return nil
+	}
+
+	// Pass 1: check whether a relative jump fits.
+	offset := int(target) - (asm.pc + 2)
+	if offset >= -128 && offset <= 127 {
+		asm.writeByte(jrOp)
+		asm.writeByte(byte(offset))
+		asm.writeByte(0x00) // nop padding → 3 bytes total
+	} else {
+		asm.writeByte(jpOp)
+		asm.writeBytes(argData)
+	}
+	return nil
 }
 
 type commandInclude struct{}

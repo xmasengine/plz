@@ -560,19 +560,19 @@ func (g *Gen) genCondBranch(e Expression, falseLabel string) error {
 
 			switch inf.Operator {
 			case OperatorEQU:
-				g.Emitf("\tjp nz, %s\n", falseLabel)
+				g.Emitf("\tjmp nz, %s\n", falseLabel)
 			case OperatorNEQ:
-				g.Emitf("\tjp z, %s\n", falseLabel)
+				g.Emitf("\tjmp z, %s\n", falseLabel)
 			case OperatorGT:
-				g.Emitf("\tjp c, %s\n", falseLabel)
-				g.Emitf("\tjp z, %s\n", falseLabel)
+				g.Emitf("\tjmp c, %s\n", falseLabel)
+				g.Emitf("\tjmp z, %s\n", falseLabel)
 			case OperatorLT:
-				g.Emitf("\tjp nc, %s\n", falseLabel)
+				g.Emitf("\tjmp nc, %s\n", falseLabel)
 			case OperatorGTE:
-				g.Emitf("\tjp c, %s\n", falseLabel)
+				g.Emitf("\tjmp c, %s\n", falseLabel)
 			case OperatorLTE:
-				g.Emitf("\tjp z, _lte_%d\n", g.nextLabel())
-				g.Emitf("\tjp nc, %s\n", falseLabel)
+				g.Emitf("\tjmp z, _lte_%d\n", g.nextLabel())
+				g.Emitf("\tjmp nc, %s\n", falseLabel)
 				g.Emitf("_lte_%d:\n", g.nextLabel()-1)
 			}
 			return nil
@@ -583,7 +583,7 @@ func (g *Gen) genCondBranch(e Expression, falseLabel string) error {
 	}
 	g.Emitln("\tld a, h")
 	g.Emitln("\tor l")
-	g.Emitf("\tjp z, %s\n", falseLabel)
+	g.Emitf("\tjmp z, %s\n", falseLabel)
 	return nil
 }
 
@@ -600,7 +600,7 @@ func (s If) Gen(g *Gen) error {
 		return err
 	}
 	if s.Else != nil {
-		g.Emitf("\tjp _end_%d\n", n)
+		g.Emitf("\tjmp _end_%d\n", n)
 	}
 	g.Emitf("_else_%d:\n", n)
 	if s.Else != nil {
@@ -1489,7 +1489,7 @@ func (s Group) Gen(g *Gen) error {
 				return err
 			}
 		}
-		g.Emitf("\tjp _while_%d\n", n)
+		g.Emitf("\tjmp _while_%d\n", n)
 		g.Emitf("_end_%d:\n", n)
 
 	case s.For != nil:
@@ -1524,7 +1524,7 @@ func (s Group) Gen(g *Gen) error {
 		g.Emitln("\tex de, hl")                                            // hl = end, de = var
 		g.Emitln("\tor a")
 		g.Emitln("\tsbc hl, de")        // hl = end - var
-		g.Emitf("\tjp c, _end_%d\n", n) // end < var → exit
+		g.Emitf("\tjmp c, _end_%d\n", n) // end < var → exit
 
 		// Body
 		g.pushScope()
@@ -1543,7 +1543,7 @@ func (s Group) Gen(g *Gen) error {
 		g.Emitf("\tld de, (%s)\n", g.localSym(s.For.Reference.Identifier))
 		g.Emitln("\tadd hl, de") // hl = step + var
 		g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
-		g.Emitf("\tjp _for_%d\n", n)
+		g.Emitf("\tjmp _for_%d\n", n)
 		g.Emitf("_end_%d:\n", n)
 		g.Emitln("\tpop hl") // discard end
 		g.Emitln("\tpop hl") // discard step
@@ -1575,7 +1575,7 @@ func (s Group) Gen(g *Gen) error {
 				g.Emitf("\tld de, %d\n", v)
 				g.Emitln("\tor a")
 				g.Emitln("\tsbc hl, de")
-				g.Emitf("\tjp z, %s\n", branchLabel)
+				g.Emitf("\tjmp z, %s\n", branchLabel)
 			}
 		}
 
@@ -1587,7 +1587,7 @@ func (s Group) Gen(g *Gen) error {
 		if s.Case.Default != nil {
 			nomatchLabel = fmt.Sprintf("_case_dflt_%d", n)
 		}
-		g.Emitf("\tjp %s\n", nomatchLabel)
+		g.Emitf("\tjmp %s\n", nomatchLabel)
 
 		// Emit branch bodies (all jump to end).
 		for i, branch := range s.Case.Branches {
@@ -1597,7 +1597,7 @@ func (s Group) Gen(g *Gen) error {
 			if err := branch.Statement.Gen(g); err != nil {
 				return err
 			}
-			g.Emitf("\tjp %s\n", endLabel)
+			g.Emitf("\tjmp %s\n", endLabel)
 		}
 
 		// Emit default body if present, falling through to end.
