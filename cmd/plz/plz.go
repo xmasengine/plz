@@ -11,9 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
-)
 
-import (
+	"github.com/user-none/go-chip-sn76489"
 	plz "github.com/xmasengine/plz/pkg/plz"
 	"github.com/xmasengine/plz/pkg/sms"
 	"github.com/xmasengine/plz/pkg/z80/emu"
@@ -177,7 +176,8 @@ func main() {
 		ExitIfError("run", err)
 
 		v := sms.New(false)
-		err = emu.RunSMSFile(args.Ctx, output.Name(), v)
+		psg := sn76489.New(3579545, 44100, 10000, sn76489.Sega)
+		err = emu.RunSMSFile(args.Ctx, output.Name(), v, emu.WithPSG(psg))
 		ExitIfError("run", err)
 
 	}

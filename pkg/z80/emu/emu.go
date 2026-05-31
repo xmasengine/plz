@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/koron-go/z80"
+	"github.com/user-none/go-chip-sn76489"
 	"github.com/xmasengine/plz/pkg/sms"
 )
 
@@ -44,6 +45,7 @@ func (b *ByteIO) Out(port byte, val byte) {
 type SMSIO struct {
 	ByteIO
 	VDP *sms.VDP
+	PSG *sn76489.SN76489
 }
 
 func (io *SMSIO) In(port byte) byte {
@@ -71,6 +73,11 @@ func (io *SMSIO) Out(port byte, val byte) {
 		} else {
 			io.VDP.WriteControl(val)
 		}
+	case port == 0x7F:
+		if io.PSG != nil {
+			io.PSG.Write(val)
+		}
+		io.ByteIO.Out(port, val)
 	case port >= 0x40 && port < 0x80:
 	default:
 		io.ByteIO.Out(port, val)
@@ -153,7 +160,25 @@ func WithVDP(v *sms.VDP) func(*CPU) {
 	}
 }
 
+func WithPSG(psg *sn76489.SN76489) func(*CPU) {
+	return func(c *CPU) {
+		if smsio, ok := c.IO.(*SMSIO); ok {
+			smsio.PSG = psg
+		}
+	}
+}
+
 func RunSMS(ctx context.Context, cpu *CPU, v *sms.VDP) error {
+	var psg *sn76489.SN76489
+	if smsio, ok := cpu.IO.(*SMSIO); ok {
+		psg = smsio.PSG
+	}
+	tick := func(clocks int) {
+		v.Tick(uint32(clocks))
+		if psg != nil {
+			psg.Run(clocks)
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -175,7 +200,7 @@ func RunSMS(ctx context.Context, cpu *CPU, v *sms.VDP) error {
 				cpu.Step()
 				cpu.HALT = false
 			} else {
-				v.Tick(4)
+				tick(4)
 			}
 			continue
 		}
@@ -186,7 +211,7 @@ func RunSMS(ctx context.Context, cpu *CPU, v *sms.VDP) error {
 		}
 
 		cpu.Step()
-		v.Tick(4)
+		tick(4)
 	}
 }
 
@@ -213,7 +238,7 @@ func RunSMSFile(ctx context.Context, name string, v *sms.VDP, opts ...CPUOption)
 	if err != nil {
 		return err
 	}
-	opts = append(opts, WithBinary(buf...), WithVDP(v))
-	cpu := NewCPU(opts...)
+	allOpts := append([]CPUOption{WithBinary(buf...), WithVDP(v)}, opts...)
+	cpu := NewCPU(allOpts...)
 	return RunSMS(ctx, cpu, v)
 }

@@ -137,7 +137,7 @@ func TestGenIfThen(t *testing.T) {
 	if !strings.Contains(asm, "ld hl, (x)") {
 		t.Error("expected condition load")
 	}
-	if !strings.Contains(asm, "jr z, _else_") {
+	if !strings.Contains(asm, "jp z, _else_") {
 		t.Error("expected conditional jump")
 	}
 	if !strings.Contains(asm, "_else_") {
@@ -153,7 +153,7 @@ func TestGenIfThenElse(t *testing.T) {
 	if !strings.Contains(asm, "ld hl, (x)") {
 		t.Error("expected condition load")
 	}
-	if !strings.Contains(asm, "jr z, _else_") {
+	if !strings.Contains(asm, "jp z, _else_") {
 		t.Error("expected conditional jump")
 	}
 	if !strings.Contains(asm, "_else_") {
@@ -180,10 +180,10 @@ func TestGenGroupWhile(t *testing.T) {
 	if !strings.Contains(asm, "_while_") {
 		t.Error("expected _while_ label")
 	}
-	if !strings.Contains(asm, "jr z, _end_") {
+	if !strings.Contains(asm, "jp z, _end_") {
 		t.Error("expected conditional exit")
 	}
-	if !strings.Contains(asm, "jr _while_") {
+	if !strings.Contains(asm, "jp _while_") {
 		t.Error("expected jump back")
 	}
 	if !strings.Contains(asm, "_end_") {

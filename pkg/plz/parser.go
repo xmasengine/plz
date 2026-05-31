@@ -572,8 +572,9 @@ func (g *Call) Parse(parser *Parser) error {
 //
 //	RETURN [expr [, expr ...]]
 //
-// The return expressions are optional and comma-separated. Parsing stops at
-// EOF, semicolon, or the END keyword.
+	// The return expressions are optional and comma-separated. Parsing stops at
+	// EOF, semicolon, the END keyword, or any token that is not a valid
+	// expression start.
 func (g *Return) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordReturn); err != nil {
 		return err
@@ -584,7 +585,10 @@ func (g *Return) Parse(parser *Parser) error {
 		if tok.TokenKind == TokenEOF || tok.TokenKind == ';' || tok.TokenKind == KeywordEnd {
 			break
 		}
-		// Check if next token looks like the start of an expression.
+		// If the next token looks like the start of an expression, parse it.
+		// Otherwise, the return expression list is complete — e.g. the
+		// statement ended at a newline (invisible to the scanner) and the
+		// next token begins a new statement.
 		switch tok.TokenKind {
 		case TokenInt, TokenString, TokenChar, TokenIdent, KeywordInput, '(', '+', '-', '!':
 			var expr Expression
@@ -593,7 +597,7 @@ func (g *Return) Parse(parser *Parser) error {
 			}
 			g.Expressions = append(g.Expressions, expr)
 		default:
-			return tok.Errorf("Return: unexpected token %v", tok)
+			return nil
 		}
 		if parser.Peek().TokenKind != ',' {
 			break

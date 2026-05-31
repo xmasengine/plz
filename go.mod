@@ -1,5 +1,7 @@
 module github.com/xmasengine/plz
 
-go 1.24.5
+go 1.25.7
 
 require github.com/koron-go/z80 v0.10.2
+
+require github.com/user-none/go-chip-sn76489 v0.0.0-20260309231832-eec93e7fc417 // indirect

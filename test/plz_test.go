@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/user-none/go-chip-sn76489"
 	"github.com/xmasengine/plz/pkg/plz"
 	"github.com/xmasengine/plz/pkg/sms"
 	"github.com/xmasengine/plz/pkg/z80/emu"
@@ -116,7 +117,8 @@ func compileAndRunSMS(t *testing.T, src string) *sms.VDP {
 		t.Fatalf("read bin: %v", err)
 	}
 	v := sms.New(false)
-	cpu := emu.NewCPU(emu.WithBinary(bin...), emu.WithVDP(v))
+	psg := sn76489.New(3579545, 44100, 10000, sn76489.Sega)
+	cpu := emu.NewCPU(emu.WithBinary(bin...), emu.WithVDP(v), emu.WithPSG(psg))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -171,7 +173,8 @@ func compileAndRunSMSFile(t *testing.T, path string) *sms.VDP {
 		t.Fatalf("read bin: %v", err)
 	}
 	v := sms.New(false)
-	cpu := emu.NewCPU(emu.WithBinary(bin...), emu.WithVDP(v))
+	psg := sn76489.New(3579545, 44100, 10000, sn76489.Sega)
+	cpu := emu.NewCPU(emu.WithBinary(bin...), emu.WithVDP(v), emu.WithPSG(psg))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -872,7 +875,6 @@ END
 }
 
 func TestIntegrationMusicDataDriven(t *testing.T) {
-	t.Skip("Big Pickle made a big mistake.")
 	io := compileAndRun(t, `
 PROCEDURE psg_freq(channel BYTE, freq WORD)
   OUTPUT 0x7F 0x80 | (channel << 5) | (freq & 0x0F)
@@ -893,11 +895,7 @@ PROCEDURE play_song(song DATA)
   DECLARE freq WORD
   LET idx = 0
   WHILE 1 DO
-    IF song[idx] == 0 THEN RETURN
-
-    IF song[idx+1] == 0 THEN RETURN
-
-    IF song[idx+2] == 0 THEN RETURN
+    IF song[idx+4] == 0xFF THEN RETURN
 
     LET freq = song[idx] | (song[idx+1] << 8)
     CALL psg_freq(song[idx+3], freq)
@@ -908,7 +906,7 @@ PROCEDURE play_song(song DATA)
   END
 END
 
-my_song: DATA 0x00, 0x01, 1, 0, 8, 0x00, 0x02, 1, 0, 8, 0, 0, 0, 0, 0
+my_song: DATA 0x80, 0x00, 1, 0, 8, 0x40, 0x01, 1, 0, 8, 0, 0, 0, 0, 0xFF
 
 TASK music_test PRIORITY 4
   CALL psg_silence()
