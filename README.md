@@ -176,12 +176,87 @@ PL/Z source → Scanner (tokens) → Parser (AST)
 
 ## Task System
 
-Up to 16 cooperative tasks with static priority. Task Control Blocks at
-`_plz_tcbs` (8 bytes each: SP, state, sleep counter, priority).
+Up to 16 cooperative tasks with static priority, declared with
+`TASK name PRIORITY n stmts END` where lower numbers = higher priority.
 
-States: READY (0), SUSPENDED (1), SLEEPING (2), DEAD (3)
+### Architecture
 
-Primitives: `SLEEP n`, `YIELD`, `SUSPEND name`, `RESUME name`
+At boot the scheduler initialises the TCBs, pushes each task's entry
+address onto its dedicated 128-byte stack, then RETs into task 0.
+
+Each TCB is 8 bytes:
+
+| Offset | Size | Field       | Description                                  |
+|--------|------|-------------|----------------------------------------------|
+| 0      | 2    | SP          | Saved stack pointer when task not running    |
+| 2      | 1    | State       | 0=READY, 1=SUSPENDED, 2=SLEEPING, 3=DEAD    |
+| 3      | 1    | Sleep cnt   | Remaining ticks before wake-up               |
+| 4      | 1    | Priority    | 0=highest, 15=lowest                         |
+| 5      | 3    | (reserved)  |                                              |
+
+The scheduler (`_plz_scheduler`) runs when a task calls SLEEP, YIELD,
+HALT, or the main loop calls it from an interrupt:
+
+1. Save current task's SP into its TCB.
+2. Decrement all sleeping tasks' sleep counters; when one reaches 0,
+   set its state to READY.
+3. Round-robin scan starting from the next slot for the first READY
+   task with the highest priority.
+4. If found, restore its SP and RET into it.
+5. If none, HALT (CPU sleeps until an interrupt re-enters the scheduler).
+
+### States
+
+- **READY (0)** — Task is eligible to run.
+- **SUSPENDED (1)** — Task is paused by another task via `SUSPEND name`.
+  Only `RESUME name` can transition it back to READY.
+- **SLEEPING (2)** — Task voluntarily slept via `SLEEP expr`. The
+  scheduler decrements the sleep counter each time it runs; SLEEP N
+  requires N scheduler invocations to wake up.
+- **DEAD (3)** — Task has returned from its body or hit `HALT`.
+  Dead task slots are skipped by the scheduler.
+
+### Timing
+
+SLEEP advances the counter only when the scheduler runs, which happens
+on three events:
+
+| Event | Real-time? | Mechanism |
+|-------|-----------|-----------|
+| **Interrupt** (VBlank) | Yes — 60/50 Hz | `INTERRUPT PROCEDURE tick() CALL _plz_scheduler END` + `ENABLE` + VDP VBlank config |
+| **Timer task** | No — CPU speed | A low-priority YIELD-spinning task: `TASK t PRIORITY 1 WHILE 1 DO YIELD END END` |
+| **Busy-wait** | Approx | A `WHILE i < n DO i = i + 1 END` loop — no scheduler needed, works in basic emulator |
+
+Without at least one of these mechanisms, SLEEP with a single task
+will HALT permanently (the sleeping task never wakes).
+
+### Example: interrupt-driven SLEEP
+
+```plz
+// VBlank handler (placed at 0x0038 by the INTERRUPT keyword)
+INTERRUPT PROCEDURE tick()
+  CALL _plz_scheduler
+END
+
+// In the main body:
+ENABLE                             // EI
+OUTPUT 0xBF 0xE0                  // VDP reg 1: display + VBlank enable
+OUTPUT 0xBF 0x81                  // select reg 1
+
+// Now SLEEP times are real-time:
+SLEEP 60                          // ~1 second on NTSC (60 Hz)
+```
+
+### Generated symbols
+
+| Symbol | Purpose |
+|--------|---------|
+| `_plz_tcbs` | TCB array (128 bytes = 16 tasks × 8) |
+| `_plz_current_task` | Currently running task index (0-15) |
+| `_plz_scheduler` | Scheduler entry point |
+| `_plz_task_done` | Task exit handler (marks task DEAD, re-enters scheduler) |
+| `_plz_task_N_stack` | 128-byte dedicated stack for task N |
+| `_plz_task_N` | Entry label for task N's body |
 
 ## Credits
 

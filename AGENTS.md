@@ -45,7 +45,7 @@ go test ./...               # Run all tests
 - **Checker:** Two-pass — pass 1 collects declarations/signatures, pass 2 validates bodies.
 - **Code Generator:** Translates AST to Z80 assembly text. Generates runtime helpers for mul/div/mod/comparison, procedure frames, and task scheduler.
 - **Memory Model:** Code at 0x0000, stack at 0xDFF0, heap/data at 0xC000. Procedures use static frame allocation or stack-based (REENTRANT). HL = first return/param, DE = second param.
-- **Task System:** Up to 16 cooperative tasks with static priority. TCB at `_plz_tcbs`. Primitives: SLEEP, YIELD, SUSPEND, RESUME.
+- **Task System:** Up to 16 cooperative tasks with static priority. TCB at `_plz_tcbs` (8 bytes each: SP, state, sleep counter, priority). Primitives: SLEEP, YIELD, SUSPEND, RESUME.
 
 ## Conventions
 
@@ -61,6 +61,46 @@ go test ./...               # Run all tests
 ## Important Instructions
 
 - The assembler uses many singe letter identifiers as register names, including i and r.
+- The assembler provides a `jmp` pseudo-instruction that emits `jr`+`nop` (3 bytes) when the relative offset is within ±127 bytes, and `jp` (3 bytes) otherwise. Use `jmp` instead of `jp` for control flow jumps (IF/WHILE/FOR/CASE) so the assembler picks `jr` for small bodies and `jp` when the range overflows.
+
+## Task System Details
+
+### Architecture
+
+At boot the scheduler initialises the TCBs, pushes each task's entry
+address onto its dedicated 128-byte stack, then RETs into task 0.
+
+Each TCB is 8 bytes:
+
+| Offset | Size | Field       | Description                                  |
+|--------|------|-------------|----------------------------------------------|
+| 0      | 2    | SP          | Saved stack pointer when task not running    |
+| 2      | 1    | State       | 0=READY, 1=SUSPENDED, 2=SLEEPING, 3=DEAD    |
+| 3      | 1    | Sleep cnt   | Remaining ticks before wake-up               |
+| 4      | 1    | Priority    | 0=highest, 15=lowest                         |
+| 5      | 3    | (reserved)  |                                              |
+
+The scheduler (`_plz_scheduler`) runs when a task calls SLEEP, YIELD,
+HALT, or an interrupt re-enters it:
+
+1. Save current task's SP into its TCB.
+2. Decrement all sleeping tasks' sleep counters; when one reaches 0,
+   set its state to READY.
+3. Round-robin scan starting from the next slot for the first READY
+   task with the highest priority.
+4. If found, restore its SP and RET into it.
+5. If none, HALT (CPU sleeps until an interrupt re-enters the scheduler).
+
+### Timing
+
+SLEEP advances the counter only when the scheduler runs, which happens
+on three events:
+
+| Event | Real-time? | Mechanism |
+|-------|-----------|-----------|
+| **Interrupt** (VBlank) | Yes — 60/50 Hz | `INTERRUPT PROCEDURE tick() CALL _plz_scheduler END` + `ENABLE` + VDP config |
+| **Timer task** | No — CPU speed | A low-priority YIELD-spinning task: `TASK t PRIORITY 1 WHILE 1 DO YIELD END END` |
+| **Busy-wait** | Approx | A `WHILE i < n DO i = i + 1 END` loop — no scheduler needed |
 
 ## Language Features
 
