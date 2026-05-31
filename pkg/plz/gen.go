@@ -698,17 +698,61 @@ func constShift(op Operand) int {
 	return -1
 }
 
+// isSimpleOperand checks if evaluating the operand does not clobber DE.
+// Simple operands are: literals, variable references, parenthesized simple
+// expressions, and INPUT with a simple port expression.
+func isSimpleOperand(op Operand) bool {
+	switch {
+	case op.Literal() != nil:
+		return true
+	case op.Reference() != nil:
+		return true
+	case op.Expr() != nil:
+		return isSimpleExpr(*op.Expr())
+	case op.Input() != nil:
+		return isSimpleExpr(op.Input().Port)
+	}
+	return false
+}
+
+// isSimpleExpr checks if evaluating the expression does not clobber DE.
+// Simple expressions are: simple operands and NOT-of-simple-operand.
+// Infix, suffix, and NEG expressions may clobber DE and are not simple.
+func isSimpleExpr(e Expression) bool {
+	switch {
+	case e.Operand() != nil:
+		return isSimpleOperand(*e.Operand())
+	case e.Prefix() != nil:
+		p := e.Prefix()
+		switch p.Operator {
+		case OperatorNOT:
+			return isSimpleOperand(p.Operand)
+		case OperatorNEG:
+			return false
+		}
+	}
+	return false
+}
+
 // Gen generates assembly for an infix expression. It evaluates the left operand
-// into HL, pushes it, evaluates the right operand into HL, moves it to DE, pops
-// the left operand back into HL, then emits the operation-specific code. Binary
-// arithmetic, shifts, bitwise operations, comparisons, and multiplication/division/
-// modulus all delegate to inline code or runtime calls.
+// into HL, saves it, evaluates the right operand into HL, moves it to DE, then
+// restores the left operand into HL and emits the operation-specific code.
+//
+// When the right operand is simple (literal, variable, etc.) the left operand
+// is saved in DE via ex de,hl, avoiding a push/pop pair. When the right operand
+// is complex (infix, suffix, NEG) the left operand is saved on the stack.
 func (i Infix) Gen(g *Gen) error {
 	// Left operand
 	if err := i.Operands[0].Gen(g); err != nil {
 		return err
 	}
-	g.Emitln("\tpush hl")
+
+	useDE := isSimpleOperand(i.Operands[1])
+	if useDE {
+		g.Emitln("\tex de, hl")
+	} else {
+		g.Emitln("\tpush hl")
+	}
 
 	// Right operand
 	if err := i.Operands[1].Gen(g); err != nil {
@@ -716,7 +760,9 @@ func (i Infix) Gen(g *Gen) error {
 	}
 
 	g.Emitln("\tex de, hl")
-	g.Emitln("\tpop hl")
+	if !useDE {
+		g.Emitln("\tpop hl")
+	}
 
 	switch i.Operator {
 	case OperatorADD:
