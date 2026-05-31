@@ -373,6 +373,13 @@ func (i Input) operand() Operander { return i }
 type Data struct {
 	Name   string
 	Values []Expression
+	Tile   *Tile // Optional graphical data
+}
+
+// Tile represents a DATA directive that embeds a SMS 8x8 Tile in a
+// more convenient format, for example from a string.
+type Tile struct {
+	Tiles []*SMSTile
 }
 
 // At represents an AT directive that sets the absolute memory address

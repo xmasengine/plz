@@ -340,6 +340,9 @@ func (s Constant) Check(c *Checker) error {
 // that references to the data name can be resolved during code generation.
 func (d Data) Check(c *Checker) error {
 	c.Datas[Identifier(d.Name)] = d
+	if (d.Tile == nil) && len(d.Values) < 1 {
+		return c.Errorf("", "%s: DATA statement has no values and no TILEs", d.Name)
+	}
 	return nil
 }
 

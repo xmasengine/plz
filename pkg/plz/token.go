@@ -19,14 +19,14 @@ type TokenKind rune
 
 // Token kinds for special and literal tokens.
 const (
-	TokenEOF        TokenKind = -(iota + 1) // End of input.
-	TokenIdent                               // An identifier.
-	TokenInt                                 // An integer literal.
-	TokenFloat                               // A floating-point literal (matching Scanner token kinds).
-	TokenChar                                // A character literal.
-	TokenString                              // A string literal.
-	TokenRawString                           // A raw string literal (matching Scanner token kinds).
-	TokenComment                             // A comment (retained when SkipComments is disabled).
+	TokenEOF       TokenKind = -(iota + 1) // End of input.
+	TokenIdent                             // An identifier.
+	TokenInt                               // An integer literal.
+	TokenFloat                             // A floating-point literal (matching Scanner token kinds).
+	TokenChar                              // A character literal.
+	TokenString                            // A string literal.
+	TokenRawString                         // A raw string literal (matching Scanner token kinds).
+	TokenComment                           // A comment (retained when SkipComments is disabled).
 )
 
 // keywordBase is the offset for keyword TokenKind values, chosen to avoid
@@ -37,93 +37,95 @@ const keywordBase TokenKind = -200
 // Keyword token kinds. Each constant represents a reserved word in the PL/Z language.
 const (
 	KeywordArray     TokenKind = keywordBase - (iota + 1) // ARRAY
-	KeywordByte                                            // BYTE
-	KeywordCall                               // CALL
-	KeywordConstant                           // CONSTANT
-	KeywordData                               // DATA
-	KeywordDeclare                            // DECLARE
-	KeywordDisable                            // DISABLE
-	KeywordDo                                 // DO
-	KeywordEnable                             // ENABLE
-	KeywordEnd                                // END
-	KeywordHalt                               // HALT
-	KeywordGoTo                               // GOTO
-	KeywordIf                                 // IF
-	KeywordThen                               // THEN
-	KeywordElse                               // ELSE
-	KeywordInput                              // INPUT
-	KeywordLet                                // LET
-	KeywordReturn                             // RETURN
-	KeywordRecord                             // RECORD
-	KeywordOutput                             // OUTPUT
-	KeywordProc                               // PROCEDURE
-	KeywordReentrant                          // REENTRANT
-	KeywordWord                               // WORD
-	KeywordWhile                              // WHILE
-	KeywordFor                                // FOR
-	KeywordTo                                 // TO
-	KeywordBy                                 // BY
-	KeywordCase                               // CASE
-	KeywordOf                                 // OF
-	KeywordDefine                             // DEFINE
-	KeywordType                               // TYPE
-	KeywordInclude                            // INCLUDE
-	KeywordInterrupt                          // INTERRUPT
-	KeywordNMI                                // NMI
-	KeywordTask                               // TASK
-	KeywordPriority                           // PRIORITY
-	KeywordSuspend                            // SUSPEND
-	KeywordSleep                              // SLEEP
-	KeywordYield                              // YIELD
-	KeywordResume                             // RESUME
-	KeywordAt                                 // AT
-	KeywordDefault                            // DEFAULT
+	KeywordByte                                           // BYTE
+	KeywordCall                                           // CALL
+	KeywordConstant                                       // CONSTANT
+	KeywordData                                           // DATA
+	KeywordDeclare                                        // DECLARE
+	KeywordDisable                                        // DISABLE
+	KeywordDo                                             // DO
+	KeywordEnable                                         // ENABLE
+	KeywordEnd                                            // END
+	KeywordHalt                                           // HALT
+	KeywordGoTo                                           // GOTO
+	KeywordIf                                             // IF
+	KeywordThen                                           // THEN
+	KeywordElse                                           // ELSE
+	KeywordInput                                          // INPUT
+	KeywordLet                                            // LET
+	KeywordReturn                                         // RETURN
+	KeywordRecord                                         // RECORD
+	KeywordOutput                                         // OUTPUT
+	KeywordProc                                           // PROCEDURE
+	KeywordReentrant                                      // REENTRANT
+	KeywordWord                                           // WORD
+	KeywordWhile                                          // WHILE
+	KeywordFor                                            // FOR
+	KeywordTo                                             // TO
+	KeywordBy                                             // BY
+	KeywordCase                                           // CASE
+	KeywordOf                                             // OF
+	KeywordDefine                                         // DEFINE
+	KeywordType                                           // TYPE
+	KeywordInclude                                        // INCLUDE
+	KeywordInterrupt                                      // INTERRUPT
+	KeywordNMI                                            // NMI
+	KeywordTask                                           // TASK
+	KeywordPriority                                       // PRIORITY
+	KeywordSuspend                                        // SUSPEND
+	KeywordSleep                                          // SLEEP
+	KeywordYield                                          // YIELD
+	KeywordResume                                         // RESUME
+	KeywordAt                                             // AT
+	KeywordDefault                                        // DEFAULT
+	KeywordTile                                           // Tile
 )
 
 // Keywords maps keyword strings to their corresponding TokenKind values.
 var Keywords = map[string]TokenKind{
-	"ARRAY":   KeywordArray,
-	"BYTE":    KeywordByte,
-	"CALL":     KeywordCall,
-	"CONSTANT": KeywordConstant,
-	"DATA":     KeywordData,
-	"DECLARE":  KeywordDeclare,
-	"DISABLE":  KeywordDisable,
-	"DO":       KeywordDo,
-	"ENABLE":   KeywordEnable,
-	"GOTO":     KeywordGoTo,
-	"END":      KeywordEnd,
-	"IF":       KeywordIf,
-	"THEN":     KeywordThen,
-	"ELSE":     KeywordElse,
-	"HALT":     KeywordHalt,
-	"INPUT":    KeywordInput,
-	"LET":      KeywordLet,
-	"RETURN":   KeywordReturn,
-	"OUTPUT":     KeywordOutput,
-	"PROCEDURE":  KeywordProc,
-	"REENTRANT":  KeywordReentrant,
-	"RECORD":     KeywordRecord,
-	"WHILE":    KeywordWhile,
-	"FOR":      KeywordFor,
-	"TO":       KeywordTo,
-	"BY":       KeywordBy,
-	"CASE":     KeywordCase,
-	"OF":       KeywordOf,
-	"DEFINE":   KeywordDefine,
-	"TYPE":     KeywordType,
-	"WORD":     KeywordWord,
-	"INCLUDE":  KeywordInclude,
+	"ARRAY":     KeywordArray,
+	"BYTE":      KeywordByte,
+	"CALL":      KeywordCall,
+	"CONSTANT":  KeywordConstant,
+	"DATA":      KeywordData,
+	"DECLARE":   KeywordDeclare,
+	"DISABLE":   KeywordDisable,
+	"DO":        KeywordDo,
+	"ENABLE":    KeywordEnable,
+	"GOTO":      KeywordGoTo,
+	"END":       KeywordEnd,
+	"IF":        KeywordIf,
+	"THEN":      KeywordThen,
+	"ELSE":      KeywordElse,
+	"HALT":      KeywordHalt,
+	"INPUT":     KeywordInput,
+	"LET":       KeywordLet,
+	"RETURN":    KeywordReturn,
+	"OUTPUT":    KeywordOutput,
+	"PROCEDURE": KeywordProc,
+	"REENTRANT": KeywordReentrant,
+	"RECORD":    KeywordRecord,
+	"WHILE":     KeywordWhile,
+	"FOR":       KeywordFor,
+	"TO":        KeywordTo,
+	"BY":        KeywordBy,
+	"CASE":      KeywordCase,
+	"OF":        KeywordOf,
+	"DEFINE":    KeywordDefine,
+	"TYPE":      KeywordType,
+	"WORD":      KeywordWord,
+	"INCLUDE":   KeywordInclude,
 	"INTERRUPT": KeywordInterrupt,
-	"NMI":     KeywordNMI,
-	"TASK":    KeywordTask,
-	"PRIORITY": KeywordPriority,
-	"SUSPEND": KeywordSuspend,
-	"SLEEP":   KeywordSleep,
-	"YIELD":   KeywordYield,
-	"RESUME":  KeywordResume,
-	"AT":      KeywordAt,
-	"DEFAULT": KeywordDefault,
+	"NMI":       KeywordNMI,
+	"TASK":      KeywordTask,
+	"PRIORITY":  KeywordPriority,
+	"SUSPEND":   KeywordSuspend,
+	"SLEEP":     KeywordSleep,
+	"YIELD":     KeywordYield,
+	"RESUME":    KeywordResume,
+	"AT":        KeywordAt,
+	"DEFAULT":   KeywordDefault,
+	"TILE":      KeywordTile,
 }
 
 // String returns the human-readable name for a TokenKind.

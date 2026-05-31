@@ -6,6 +6,13 @@ import (
 	"strconv"
 )
 
+import (
+	"github.com/mrcook/smstilemap/sms"
+)
+
+type SMSTile = sms.Tile
+type SMSPaletteID = sms.PaletteId
+
 // HeapBase is the base address of the heap/RAM region at 0xC000.
 const HeapBase = 0xC000 // RAM memory.
 
@@ -187,9 +194,14 @@ main:
     ld sp, 0xdff0 // Set up stack pointer at end of RAM.
 `
 
-// ProgramFooter is the assembly epilogue that switches to the RAM region at 0xC000.
+// ProgramFooter is the assembly epilogue that stops the program from
+// running into the data section.
 const ProgramFooter = `
-org 0xC000 // RAM memory.
+_plz_all_done:
+	di
+	halt
+	jp _plz_all_done
+
 `
 
 // RuntimeHeader is the assembly block containing PL/Z runtime helper routines
@@ -398,11 +410,8 @@ func (p Program) Gen(g *Gen) error {
 		}
 	}
 
-	// Emit loop to stop fallthough.
-	g.Emitln("_plz_all_done:")
-	g.Emitln("\tdi")
-	g.Emitln("\thalt")
-	g.Emitln("\tjp _plz_all_done")
+	// Emit program footer to stop fallthough.
+	g.Emitln(ProgramFooter)
 
 	// Emit procedure bodies after main code (must not be reachable by fall-through).
 	for _, proc := range procedures {
@@ -1523,7 +1532,7 @@ func (s Group) Gen(g *Gen) error {
 		g.Emitf("\tld hl, (%s)\n", g.localSym(s.For.Reference.Identifier)) // hl = var
 		g.Emitln("\tex de, hl")                                            // hl = end, de = var
 		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")        // hl = end - var
+		g.Emitln("\tsbc hl, de")         // hl = end - var
 		g.Emitf("\tjmp c, _end_%d\n", n) // end < var → exit
 
 		// Body
@@ -2028,6 +2037,10 @@ func (g *Gen) emitStorage(format string, size int, args ...any) {
 // numeric expressions and DS directives for text literals.
 func (s Data) Gen(g *Gen) error {
 	g.Emitf("%s:\n", s.Name)
+	if s.Tile != nil {
+		return s.Tile.Gen(g)
+	}
+
 	for _, val := range s.Values {
 		if v, err := g.Checker.EvalConstExpr(val); err == nil {
 			g.Emitf("\tdb %d\n", v)
@@ -2043,6 +2056,22 @@ func (s Data) Gen(g *Gen) error {
 			return fmt.Errorf("data: cannot evaluate expression")
 		}
 	}
+	return nil
+}
+
+// Gen generates data for the Tile,
+func (b Tile) Gen(g *Gen) error {
+	if len(b.Tiles) < 1 {
+		return fmt.Errorf("No tiles to generate")
+	}
+	for ti, tile := range b.Tiles {
+		g.Emitf("\t// Tile %d ", ti)
+		buf := tile.Bytes()
+		for _, b := range buf {
+			g.Emitf("\n\tdb %d", b)
+		}
+	}
+	g.Emitln()
 	return nil
 }
 

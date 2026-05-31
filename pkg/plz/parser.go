@@ -412,13 +412,18 @@ func (g *Constant) Parse(parser *Parser) error {
 	return nil
 }
 
-// Parse parses a DATA statement. The syntax is:
+// Parse parses a DATA statement. The syntax is either:
 //
-//	name: DATA expr [, expr ...]
+//		name: DATA expr [, expr ...]
+//
+//	 or:
+//		name: DATA Tile [width [height]] `string`
 //
 // Each expr may be a number, a string, a constant reference, or
 // a constant expression. Strings are emitted as DS directives;
 // numeric values are emitted as DB directives.
+//
+// For the Tile variants see the Tile.Parse()
 func (g *Data) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordData)
 	if err != nil {
@@ -433,6 +438,10 @@ func (g *Data) Parse(parser *Parser) error {
 				return err
 			}
 			g.Values = append(g.Values, expr)
+		case TokenKind(KeywordTile):
+			bmp := &Tile{}
+			g.Tile = bmp
+			return g.Tile.Parse(parser)
 		default:
 			if len(g.Values) == 0 {
 				return tok.Errorf("DATA: expected expression")
@@ -443,6 +452,65 @@ func (g *Data) Parse(parser *Parser) error {
 			break
 		}
 		parser.Next() // consume ','
+	}
+	return nil
+}
+
+func SMSTileFromString(s string) (SMSTile, error) {
+	res := SMSTile{}
+	const tileWidth = 8
+	const tileHeight = 8
+	var x, y int
+	var col byte
+	for _, r := range s {
+		switch r {
+		case '\n':
+			y++
+			if y >= tileHeight {
+				// Ignore extra characters, stop if we have all pixels.
+				return res, nil
+			}
+		case ' ': // ignore
+		case '.':
+			col = 0
+		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			col = byte(r - '0')
+
+		case 'A', 'B', 'C', 'D', 'E', 'F':
+			col = byte(r - 'A' + 10)
+
+		case 'X':
+			col = 15
+
+		default:
+			return res, fmt.Errorf("Unknown character in Tile, expected .X0123456789ABCDEF")
+		}
+		res.SetPaletteIdAt(x, y, SMSPaletteID(col))
+		x++
+		if x >= tileWidth {
+			x = 0
+			y++
+			if y >= tileHeight { // Ignore extra characters, stop if we have all pixels.
+				return res, nil
+			}
+		}
+	}
+	return res, nil
+}
+
+func (b *Tile) Parse(parser *Parser) error {
+	for tok := parser.Peek(); tok.TokenKind == KeywordTile; tok = parser.Peek() {
+		parser.Skip(KeywordTile)
+
+		str, err := parser.Accept(TokenString)
+		if err != nil {
+			return err
+		}
+		tile, err := SMSTileFromString(str.Text)
+		if err != nil {
+			return err
+		}
+		b.Tiles = append(b.Tiles, &tile)
 	}
 	return nil
 }
@@ -582,9 +650,9 @@ func (g *Call) Parse(parser *Parser) error {
 //
 //	RETURN [expr [, expr ...]]
 //
-	// The return expressions are optional and comma-separated. Parsing stops at
-	// EOF, semicolon, the END keyword, or any token that is not a valid
-	// expression start.
+// The return expressions are optional and comma-separated. Parsing stops at
+// EOF, semicolon, the END keyword, or any token that is not a valid
+// expression start.
 func (g *Return) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordReturn); err != nil {
 		return err
