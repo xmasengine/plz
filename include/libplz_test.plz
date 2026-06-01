@@ -35,6 +35,8 @@ font2: DATA TILE
  ........
 `
 
+church_tiles: DATA TILE LOAD "./include/libplz_test.png"
+
 start:
   DISABLE
 
