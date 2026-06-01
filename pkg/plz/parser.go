@@ -285,15 +285,9 @@ func (s *Statement) Parse(parser *Parser) error {
 		err = cmd.Parse(parser)
 		s.Command = cmd
 	case KeywordInterrupt, KeywordNMI:
-		if parser.Have(KeywordInterrupt, KeywordProc) || parser.Have(KeywordNMI, KeywordProc) {
-			cmd := Procedure{}
-			err = cmd.Parse(parser)
-			s.Command = cmd
-		} else {
-			cmd := InterruptStmt{}
-			err = cmd.Parse(parser)
-			s.Command = cmd
-		}
+		cmd := InterruptStmt{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	case KeywordProc:
 		cmd := Procedure{}
 		err = cmd.Parse(parser)
@@ -320,6 +314,18 @@ func (s *Statement) Parse(parser *Parser) error {
 		s.Command = cmd
 	case KeywordYield:
 		cmd := Yield{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
+	case KeywordBank:
+		cmd := BankStmt{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
+	case KeywordSave:
+		cmd := Save{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
+	case KeywordLoad:
+		cmd := Load{}
 		err = cmd.Parse(parser)
 		s.Command = cmd
 	case KeywordAt:
@@ -382,7 +388,68 @@ func (a *At) Parse(parser *Parser) error {
 	if _, err := parser.Accept(KeywordAt); err != nil {
 		return err
 	}
+	if parser.Skip(KeywordBank) != nil {
+		tok, err := parser.Accept(TokenInt)
+		if err != nil {
+			return err
+		}
+		a.HasBank = true
+		a.BankNumber = tok.Number
+		return nil
+	}
 	return a.Address.Parse(parser)
+}
+
+// Parse parses a BANK statement. The syntax is:
+//
+//	BANK expr
+//
+// The expression must evaluate to a constant bank number.
+func (b *BankStmt) Parse(parser *Parser) error {
+	if _, err := parser.Accept(KeywordBank); err != nil {
+		return err
+	}
+	return b.Number.Parse(parser)
+}
+
+// Parse parses a SAVE statement. The syntax is:
+//
+//	SAVE [AT expr] expr
+//
+// The optional AT specifies the destination address; the expression is
+// a reference to data (variable, array, record, DATA label, or TEXT)
+// whose size is known at compile time.
+func (s *Save) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordSave)
+	if err != nil {
+		return err
+	}
+	if parser.Peek().TokenKind == KeywordAt {
+		parser.Next()
+		s.Location = &Expression{}
+		if err := s.Location.Parse(parser); err != nil {
+			return err
+		}
+	}
+	return s.Source.Parse(parser)
+}
+
+// Parse parses a LOAD statement. The syntax is:
+//
+//	LOAD [AT expr] reference
+func (s *Load) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordLoad)
+	if err != nil {
+		return err
+	}
+	if parser.Peek().TokenKind == KeywordAt {
+		parser.Next()
+		s.Location = &Expression{}
+		if err := s.Location.Parse(parser); err != nil {
+			return err
+		}
+	}
+	return s.Target.Parse(parser)
 }
 
 // Parse parses a CONSTANT declaration. The syntax is:
@@ -417,7 +484,7 @@ func (g *Constant) Parse(parser *Parser) error {
 //		name: DATA expr [, expr ...]
 //
 //	 or:
-//		name: DATA Tile [width [height]] `string`
+//		name: DATA TILE `string`
 //
 // Each expr may be a number, a string, a constant reference, or
 // a constant expression. Strings are emitted as DS directives;
@@ -456,61 +523,50 @@ func (g *Data) Parse(parser *Parser) error {
 	return nil
 }
 
-func SMSTileFromString(s string) (SMSTile, error) {
-	res := SMSTile{}
-	const tileWidth = 8
-	const tileHeight = 8
-	var x, y int
-	var col byte
-	for _, r := range s {
-		switch r {
-		case '\n':
-			y++
-			if y >= tileHeight {
-				// Ignore extra characters, stop if we have all pixels.
-				return res, nil
-			}
-		case ' ': // ignore
-		case '.':
-			col = 0
-		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-			col = byte(r - '0')
+func colorForRune(r rune) (col byte, skip bool, next bool, err error) {
+	switch r {
+	case '\n':
+		return 0, false, true, nil
+	case ' ':
+		return 0, true, true, nil
+	case '.':
+		return 0, false, false, nil
+	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		return byte(r - '0'), false, false, nil
 
-		case 'A', 'B', 'C', 'D', 'E', 'F':
-			col = byte(r - 'A' + 10)
+	case 'A', 'B', 'C', 'D', 'E', 'F':
+		return byte(r - 'A' + 10), false, false, nil
 
-		case 'X':
-			col = 15
+	case 'X':
+		return 15, false, false, nil
 
-		default:
-			return res, fmt.Errorf("Unknown character in Tile, expected .X0123456789ABCDEF")
-		}
-		res.SetPaletteIdAt(x, y, SMSPaletteID(col))
-		x++
-		if x >= tileWidth {
-			x = 0
-			y++
-			if y >= tileHeight { // Ignore extra characters, stop if we have all pixels.
-				return res, nil
-			}
-		}
+	default:
+		return 0, false, false, fmt.Errorf("Unknown character in Tile, expected .X0123456789ABCDEF")
 	}
-	return res, nil
 }
 
 func (b *Tile) Parse(parser *Parser) error {
 	for tok := parser.Peek(); tok.TokenKind == KeywordTile; tok = parser.Peek() {
 		parser.Skip(KeywordTile)
 
-		str, err := parser.Accept(TokenString)
+		str, err := parser.Accept(TokenString, TokenKind(KeywordLoad))
 		if err != nil {
 			return err
 		}
-		tile, err := SMSTileFromString(str.Text)
-		if err != nil {
-			return err
+		if str.TokenKind == TokenKind(KeywordLoad) {
+			fn, err := parser.Accept(TokenString, TokenKind(KeywordLoad))
+			if err != nil {
+				return err
+			}
+			tiles, err := SMSLoadTiles(fn.Text)
+			b.Tiles = append(b.Tiles, tiles...)
+		} else {
+			tile, err := SMSTileFromString(str.Text)
+			if err != nil {
+				return err
+			}
+			b.Tiles = append(b.Tiles, &tile)
 		}
-		b.Tiles = append(b.Tiles, &tile)
 	}
 	return nil
 }
@@ -846,7 +902,19 @@ func (g *Declare) Parse(parser *Parser) error {
 		} else {
 			g.Size = 0 // unbounded
 		}
-		return g.Type.Parse(parser)
+		if err := g.Type.Parse(parser); err != nil {
+			return err
+		}
+		// Optional AT suffix for absolute address.
+		if parser.Skip(KeywordAt) != nil {
+			g.At = &Expression{}
+			return g.At.Parse(parser)
+		}
+		if parser.Skip(TokenKind('=')) != nil {
+			g.Initializer = &Initializer{}
+			return g.Initializer.Expr.Parse(parser)
+		}
+		return nil
 	}
 
 	err = g.Type.Parse(parser)
@@ -1308,12 +1376,6 @@ func (g *Group) Parse(parser *Parser) error {
 // An optional return type (BYTE, WORD, or RECORD) follows the parameter list.
 // If REENTRANT is present, the procedure uses stack-based frame allocation.
 func (p *Procedure) Parse(parser *Parser) error {
-	// Optional INTERRUPT or NMI modifier.
-	if parser.Skip(KeywordInterrupt) != nil {
-		p.Interrupt = &Interrupt{Interrupt: 1}
-	} else if parser.Skip(KeywordNMI) != nil {
-		p.Interrupt = &Interrupt{NMI: true}
-	}
 	if _, err := parser.Accept(KeywordProc); err != nil {
 		return err
 	}
@@ -1357,9 +1419,14 @@ func (p *Procedure) Parse(parser *Parser) error {
 		}
 	}
 
-	// Optional REENTRANT.
+	// Optional modifiers: REENTRANT, INTERRUPT, or NMI.
 	if parser.Skip(KeywordReentrant) != nil {
 		p.Reentrant = true
+	}
+	if parser.Skip(KeywordInterrupt) != nil {
+		p.Interrupt = &Interrupt{Interrupt: 1}
+	} else if parser.Skip(KeywordNMI) != nil {
+		p.Interrupt = &Interrupt{NMI: true}
 	}
 
 	// Parse body statements.

@@ -60,6 +60,9 @@ func (c Resume) Command() Commander        { return c }
 func (c Sleep) Command() Commander         { return c }
 func (c Yield) Command() Commander         { return c }
 func (c At) Command() Commander            { return c }
+func (c BankStmt) Command() Commander      { return c }
+func (c Save) Command() Commander          { return c }
+func (c Load) Command() Commander          { return c }
 
 // Statement is a labeled or unlabeled command within a PL/Z program.
 // Each statement may carry an optional named label and exactly one
@@ -293,6 +296,29 @@ type GoTo struct {
 // Halt represents a HALT statement that stops program execution.
 type Halt struct{}
 
+// BankStmt represents a BANK statement that switches the active ROM
+// bank at runtime. On SMS this writes the bank number to the Sega
+// mapper port (0xFFFD) to switch the slot-1 (0x4000-0x7FFF) bank.
+type BankStmt struct {
+	Number Expression
+}
+
+// Save represents a SAVE statement that copies data to battery-backed RAM.
+// The optional AT location specifies the destination address in SRAM.
+// The source expression must be a reference whose size is known at compile time.
+type Save struct {
+	Location *Expression // optional AT address (nil = use declared AT)
+	Source   Expression  // reference to data to save
+}
+
+// Load represents a LOAD statement that copies data from battery-backed RAM
+// into a variable. The optional AT location specifies the source address in SRAM.
+// The target expression must be a reference whose size is known at compile time.
+type Load struct {
+	Location *Expression // optional AT address in SRAM (nil = use declared AT)
+	Target   Expression  // reference to variable to load into
+}
+
 // Group represents a compound statement constructed from WHILE, CASE,
 // FOR, or a bare DO-block. Exactly one of While, Case, or For may be
 // set; when all are nil the group is a simple DO...END block.
@@ -383,10 +409,12 @@ type Tile struct {
 }
 
 // At represents an AT directive that sets the absolute memory address
-// for subsequent data declarations. The address must be a constant
-// expression.
+// for subsequent data declarations, or switches the active ROM bank
+// when HasBank is true.
 type At struct {
-	Address Expression
+	Address    Expression
+	HasBank    bool
+	BankNumber int
 }
 
 // Declare represents a DECLARE statement that introduces a variable,

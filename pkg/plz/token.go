@@ -77,8 +77,11 @@ const (
 	KeywordYield                                          // YIELD
 	KeywordResume                                         // RESUME
 	KeywordAt                                             // AT
+	KeywordBank                                           // BANK
 	KeywordDefault                                        // DEFAULT
-	KeywordTile                                           // Tile
+	KeywordTile                                           // TILE
+	KeywordSave                                           // SAVE
+	KeywordLoad                                           // LOAD
 )
 
 // Keywords maps keyword strings to their corresponding TokenKind values.
@@ -124,8 +127,11 @@ var Keywords = map[string]TokenKind{
 	"YIELD":     KeywordYield,
 	"RESUME":    KeywordResume,
 	"AT":        KeywordAt,
+	"BANK":      KeywordBank,
 	"DEFAULT":   KeywordDefault,
 	"TILE":      KeywordTile,
+	"LOAD":      KeywordLoad,
+	"SAVE":      KeywordSave,
 }
 
 // String returns the human-readable name for a TokenKind.

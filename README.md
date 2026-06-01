@@ -19,6 +19,8 @@ Although PLZ is inspired by PL/M, it differs in several ways:
 
 - **LET required** for assignments to simplify parsing
 - **CONSTANT, DATA** are head keywords instead of the convoluted `DECLARE` syntax
+- **DATA TILE** embeds SMS 8x8 tile graphics via backtick strings using palette char rendering (`.`=pal0, `0-9`=pal0-9, `A-F`=pal10-15)
+- **BANK/AT BANK** supports ROM bank switching: `BANK expr` switches at runtime (writes to Sega mapper port 0xFFFD), `AT BANK nr` selects the ROM bank for subsequent code/data at compile time
 - **One declaration per statement** (BYTE, WORD) to simplify the parser
 - **Types BYTE and WORD** instead of BYTE and ADDRESS
 - **No semicolons required**, statements end at keywords, `;` is allowed
@@ -44,7 +46,8 @@ command      = let | if | while | for | do | case
              | procedure | call | return | goto | output
              | declare | constant | data | define
              | task | suspend | resume | sleep | yield
-             | enable | disable | halt | at .
+             | enable | disable | halt | at
+             | bank .
 
 label        = identifier , ":" .
 
@@ -77,16 +80,21 @@ return       = "RETURN" [ expression { "," expression } ] .
 
 goto         = "GOTO" identifier .
 
-at           = "AT" literal .
+at           = "AT" ( literal | "BANK" numeric ) .
 
 output       = "OUTPUT" numeric expression .
+
+bank         = "BANK" expression .
 
 declare      = "DECLARE" identifier [ "ARRAY" [ "OF" ] [ "[" numeric "]" ] ] type
                [ "=" literal | "AT" literal ] .
 
 constant     = "CONSTANT" identifier [ "=" ] literal .
 
-data         = "DATA" literal { "," literal } .
+data         = "DATA" ( literal { "," literal }
+                       | "TILE" "`" { character } "`" ) .
+
+at           = "AT" ( literal | "BANK" numeric ) .
 
 define       = "DEFINE" identifier type .
 

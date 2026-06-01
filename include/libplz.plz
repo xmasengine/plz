@@ -2,6 +2,12 @@
 // Provides console hardware access through PLZ procedures.
 
 // ============================================================
+// System constants
+// ============================================================
+
+CONSTANT BBRAM_SIZE = 0x2000 // 8KB battery-backed RAM in standard SMS mapper
+
+// ============================================================
 // VDP (Video Display Processor) routines
 // Ports: 0xBE = data, 0xBF = control/status
 // ============================================================
@@ -97,6 +103,28 @@ PROCEDURE load_palette(pal DATA, count BYTE)
 END
 
 // ============================================================
+// Screen scrolling
+// SMS VDP reg 8 = horizontal scroll offset, reg 9 = vertical scroll offset
+// ============================================================
+
+CONSTANT VDP_REG_1_COLUMN_MASK = 0x20 // bit 5 of VDP reg 1 masks left column
+
+// Set horizontal scroll offset (0-255). Signed 8-bit: values 1-127 scroll
+// left, 129-255 scroll right. Call during VBlank for tear-free scrolling.
+PROCEDURE scroll_x(offset BYTE)
+  CALL write_vdp_reg(8, offset)
+END
+
+// Set vertical scroll offset (0-255). Same signed convention as scroll_x.
+PROCEDURE scroll_y(offset BYTE)
+  CALL write_vdp_reg(9, offset)
+END
+
+// Note: SMS sprites are independent of background scrolling — they remain
+// at their absolute screen coordinates. To make sprites track the background,
+// add the scroll offset to their X/Y positions via move_sprite.
+
+// ============================================================
 // Screen control
 // ============================================================
 
@@ -172,22 +200,132 @@ PROCEDURE load_palette_default()
 END
 
 // ============================================================
+// Sprite handling
+// Sprite attribute table at 0x3F00, 64 entries, 4 bytes each:
+//   Y, X, tile, flags
+// Y >= 0xD0 hides the sprite. Flags: bit0=palette(1=sprite), bit2=X flip, bit3=Y flip
+// ============================================================
+
+// Hide all 64 sprites by setting Y off-screen (0xD0).
+PROCEDURE hide_all_sprites()
+  DECLARE ii BYTE
+  CALL set_write_addr(0x3F00)
+  FOR ii = 0 TO 255 DO
+    OUTPUT 0xBE 0xD0
+  END
+END
+
+// Set full sprite attributes at index (0-63).
+PROCEDURE set_sprite(index BYTE, x BYTE, y BYTE, tile BYTE, flags BYTE)
+  CALL set_write_addr(0x3F00 + index * 4)
+  OUTPUT 0xBE y
+  OUTPUT 0xBE x
+  OUTPUT 0xBE tile
+  OUTPUT 0xBE flags
+END
+
+// Update sprite position only.
+PROCEDURE move_sprite(index BYTE, x BYTE, y BYTE)
+  CALL set_write_addr(0x3F00 + index * 4)
+  OUTPUT 0xBE y
+  OUTPUT 0xBE x
+END
+
+// Hide a single sprite by index.
+PROCEDURE hide_sprite(index BYTE)
+  CALL set_write_addr(0x3F00 + index * 4)
+  OUTPUT 0xBE 0xD0
+END
+
+// Load count sprite patterns into the sprite pattern table.
+// Sprite pattern base is at 0x2000 in SMS mode 4.
+// This is an alias for load_sprites that is more explicit.
+PROCEDURE load_sprite_patterns(idx BYTE, patterns DATA, count BYTE)
+  CALL load_sprites(idx, patterns, count)
+END
+
+// Hide a range of sprites starting at first for count entries.
+// Useful to hide off-screen sprites after scrolling the camera.
+PROCEDURE hide_sprites(first BYTE, count BYTE)
+  DECLARE ii BYTE
+  CALL set_write_addr(0x3F00 + first * 4)
+  FOR ii = first TO first + count - 1 DO
+    OUTPUT 0xBE 0xD0
+    OUTPUT 0xBE 0x00
+    OUTPUT 0xBE 0x00
+    OUTPUT 0xBE 0x00
+  END
+END
+
+// ============================================================
 // Controller input (SMS ports)
 // Port 0x3F: controller select
 // Port 0xDC: joypad port 1, Port 0xDD: joypad port 2
 // ============================================================
 
-// Read joypad 1 state. Returns bitmask of pressed buttons.
-// Bits: 0=Up, 1=Down, 2=Left, 3=Right, 4=B1, 5=B2
+// Button bit positions in the combined read_joy_full result.
+CONSTANT BTN_UP    = 0
+CONSTANT BTN_DOWN  = 1
+CONSTANT BTN_LEFT  = 2
+CONSTANT BTN_RIGHT = 3
+CONSTANT BTN_B1    = 4
+CONSTANT BTN_B2    = 5
+CONSTANT BTN_START = 6
+
+// Read joypad 1 state (directional + B1/B2 only, no Start).
+// Returns bitmask: bit0=Up, bit1=Down, bit2=Left, bit3=Right, bit4=B1, bit5=B2
 PROCEDURE read_joy1() BYTE
   OUTPUT 0x3F 0x40
   RETURN INPUT(0xDC) ^ 0xFF
 END
 
+// Read joypad 2 state (directional + B1/B2 only, no Start).
 PROCEDURE read_joy2() BYTE
   OUTPUT 0x3F 0x40
   RETURN INPUT(0xDD) ^ 0xFF
 END
+
+// Read joypad 1 including Start button.
+// Returns bitmask: bit0=Up, bit1=Down, bit2=Left, bit3=Right, bit4=B1, bit5=B2, bit6=Start
+PROCEDURE read_joy1_full() BYTE
+  DECLARE a BYTE
+  DECLARE b BYTE
+  OUTPUT 0x3F 0x40
+  LET a = INPUT(0xDC) ^ 0xFF
+  OUTPUT 0x3F 0x80
+  LET b = INPUT(0xDC) ^ 0xFF
+  LET b = b & 1
+  LET b = b << 6
+  RETURN a | b
+END
+
+// Read joypad 2 including Start button.
+PROCEDURE read_joy2_full() BYTE
+  DECLARE a BYTE
+  DECLARE b BYTE
+  OUTPUT 0x3F 0x40
+  LET a = INPUT(0xDD) ^ 0xFF
+  OUTPUT 0x3F 0x80
+  LET b = INPUT(0xDD) ^ 0xFF
+  LET b = b & 1
+  LET b = b << 6
+  RETURN a | b
+END
+
+// ============================================================
+// NMI / Pause button
+// SMS pause button triggers NMI at vector 0x0066.
+// Define your handler and install it:
+//
+//   PROCEDURE on_pause() NMI
+//     LET pause_flag = 1
+//   END
+//   NMI on_pause   // install handler
+//
+// The RETN in the handler re-enables interrupts automatically.
+// ============================================================
+
+DECLARE pause_flag BYTE
 
 // ============================================================
 // Timing / Frame sync
@@ -207,7 +345,7 @@ DECLARE vsync_status BYTE
 
 // Install this interrupt handler to be able to use halt_vsync.
 //
-INTERRUPT PROCEDURE int_vsync()
+PROCEDURE int_vsync() INTERRUPT
 	// Acknowledge the VDP interrupt by reading port $BF
 	LET vsync_status = INPUT(0xBF)
 	LET vsync_flag = vsync_flag + 1

@@ -840,3 +840,168 @@ func TestParseNMIProc(t *testing.T) {
 	}
 }
 */
+func TestSMSTileFromString(t *testing.T) {
+	tile, err := SMSTileFromString("........" +
+		"\n...FF..." +
+		"\n..F..F.." +
+		"\n.F....F." +
+		"\n.FFFFFF." +
+		"\n.F....F." +
+		"\n.F....F." +
+		"\n........")
+	if err != nil {
+		t.Fatalf("SMSTileFromString: %v", err)
+	}
+	check := func(x, y int, want byte) {
+		got, _ := tile.PaletteIdAt(x, y)
+		if byte(got) != want {
+			t.Errorf("tile.PaletteIdAt(%d,%d) = %d, want %d", x, y, got, want)
+		}
+	}
+	check(0, 0, 0)
+	check(3, 1, 15)
+	check(4, 1, 15)
+	check(2, 2, 15)
+	check(5, 2, 15)
+	check(1, 3, 15)
+	check(6, 3, 15)
+	check(1, 4, 15)
+	check(2, 4, 15)
+	check(3, 4, 15)
+	check(4, 4, 15)
+	check(5, 4, 15)
+	check(6, 4, 15)
+	check(1, 5, 15)
+	check(6, 5, 15)
+	check(1, 6, 15)
+	check(6, 6, 15)
+	check(7, 7, 0)
+	buf := tile.Bytes()
+	if len(buf) != 32 {
+		t.Errorf("tile.Bytes() returned %d bytes, want 32", len(buf))
+	}
+}
+
+func TestSMSTileFromStringSimple(t *testing.T) {
+	tile, err := SMSTileFromString("11111111")
+	if err != nil {
+		t.Fatalf("SMSTileFromString: %v", err)
+	}
+	for x := 0; x < 8; x++ {
+		got, _ := tile.PaletteIdAt(x, 0)
+		if byte(got) != 1 {
+			t.Errorf("tile.PaletteIdAt(%d,0) = %d, want 1", x, got)
+		}
+	}
+	for y := 1; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			got, _ := tile.PaletteIdAt(x, y)
+			if byte(got) != 0 {
+				t.Errorf("tile.PaletteIdAt(%d,%d) = %d, want 0", x, y, got)
+			}
+		}
+	}
+}
+
+func TestParseBank(t *testing.T) {
+	src := "BANK 3\n"
+	tokens, err := Scan(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	var s Statement
+	p := NewParser(tokens)
+	if err := s.Parse(p); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	bank, ok := s.Command.(BankStmt)
+	if !ok {
+		t.Fatalf("expected BankStmt, got %T", s.Command)
+	}
+	if bank.Number.Operand() == nil || bank.Number.Operand().Literal() == nil || bank.Number.Operand().Literal().Number() == nil {
+		t.Fatal("expected literal number")
+	}
+	if bank.Number.Operand().Literal().Number().Value != 3 {
+		t.Errorf("expected 3, got %d", bank.Number.Operand().Literal().Number().Value)
+	}
+}
+
+func TestParseAtBank(t *testing.T) {
+	src := "AT BANK 2\n"
+	tokens, err := Scan(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	var s Statement
+	p := NewParser(tokens)
+	if err := s.Parse(p); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	at, ok := s.Command.(At)
+	if !ok {
+		t.Fatalf("expected At command, got %T", s.Command)
+	}
+	if !at.HasBank {
+		t.Fatal("expected HasBank to be true")
+	}
+	if at.BankNumber != 2 {
+		t.Errorf("at.BankNumber = %d, want 2", at.BankNumber)
+	}
+}
+
+func TestSMSTileFromStringNewlines(t *testing.T) {
+	tile, err := SMSTileFromString("\n.A.B.C\n.D.E.F\n")
+	if err != nil {
+		t.Fatalf("SMSTileFromString: %v", err)
+	}
+	check := func(x, y int, want byte) {
+		got, _ := tile.PaletteIdAt(x, y)
+		if byte(got) != want {
+			t.Errorf("tile.PaletteIdAt(%d,%d) = %d, want %d", x, y, got, want)
+		}
+	}
+	check(1, 0, 10)
+	check(3, 0, 11)
+	check(5, 0, 12)
+	check(1, 1, 13)
+	check(3, 1, 14)
+	check(5, 1, 15)
+}
+
+func TestParseDataTile(t *testing.T) {
+	src := "myfont: DATA TILE\n" +
+		"`\n" +
+		"........\n" +
+		"...FF...\n" +
+		"........\n" +
+		"`\n"
+	tokens, err := Scan(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	p := NewParser(tokens)
+	prog := Program{}
+	if err := prog.Parse(p); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(prog.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(prog.Statements))
+	}
+	data, ok := prog.Statements[0].Command.(Data)
+	if !ok {
+		t.Fatalf("expected Data command, got %T", prog.Statements[0].Command)
+	}
+	if data.Name != "myfont" {
+		t.Errorf("data.Name = %q, want %q", data.Name, "myfont")
+	}
+	if data.Tile == nil {
+		t.Fatal("data.Tile is nil, expected Tile data")
+	}
+	if len(data.Tile.Tiles) != 1 {
+		t.Fatalf("expected 1 tile, got %d", len(data.Tile.Tiles))
+	}
+	got, _ := data.Tile.Tiles[0].PaletteIdAt(3, 1)
+	if byte(got) != 15 {
+		t.Errorf("pixel (3,1) = %d, want 15", got)
+	}
+}

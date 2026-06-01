@@ -6,13 +6,6 @@ import (
 	"strconv"
 )
 
-import (
-	"github.com/mrcook/smstilemap/sms"
-)
-
-type SMSTile = sms.Tile
-type SMSPaletteID = sms.PaletteId
-
 // HeapBase is the base address of the heap/RAM region at 0xC000.
 const HeapBase = 0xC000 // RAM memory.
 
@@ -389,7 +382,15 @@ func (p Program) Gen(g *Gen) error {
 	for _, statement := range p.Statements {
 		switch cmd := statement.Command.(type) {
 		case At:
-			dataItems = append(dataItems, dataItem{at: &cmd})
+			if cmd.HasBank {
+				// AT BANK is emitted inline (affects code placement),
+				// not queued with data items.
+				if err := cmd.Gen(g); err != nil {
+					return err
+				}
+			} else {
+				dataItems = append(dataItems, dataItem{at: &cmd})
+			}
 		case Declare:
 			dataItems = append(dataItems, dataItem{declare: &cmd})
 		case Data:
@@ -411,7 +412,7 @@ func (p Program) Gen(g *Gen) error {
 	}
 
 	// Emit program footer to stop fallthough.
-	g.Emitln(ProgramFooter)
+	g.Emit(ProgramFooter)
 
 	// Emit procedure bodies after main code (must not be reachable by fall-through).
 	for _, proc := range procedures {
@@ -1875,10 +1876,15 @@ func (s GoTo) Gen(g *Gen) error {
 	return nil
 }
 
-// Gen generates assembly for an AT directive, emitting an ORG directive at
-// the specified address and updating the heap pointer so subsequent data
-// declarations are placed there.
+// Gen generates assembly for an AT directive. If HasBank is true,
+// it emits a "bank" directive to switch the active ROM bank. Otherwise,
+// it emits an ORG directive at the specified address and updates the heap
+// pointer so subsequent data declarations are placed there.
 func (s At) Gen(g *Gen) error {
+	if s.HasBank {
+		g.Emitf("bank %d\n", s.BankNumber)
+		return nil
+	}
 	addr, err := g.Checker.EvalConstExpr(s.Address)
 	if err != nil {
 		return err
@@ -2000,6 +2006,21 @@ func (s Disable) Gen(g *Gen) error {
 	return nil
 }
 
+// Gen generates assembly for a BANK statement, emitting code to switch
+// the active ROM bank on the Sega mapper by writing to port 0xFFFD.
+func (s BankStmt) Gen(g *Gen) error {
+	val, err := g.Checker.EvalConstExpr(s.Number)
+	if err != nil {
+		return fmt.Errorf("bank: %v", err)
+	}
+	if val < 0 || val > 255 {
+		return fmt.Errorf("bank: value %d out of range (0-255)", val)
+	}
+	g.Emitf("\tld a, %d\n", val)
+	g.Emitln("\tld (0xFFFD), a")
+	return nil
+}
+
 // Gen generates assembly for an OUTPUT statement. It evaluates the value into
 // HL, then writes the low byte (and optionally the high byte for WORD output)
 // to the given port.
@@ -2014,6 +2035,134 @@ func (s Output) Gen(g *Gen) error {
 		g.Emitf("\tout (%d), a\n", s.Port)
 	}
 	return nil
+}
+
+// Gen generates assembly for a SAVE statement. It emits an LDIR loop to copy
+// data from the source reference to the destination address (from AT or the
+// declaration's AT clause).
+func (s Save) Gen(g *Gen) error {
+	ref := s.Source.Ref()
+	if ref == nil {
+		return fmt.Errorf("SAVE source must be a reference")
+	}
+
+	// Load source address into HL.
+	if g.isParamRef(ref.Identifier) {
+		g.Emitf("\tld hl, (%s)\n", g.localSym(ref.Identifier))
+	} else {
+		g.Emitf("\tld hl, %s\n", g.localSym(ref.Identifier))
+	}
+
+	// Load destination address into DE.
+	var destAddr int
+	if s.Location != nil {
+		var err error
+		destAddr, err = g.Checker.EvalConstExpr(*s.Location)
+		if err != nil {
+			return err
+		}
+	} else {
+		d, ok := g.Checker.Lookup(ref.Identifier)
+		if !ok || d.At == nil {
+			return fmt.Errorf("SAVE: cannot determine destination address for %q", ref.Identifier)
+		}
+		var err error
+		destAddr, err = g.Checker.EvalConstExpr(*d.At)
+		if err != nil {
+			return err
+		}
+	}
+	g.Emitf("\tld de, 0x%x\n", destAddr)
+
+	// Compute byte count into BC.
+	size, err := g.saveSize(ref.Identifier)
+	if err != nil {
+		return err
+	}
+	if size == 0 {
+		return fmt.Errorf("SAVE: %q has zero size", ref.Identifier)
+	}
+	g.Emitf("\tld bc, %d\n", size)
+	g.Emitln("\tldir")
+
+	return nil
+}
+
+// Gen generates assembly for a LOAD statement. It emits an LDIR loop to copy
+// data from the SRAM address (from AT or the declaration's AT clause) into the
+// target variable.
+func (s Load) Gen(g *Gen) error {
+	ref := s.Target.Ref()
+	if ref == nil {
+		return fmt.Errorf("LOAD target must be a reference")
+	}
+
+	// Load source address (SRAM) into HL.
+	var srcAddr int
+	if s.Location != nil {
+		var err error
+		srcAddr, err = g.Checker.EvalConstExpr(*s.Location)
+		if err != nil {
+			return err
+		}
+	} else {
+		d, ok := g.Checker.Lookup(ref.Identifier)
+		if !ok || d.At == nil {
+			return fmt.Errorf("LOAD: cannot determine source address for %q", ref.Identifier)
+		}
+		var err error
+		srcAddr, err = g.Checker.EvalConstExpr(*d.At)
+		if err != nil {
+			return err
+		}
+	}
+	g.Emitf("\tld hl, 0x%x\n", srcAddr)
+
+	// Load destination address (variable) into DE.
+	if g.isParamRef(ref.Identifier) {
+		g.Emitf("\tld de, (%s)\n", g.localSym(ref.Identifier))
+	} else {
+		g.Emitf("\tld de, %s\n", g.localSym(ref.Identifier))
+	}
+
+	// Compute byte count into BC.
+	size, err := g.saveSize(ref.Identifier)
+	if err != nil {
+		return err
+	}
+	if size == 0 {
+		return fmt.Errorf("LOAD: %q has zero size", ref.Identifier)
+	}
+	g.Emitf("\tld bc, %d\n", size)
+	g.Emitln("\tldir")
+
+	return nil
+}
+
+// saveSize returns the byte size of the data referenced by the given identifier.
+// It handles Declare entries (via Checker.Lookup) and Data blocks (via Checker.Datas).
+func (g *Gen) saveSize(id Identifier) (int, error) {
+	// Check for a DATA block first.
+	if data, ok := g.Checker.Datas[id]; ok {
+		size := 0
+		for _, val := range data.Values {
+			if op := val.Operand(); op != nil {
+				if lit := op.Literal(); lit != nil {
+					if t := lit.Text(); t != nil {
+						size += len(t.Value)
+						continue
+					}
+				}
+			}
+			size++
+		}
+		return size, nil
+	}
+	// Fall back to a declared variable/array/record.
+	if d, ok := g.Checker.Lookup(id); ok {
+		return d.StorageSize(), nil
+	}
+	return 0, fmt.Errorf("%q not found", id)
 }
 
 // emitStorageRaw emits a RAM storage allocation at g.Heap for the given label
@@ -2065,10 +2214,19 @@ func (b Tile) Gen(g *Gen) error {
 		return fmt.Errorf("No tiles to generate")
 	}
 	for ti, tile := range b.Tiles {
-		g.Emitf("\t// Tile %d ", ti)
+		g.Emitf("\t// Tile %d\n", ti)
+		for y := 0; y < tile.Size(); y++ {
+			g.Emitf("\t// ")
+			for x := 0; x < tile.Size(); x++ {
+				id, _ := tile.PaletteIdAt(x, y)
+				g.Emitf("%x", int(id))
+			}
+			g.Emitf("\n")
+		}
+
 		buf := tile.Bytes()
 		for _, b := range buf {
-			g.Emitf("\n\tdb %d", b)
+			g.Emitf("\tdb %d\n", b)
 		}
 	}
 	g.Emitln()

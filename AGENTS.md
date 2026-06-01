@@ -62,6 +62,7 @@ go test ./...               # Run all tests
 
 - The assembler uses many singe letter identifiers as register names, including i and r.
 - The assembler provides a `jmp` pseudo-instruction that emits `jr`+`nop` (3 bytes) when the relative offset is within ±127 bytes, and `jp` (3 bytes) otherwise. Use `jmp` instead of `jp` for control flow jumps (IF/WHILE/FOR/CASE) so the assembler picks `jr` for small bodies and `jp` when the range overflows.
+- The assembler supports bank switching via three directives: `banksize <bytes>` (set ROM bank size, default 0x4000), `bankat <addr>` (set CPU window address, default 0x4000), and `bank <nr>` (switch to bank `nr`, setting PC to bankAt and target to bankAt + nr*banksize).
 
 ## Task System Details
 
@@ -113,15 +114,20 @@ on three events:
 | For | `FOR var = start TO end [BY step] [DO] stmts END` |
 | Do | `DO stmts END` |
 | Case | `CASE expr [DO] { OF val stmt } [OF DEFAULT stmt] END` |
-| Procedure | `[INTERRUPT\|NMI] PROCEDURE name(params) type REENTRANT stmts END` |
+| Procedure | `PROCEDURE name(params) type [REENTRANT] [INTERRUPT\|NMI] stmts END` |
 | Return | `RETURN [expr [, ...]]` |
 | Call | `CALL name(args)` |
 | Goto | `GOTO name` |
 | At | `AT literal` (set data address) |
+| At Bank | `AT BANK nr` (switch to ROM bank `nr` for subsequent code/data) |
+| Bank | `BANK expr` (runtime bank switch via Sega mapper port 0xFFFD) |
+| Interrupt/NMI install | `INTERRUPT name` or `NMI name` (install handler at vector) |
+| Procedure modifier | `PROCEDURE name() INTERRUPT` or `PROCEDURE name() NMI` (define handler) |
 | At suffix | `DECLARE name type AT literal` (declare at address) |
 | Output | `OUTPUT port expr` |
 | Input | `INPUT(port)` (as expression) |
 | Data | `name: DATA vals` |
+| Data Tile | `name: DATA TILE \`...\`` (8x8 SMS tile from backtick string, chars: `.`=pal0, `0-9`=pal0-9, `A-F`=pal10-15) |
 | Constant | `CONSTANT name [=] val` |
 | Define | `DEFINE name type` (type alias) |
 | Task | `TASK name PRIORITY n stmts END` |
@@ -132,6 +138,8 @@ on three events:
 | Halt | `HALT` |
 | Enable | `ENABLE` |
 | Disable | `DISABLE` |
+| Save | `SAVE [AT expr] expr` (save to battery-backed RAM) |
+| Load | `LOAD [AT expr] expr` (load from battery-backed RAM) |
 | Include | `INCLUDE "filename"` |
 
 ## Operators (precedence low→high)

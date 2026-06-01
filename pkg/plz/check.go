@@ -290,6 +290,11 @@ func (s At) Check(c *Checker) error {
 	return nil
 }
 
+// Check validates a BANK statement by checking the bank number expression.
+func (s BankStmt) Check(c *Checker) error {
+	return s.Number.Check(c)
+}
+
 // Check validates an INTERRUPT or NMI install statement. It verifies
 // that the target identifier names a declared procedure.
 func (s InterruptStmt) Check(c *Checker) error {
@@ -433,6 +438,77 @@ func (s For) Check(c *Checker) error {
 // Check validates an OUTPUT statement by checking its value expression.
 func (s Output) Check(c *Checker) error {
 	return s.Value.Check(c)
+}
+
+// Check validates a SAVE statement. The AT location (if given) must be a
+// constant expression. The source must be a reference to a variable, array,
+// record, DATA label, or TEXT with a known size.
+func (s Save) Check(c *Checker) error {
+	if s.Location != nil {
+		if err := s.Location.Check(c); err != nil {
+			return err
+		}
+		if _, err := c.EvalConstExpr(*s.Location); err != nil {
+			return c.Errorf("", "SAVE AT address must be a constant expression")
+		}
+	}
+	if err := s.Source.Check(c); err != nil {
+		return err
+	}
+	ref := s.Source.Ref()
+	if ref == nil {
+		return c.Errorf("", "SAVE source must be a variable, array, record, or DATA label reference")
+	}
+	if len(ref.Subscripts) > 0 {
+		return c.Errorf("", "SAVE does not support array subscripts")
+	}
+	if len(ref.Fields) > 0 {
+		return c.Errorf("", "SAVE does not support record field access")
+	}
+	if s.Location == nil {
+		d, ok := c.Lookup(ref.Identifier)
+		if !ok {
+			return c.Errorf("", "SAVE without AT: %q not found", ref.Identifier)
+		}
+		if d.At == nil {
+			return c.Errorf("", "SAVE without AT requires %q to be declared with AT", ref.Identifier)
+		}
+	}
+	return nil
+}
+
+func (s Load) Check(c *Checker) error {
+	if s.Location != nil {
+		if err := s.Location.Check(c); err != nil {
+			return err
+		}
+		if _, err := c.EvalConstExpr(*s.Location); err != nil {
+			return c.Errorf("", "LOAD AT address must be a constant expression")
+		}
+	}
+	if err := s.Target.Check(c); err != nil {
+		return err
+	}
+	ref := s.Target.Ref()
+	if ref == nil {
+		return c.Errorf("", "LOAD target must be a variable, array, record, or DATA label reference")
+	}
+	if len(ref.Subscripts) > 0 {
+		return c.Errorf("", "LOAD does not support array subscripts")
+	}
+	if len(ref.Fields) > 0 {
+		return c.Errorf("", "LOAD does not support record field access")
+	}
+	if s.Location == nil {
+		d, ok := c.Lookup(ref.Identifier)
+		if !ok {
+			return c.Errorf("", "LOAD without AT: %q not found", ref.Identifier)
+		}
+		if d.At == nil {
+			return c.Errorf("", "LOAD without AT requires %q to be declared with AT", ref.Identifier)
+		}
+	}
+	return nil
 }
 
 // Check validates a LET assignment by checking the right-hand side expression

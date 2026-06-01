@@ -543,3 +543,33 @@ func TestGenRecordWithArrayFieldWrite(t *testing.T) {
 		t.Error("expected byte store")
 	}
 }
+
+func TestGenBank(t *testing.T) {
+	asm := genTest(t, "BANK 3\n")
+	if !strings.Contains(asm, "ld a, 3") {
+		t.Errorf("expected ld a, 3 in output:\n%s", asm)
+	}
+	if !strings.Contains(asm, "ld (0xFFFD), a") {
+		t.Errorf("expected ld (0xFFFD), a in output:\n%s", asm)
+	}
+}
+
+func TestGenAtBank(t *testing.T) {
+	asm := genTest(t, "AT BANK 2\nfont: DATA 1, 2, 3")
+	if !strings.Contains(asm, "bank 2") {
+		t.Errorf("expected bank 2 directive in output:\n%s", asm)
+	}
+	if !strings.Contains(asm, "font:") {
+		t.Errorf("expected font: label in output:\n%s", asm)
+	}
+}
+
+func TestGenAt(t *testing.T) {
+	asm := genTest(t, "AT 0xC000\nDECLARE x BYTE")
+	if !strings.Contains(asm, "org 0xc000") {
+		t.Errorf("expected org directive for c000 in output:\n%s", asm)
+	}
+	if !strings.Contains(asm, "x: db 0") {
+		t.Errorf("expected x: db 0 in output:\n%s", asm)
+	}
+}

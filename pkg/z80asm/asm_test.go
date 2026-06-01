@@ -602,3 +602,129 @@ func TestIntExpressions(t *testing.T) {
 		testSnippet(t, 0, 0x6000, fs, want)
 	}
 }
+
+func TestBank(t *testing.T) {
+	fs := ffs{
+		"a.asm": "bank 1\ndb 0xaa, 0xbb",
+	}
+	asm, err := NewAssembler()
+	if err != nil {
+		t.Fatalf("NewAssembler: %v", err)
+	}
+	asm.opener = fs.open
+	if err := asm.AssembleFile("a.asm"); err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	ram := asm.RAM()
+	if ram[0x8000] != 0xaa {
+		t.Errorf("ram[0x8000] = %02x, want aa", ram[0x8000])
+	}
+	if ram[0x8001] != 0xbb {
+		t.Errorf("ram[0x8001] = %02x, want bb", ram[0x8001])
+	}
+}
+
+func TestBankSequential(t *testing.T) {
+	fs := ffs{
+		"a.asm": "bank 0\ndb 0x01\nbank 1\ndb 0x02\nbank 2\ndb 0x03",
+	}
+	asm, err := NewAssembler()
+	if err != nil {
+		t.Fatalf("NewAssembler: %v", err)
+	}
+	asm.opener = fs.open
+	if err := asm.AssembleFile("a.asm"); err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	ram := asm.RAM()
+	if ram[0x4000] != 0x01 {
+		t.Errorf("bank 0 (0x4000) = %02x, want 01", ram[0x4000])
+	}
+	if ram[0x8000] != 0x02 {
+		t.Errorf("bank 1 (0x8000) = %02x, want 02", ram[0x8000])
+	}
+	if ram[0xC000] != 0x03 {
+		t.Errorf("bank 2 (0xC000) = %02x, want 03", ram[0xC000])
+	}
+}
+
+func TestBankThenOrg(t *testing.T) {
+	fs := ffs{
+		"a.asm": "bank 1\ndb 0x01\norg 0x1000\ndb 0x02",
+	}
+	asm, err := NewAssembler()
+	if err != nil {
+		t.Fatalf("NewAssembler: %v", err)
+	}
+	asm.opener = fs.open
+	if err := asm.AssembleFile("a.asm"); err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	ram := asm.RAM()
+	if ram[0x8000] != 0x01 {
+		t.Errorf("bank 1 (0x8000) = %02x, want 01", ram[0x8000])
+	}
+	if ram[0x1000] != 0x02 {
+		t.Errorf("org 0x1000 = %02x, want 02", ram[0x1000])
+	}
+}
+
+func TestBankSize(t *testing.T) {
+	// Override bank size to 8KB, write to bank 1.
+	fs := ffs{
+		"a.asm": "banksize 0x2000\nbank 1\ndb 0xaa",
+	}
+	asm, err := NewAssembler()
+	if err != nil {
+		t.Fatalf("NewAssembler: %v", err)
+	}
+	asm.opener = fs.open
+	if err := asm.AssembleFile("a.asm"); err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	ram := asm.RAM()
+	// bankAt=0x4000, bankSize=0x2000 → bank 1 target = 0x4000 + 1*0x2000 = 0x6000
+	if ram[0x6000] != 0xaa {
+		t.Errorf("bank 1 with 8KB pages (0x6000) = %02x, want aa", ram[0x6000])
+	}
+}
+
+func TestBankAt(t *testing.T) {
+	// Override bank window to 0x8000, use default 16KB size.
+	fs := ffs{
+		"a.asm": "bankat 0x8000\nbank 1\ndb 0xbb",
+	}
+	asm, err := NewAssembler()
+	if err != nil {
+		t.Fatalf("NewAssembler: %v", err)
+	}
+	asm.opener = fs.open
+	if err := asm.AssembleFile("a.asm"); err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	ram := asm.RAM()
+	// bankAt=0x8000, bankSize=0x4000 → bank 1 target = 0x8000 + 1*0x4000 = 0xC000
+	if ram[0xC000] != 0xbb {
+		t.Errorf("bank 1 at 0x8000 window (0xC000) = %02x, want bb", ram[0xC000])
+	}
+}
+
+func TestBankCustomConfig(t *testing.T) {
+	// Custom bank size (32KB) and window (0x1000).
+	fs := ffs{
+		"a.asm": "banksize 0x8000\nbankat 0x1000\nbank 2\ndb 0xcc",
+	}
+	asm, err := NewAssembler()
+	if err != nil {
+		t.Fatalf("NewAssembler: %v", err)
+	}
+	asm.opener = fs.open
+	if err := asm.AssembleFile("a.asm"); err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	ram := asm.RAM()
+	// bankAt=0x1000, bankSize=0x8000 → bank 2 target = 0x1000 + 2*0x8000 = 0x11000
+	if ram[0x11000] != 0xcc {
+		t.Errorf("bank 2 custom config (0x11000) = %02x, want cc", ram[0x11000])
+	}
+}

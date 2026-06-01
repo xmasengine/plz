@@ -11,13 +11,16 @@ import (
 )
 
 var baseCommandTable = map[string]instrAssembler{
-	"org":     commandOrg{},
-	"db":      cmdData(const8),
-	"dw":      cmdData(const16),
-	"ds":      cmdData(argstring),
-	"const":   commandConst{},
-	"include": commandInclude{},
-	"jmp":     commandJmp{},
+	"org":      commandOrg{},
+	"db":       cmdData(const8),
+	"dw":       cmdData(const16),
+	"ds":       cmdData(argstring),
+	"const":    commandConst{},
+	"include":  commandInclude{},
+	"jmp":      commandJmp{},
+	"bank":     commandBank{},
+	"banksize": commandBankSize{},
+	"bankat":   commandBankAt{},
 }
 
 type commandAssembler struct {
@@ -40,6 +43,9 @@ type Assembler struct {
 	currentMajorLabel string
 	labelAssign       map[string]string
 	m                 []uint8
+
+	bankSize int // ROM bank size in bytes (default 0x4000 = 16KB)
+	bankAt   int // CPU address of the bank window (default 0x4000)
 
 	// These are stacks, used when we "include" another file.
 	scanners  []*scanner.Scanner
@@ -130,6 +136,8 @@ func NewAssembler(opts ...AssemblerOpt) (*Assembler, error) {
 		constsDef:    make(map[string]bool),
 		labelAssign:  make(map[string]string),
 		m:            make([]uint8, 64*1024),
+		bankSize:     0x4000,
+		bankAt:       0x4000,
 	}
 	return a, nil
 }
@@ -717,6 +725,79 @@ func (commandOrg) W(asm *Assembler) error {
 
 	asm.pc = int(n)
 	asm.target = int(t)
+	return nil
+}
+
+type commandBank struct{}
+
+func (commandBank) W(asm *Assembler) error {
+	args, err := asm.parseArgs(true)
+	if err != nil {
+		return err
+	}
+	if len(args) != 1 {
+		return asm.scanErrorf("bank takes one argument: %d found", len(args))
+	}
+	n, ok, err := getIntValue(asm, args[0])
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return asm.scanErrorf("bank argument should be a number, found %s", args[0])
+	}
+	if n < 0 {
+		return asm.scanErrorf("bank argument %d out of range (negative)", n)
+	}
+	asm.pc = asm.bankAt
+	asm.target = asm.bankAt + int(n)*asm.bankSize
+	return nil
+}
+
+type commandBankSize struct{}
+
+func (commandBankSize) W(asm *Assembler) error {
+	args, err := asm.parseArgs(true)
+	if err != nil {
+		return err
+	}
+	if len(args) != 1 {
+		return asm.scanErrorf("banksize takes one argument: %d found", len(args))
+	}
+	n, ok, err := getIntValue(asm, args[0])
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return asm.scanErrorf("banksize argument should be a number, found %s", args[0])
+	}
+	if n <= 0 {
+		return asm.scanErrorf("banksize must be positive, got %d", n)
+	}
+	asm.bankSize = int(n)
+	return nil
+}
+
+type commandBankAt struct{}
+
+func (commandBankAt) W(asm *Assembler) error {
+	args, err := asm.parseArgs(true)
+	if err != nil {
+		return err
+	}
+	if len(args) != 1 {
+		return asm.scanErrorf("bankat takes one argument: %d found", len(args))
+	}
+	n, ok, err := getIntValue(asm, args[0])
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return asm.scanErrorf("bankat argument should be a number, found %s", args[0])
+	}
+	if n < 0 || n >= 65536 {
+		return asm.scanErrorf("bankat argument %x out of CPU address range", n)
+	}
+	asm.bankAt = int(n)
 	return nil
 }
 
