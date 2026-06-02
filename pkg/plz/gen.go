@@ -22,7 +22,9 @@ type Gen struct {
 	symStack       []map[Identifier]symEntry // scope stack
 	ProcReturnType Type                      // return type of current procedure (for BYTE zero-extend in Return.Gen)
 	ProcInterrupt  *Interrupt                // interrupt type of current procedure (for reti/retn in Return.Gen)
-	strings        []strEntry                // string literal labels and content for ROM emission
+	BoundCheck         bool                      // when true, emit runtime bounds checks before array accesses
+	boundsErrorEmitted bool                      // tracks whether _plz_bounds_error label has been emitted
+	strings            []strEntry                // string literal labels and content for ROM emission
 }
 
 // strEntry records a string literal that needs to be emitted as ROM data.
@@ -509,6 +511,9 @@ func (p Program) Gen(g *Gen) error {
 		}
 	}
 
+	if g.BoundCheck {
+		g.genOnceBoundsError()
+	}
 	return nil
 }
 
@@ -686,6 +691,12 @@ func (o Operand) Gen(g *Gen) error {
 		g.Emitln("\tin a, (c)")
 		g.Emitln("\tld l, a")
 		g.Emitln("\tld h, 0")
+	case o.Length() != nil:
+		n, err := g.Checker.evalLength(o.Length())
+		if err != nil {
+			return err
+		}
+		g.Emitf("\tld hl, %d\n", n)
 	}
 	return nil
 }
@@ -777,6 +788,8 @@ func isSimpleOperand(op Operand) bool {
 		return isSimpleExpr(*op.Expr())
 	case op.Input() != nil:
 		return isSimpleExpr(op.Input().Port)
+	case op.Length() != nil:
+		return true // constant, no register clobber
 	}
 	return false
 }
@@ -1001,7 +1014,13 @@ func (g *Gen) genFieldAddr(operands []Operand) (fieldType Type, err error) {
 		return fieldType, fmt.Errorf("genFieldAddr: first operand must have a reference")
 	}
 	t, ok := g.localType(ref.Identifier)
-	if !ok || t.Record() == nil {
+	if !ok {
+		return fieldType, fmt.Errorf("genFieldAddr: unknown identifier %s", ref.Identifier)
+	}
+	if arr := t.Array(); arr != nil {
+		t = arr.ElemType
+	}
+	if t.Record() == nil {
 		return fieldType, fmt.Errorf("genFieldAddr: %s is not a struct", ref.Identifier)
 	}
 	fname := operands[1].Reference().Identifier
@@ -1070,6 +1089,9 @@ func (g *Gen) elemSize(name Identifier) int {
 	if !ok {
 		return 2
 	}
+	if arr := t.Array(); arr != nil {
+		t = arr.ElemType
+	}
 	if t.Record() != nil {
 		total := t.Record().TotalSize()
 		return nextPow2(total)
@@ -1083,9 +1105,13 @@ func (g *Gen) elemSize(name Identifier) int {
 // genIndexAddr computes the address of arr[index] into HL without loading the
 // value. It handles simple array references, field-of-array references (rec.arr[i]),
 // and array-of-record references (arr[i].f). It returns the element size in bytes.
+//
+// When g.BoundCheck is true and the array size is known, it emits a runtime
+// bounds check that halts the CPU if the index is out of range.
 func (g *Gen) genIndexAddr(operands []Operand) (elemSize int, err error) {
 	ref := operands[0].Ref()
 	var baseSuffix *Suffix
+	var arrSize int // element count for bounds check (0 = unknown/unbounded)
 	if ref == nil {
 		if expr := operands[0].Expr(); expr != nil {
 			baseSuffix = expr.Suffix()
@@ -1106,6 +1132,9 @@ func (g *Gen) genIndexAddr(operands []Operand) (elemSize int, err error) {
 			return 0, err
 		}
 		if ft.Array() != nil {
+			if g.BoundCheck {
+				arrSize = ft.Array().Size
+			}
 			if ft.Array().ElemType.Predeclared() == PredeclaredByte {
 				elem = 1
 			} else if ft.Array().ElemType.Record() != nil {
@@ -1117,6 +1146,23 @@ func (g *Gen) genIndexAddr(operands []Operand) (elemSize int, err error) {
 		}
 	} else if ref != nil {
 		elem = g.elemSize(ref.Identifier)
+		if g.BoundCheck {
+			if t, ok := g.localType(ref.Identifier); ok {
+				if arr := t.Array(); arr != nil {
+					arrSize = arr.Size
+				}
+			} else if data, ok := g.Checker.Datas[ref.Identifier]; ok {
+				if data.Tile != nil {
+					arrSize = len(data.Tile.Tiles)
+				} else {
+					arrSize = len(data.Values)
+				}
+			}
+		}
+		// DATA items store each numeric value as 1 byte (db).
+		if _, ok := g.Checker.Datas[ref.Identifier]; ok {
+			elem = 1
+		}
 		if g.isParamRef(ref.Identifier) {
 			g.Emitf("\tld hl, (%s)\n", g.localSym(ref.Identifier))
 			goto gotAddr
@@ -1131,6 +1177,14 @@ gotAddr:
 		g.Emitln("\tpush hl")
 		if err := operands[1].Expr().Gen(g); err != nil {
 			return 0, err
+		}
+		// Runtime bounds check: verify 0 ≤ index < arrSize.
+		if g.BoundCheck && arrSize > 0 {
+			g.Emitf("\tld de, %d\n", arrSize)
+			g.Emitln("\tor a")
+			g.Emitln("\tsbc hl, de")
+			g.Emitln("\tjr nc, _plz_bounds_error")
+			g.Emitln("\tadd hl, de") // restore original index
 		}
 		for size := elem; size > 1; size >>= 1 {
 			g.Emitln("\tadd hl, hl")
@@ -1295,6 +1349,10 @@ func (s Let) Gen(g *Gen) error {
 
 	// Determine base decl type for record field access.
 	t, _ := g.localType(s.Identifier)
+	// Unwrap array to get element type for field access.
+	if arr := t.Array(); arr != nil {
+		t = arr.ElemType
+	}
 
 	// Three cases:
 	// 1. Simple store (no subscripts, no fields)
@@ -1894,6 +1952,29 @@ func (s At) Gen(g *Gen) error {
 	return nil
 }
 
+// Gen processes a PRAGMA directive at code-generation time.
+// PRAGMA BOUNDCHECK toggles runtime array bounds checking.
+func (s Pragma) Gen(g *Gen) error {
+	for _, id := range s.Idents {
+		switch string(id) {
+		case "BOUNDCHECK":
+			g.BoundCheck = true
+		}
+	}
+	return nil
+}
+
+// genOnceBoundsError emits the bounds error handler once if not already emitted.
+func (g *Gen) genOnceBoundsError() {
+	if g.boundsErrorEmitted {
+		return
+	}
+	g.boundsErrorEmitted = true
+	g.Emitln("_plz_bounds_error:")
+	g.Emitln("\thalt")
+	g.Emitln("\tjr _plz_bounds_error")
+}
+
 // resolveCaseVal resolves a CaseVal to an integer at codegen time.
 func (g *Gen) resolveCaseVal(cv CaseVal) (int, error) {
 	if cv.Name == "" {
@@ -1919,7 +2000,7 @@ func (g *Gen) evalConstExpr(e Expression) (int, error) {
 // Gen generates assembly for a DECLARE statement. Inside a procedure body it
 // registers the identifier in the current scope so later references resolve to
 // the correct RAM label. At global scope it emits an ORG directive followed by
-// zero-initialized storage.
+// zero-initialized storage (or the initializer value if one is provided).
 func (s Declare) Gen(g *Gen) error {
 	if g.procName != "" {
 		// Local variable: register in the current scope so localSym/localType can find it.
@@ -1936,29 +2017,48 @@ func (s Declare) Gen(g *Gen) error {
 		return nil
 	}
 	elemSize := g.elemSize(s.Identifier)
-	total := s.Size * elemSize
-	if total == 0 {
-		total = elemSize // unbounded → 1 element minimum
+	total := elemSize
+	if arr := s.Type.Array(); arr != nil && arr.Size > 0 {
+		total = arr.Size * elemSize
 	}
 
-	// If AT is set, the variable is at a fixed absolute address.
+	// If AT is set, the variable is at a fixed absolute address (for
+	// memory-mapped I/O or direct memory access). Only emit the label so
+	// references resolve to the correct address; do not emit data bytes,
+	// which could overwrite code already placed in that region.
 	// Do not advance g.Heap so subsequent declarations are unaffected.
 	if s.At != nil {
 		addr, err := g.evalConstExpr(*s.At)
 		if err != nil {
 			return err
 		}
-		g.Emitf("org 0x%x\n%s: db 0", addr, s.Identifier)
-		for i := 1; i < total; i++ {
-			g.Emit(", 0")
-		}
-		g.Emit("\n")
+		g.Emitf("org 0x%x\n%s:\n", addr, s.Identifier)
 		return nil
 	}
 
-	g.Emitf("org 0x%x\n%s: db 0", g.Heap, s.Identifier)
-	for i := 1; i < total; i++ {
-		g.Emit(", 0")
+	g.Emitf("org 0x%x\n%s: ", g.Heap, s.Identifier)
+	if s.Initializer != nil {
+		initVal, err := g.evalConstExpr(s.Initializer.Expr)
+		if err != nil {
+			return err
+		}
+		if elemSize == 1 {
+			g.Emitf("db %d", initVal&0xFF)
+			for i := 1; i < total; i++ {
+				g.Emitf(", %d", initVal&0xFF)
+			}
+		} else {
+			n := total / elemSize
+			g.Emitf("dw %d", initVal&0xFFFF)
+			for i := 1; i < n; i++ {
+				g.Emitf(", %d", initVal&0xFFFF)
+			}
+		}
+	} else {
+		g.Emitf("db 0")
+		for i := 1; i < total; i++ {
+			g.Emit(", 0")
+		}
 	}
 	g.Emit("\n")
 	g.Heap += total

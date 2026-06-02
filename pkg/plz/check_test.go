@@ -36,3 +36,88 @@ func TestCheckDeclaredVariable(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestCheckArrayBoundsValid(t *testing.T) {
+	err := checkTest(t, "DECLARE arr ARRAY [5] BYTE\nLET x = arr[3]")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCheckArrayBoundsValidWrite(t *testing.T) {
+	err := checkTest(t, "DECLARE arr ARRAY [5] BYTE\nLET arr[0] = 42")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCheckArrayBoundsOutOfRange(t *testing.T) {
+	err := checkTest(t, "DECLARE arr ARRAY [5] BYTE\nLET x = arr[7]")
+	if err == nil {
+		t.Fatal("expected out-of-bounds error")
+	}
+	if !strings.Contains(err.Error(), "out of bounds") {
+		t.Errorf("expected 'out of bounds' error, got: %v", err)
+	}
+}
+
+func TestCheckArrayBoundsWriteOutOfRange(t *testing.T) {
+	err := checkTest(t, "DECLARE arr ARRAY [5] BYTE\nLET arr[10] = 99")
+	if err == nil {
+		t.Fatal("expected out-of-bounds error")
+	}
+	if !strings.Contains(err.Error(), "out of bounds") {
+		t.Errorf("expected 'out of bounds' error, got: %v", err)
+	}
+}
+
+func TestCheckArrayBoundsNegativeIndex(t *testing.T) {
+	err := checkTest(t, "DECLARE arr ARRAY [5] BYTE\nLET x = arr[-1]")
+	if err == nil {
+		t.Fatal("expected out-of-bounds error")
+	}
+	if !strings.Contains(err.Error(), "out of bounds") {
+		t.Errorf("expected 'out of bounds' error, got: %v", err)
+	}
+}
+
+func TestCheckArrayBoundsVariableIndex(t *testing.T) {
+	err := checkTest(t, "DECLARE arr ARRAY [5] BYTE\nDECLARE i WORD\nLET arr[i] = 42")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCheckArrayBoundsConstantExpr(t *testing.T) {
+	err := checkTest(t, "DECLARE arr ARRAY [5] BYTE\nLET x = arr[2+2]")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCheckArrayBoundsConstantExprOutOfRange(t *testing.T) {
+	err := checkTest(t, "DECLARE arr ARRAY [5] BYTE\nLET x = arr[2+4]")
+	if err == nil {
+		t.Fatal("expected out-of-bounds error")
+	}
+	if !strings.Contains(err.Error(), "out of bounds") {
+		t.Errorf("expected 'out of bounds' error, got: %v", err)
+	}
+}
+
+func TestCheckPragmaBoundcheck(t *testing.T) {
+	err := checkTest(t, "PRAGMA BOUNDCHECK")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCheckPragmaUnknown(t *testing.T) {
+	err := checkTest(t, "PRAGMA FOO")
+	if err == nil {
+		t.Fatal("expected error for unknown pragma")
+	}
+	if !strings.Contains(err.Error(), "unrecognized pragma") {
+		t.Errorf("expected 'unrecognized pragma' error, got: %v", err)
+	}
+}

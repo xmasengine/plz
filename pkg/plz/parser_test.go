@@ -528,10 +528,14 @@ func TestParseArrayDeclareUnbounded(t *testing.T) {
 		t.Fatal("expected Declare statement")
 	}
 
-	if sDeclare.Size != 0 {
-		t.Errorf("expected unbounded size 0, got %d", sDeclare.Size)
+	arr := sDeclare.Type.Array()
+	if arr == nil {
+		t.Fatal("expected array type")
 	}
-	if sDeclare.Type.Predeclared() != PredeclaredWord {
+	if arr.Size != 0 {
+		t.Errorf("expected unbounded size 0, got %d", arr.Size)
+	}
+	if arr.ElemType.Predeclared() != PredeclaredWord {
 		t.Error("expected WORD type")
 	}
 }
@@ -551,10 +555,14 @@ func TestParseArrayDeclareFixed(t *testing.T) {
 		t.Fatal("expected Declare statement")
 	}
 
-	if sDeclare.Size != 10 {
-		t.Errorf("expected size 10, got %d", sDeclare.Size)
+	arr := sDeclare.Type.Array()
+	if arr == nil {
+		t.Fatal("expected array type")
 	}
-	if sDeclare.Type.Predeclared() != PredeclaredByte {
+	if arr.Size != 10 {
+		t.Errorf("expected size 10, got %d", arr.Size)
+	}
+	if arr.ElemType.Predeclared() != PredeclaredByte {
 		t.Error("expected BYTE type")
 	}
 }
@@ -574,8 +582,12 @@ func TestParseArrayDeclareMultiDim(t *testing.T) {
 	if !ok {
 		t.Fatal("expected Declare statement")
 	}
-	if sDeclare.Size != 6 {
-		t.Errorf("expected size 6, got %d", sDeclare.Size)
+	arr := sDeclare.Type.Array()
+	if arr == nil {
+		t.Fatal("expected array type")
+	}
+	if arr.Size != 6 {
+		t.Errorf("expected size 6, got %d", arr.Size)
 	}
 }
 

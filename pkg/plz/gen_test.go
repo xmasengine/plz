@@ -573,3 +573,20 @@ func TestGenAt(t *testing.T) {
 		t.Errorf("expected x: db 0 in output:\n%s", asm)
 	}
 }
+
+func TestGenBoundCheck(t *testing.T) {
+	asm := genTest(t, "PRAGMA BOUNDCHECK\nDECLARE arr ARRAY [5] BYTE\nDECLARE i WORD\nLET x = arr[i]")
+	if !strings.Contains(asm, "_plz_bounds_error") {
+		t.Errorf("expected bounds check code, got:\n%s", asm)
+	}
+	if !strings.Contains(asm, "ld de, 5") {
+		t.Errorf("expected array size check for 5, got:\n%s", asm)
+	}
+}
+
+func TestGenBoundCheckNoPragma(t *testing.T) {
+	asm := genTest(t, "DECLARE arr ARRAY [5] BYTE\nDECLARE i WORD\nLET x = arr[i]")
+	if strings.Contains(asm, "_plz_bounds_error") {
+		t.Errorf("unexpected bounds check code without PRAGMA BOUNDCHECK:\n%s", asm)
+	}
+}

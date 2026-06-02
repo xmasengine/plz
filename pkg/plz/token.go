@@ -52,6 +52,7 @@ const (
 	KeywordThen                                           // THEN
 	KeywordElse                                           // ELSE
 	KeywordInput                                          // INPUT
+	KeywordLength                                         // LENGTH
 	KeywordLet                                            // LET
 	KeywordReturn                                         // RETURN
 	KeywordRecord                                         // RECORD
@@ -82,6 +83,7 @@ const (
 	KeywordTile                                           // TILE
 	KeywordSave                                           // SAVE
 	KeywordLoad                                           // LOAD
+	KeywordPragma                                         // PRAGMA
 )
 
 // Keywords maps keyword strings to their corresponding TokenKind values.
@@ -102,6 +104,7 @@ var Keywords = map[string]TokenKind{
 	"ELSE":      KeywordElse,
 	"HALT":      KeywordHalt,
 	"INPUT":     KeywordInput,
+	"LENGTH":    KeywordLength,
 	"LET":       KeywordLet,
 	"RETURN":    KeywordReturn,
 	"OUTPUT":    KeywordOutput,
@@ -132,6 +135,7 @@ var Keywords = map[string]TokenKind{
 	"TILE":      KeywordTile,
 	"LOAD":      KeywordLoad,
 	"SAVE":      KeywordSave,
+	"PRAGMA":    KeywordPragma,
 }
 
 // String returns the human-readable name for a TokenKind.

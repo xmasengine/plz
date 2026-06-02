@@ -62,12 +62,12 @@ func SMSLoadTileFromImage(img image.Image) (*SMSTile, error) {
 	if !ok {
 		return nil, Error{Message: "image has no palette"}
 	}
-	println("SMSLoadTileFromImage", pimg.Stride, pimg.PixOffset(0, 0))
 	tile := &SMSTile{}
-	for y := 0; y < pimg.Bounds().Dy() && y < tileHeight; y++ {
-		for x := 0; x < pimg.Bounds().Dx() && x < tileWidth; x++ {
+	bounds := pimg.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y && y-bounds.Min.Y < tileHeight; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X && x-bounds.Min.X < tileWidth; x++ {
 			col := pimg.ColorIndexAt(x, y)
-			tile.SetPaletteIdAt(x, y, SMSPaletteID(col))
+			tile.SetPaletteIdAt(x-bounds.Min.X, y-bounds.Min.Y, SMSPaletteID(col))
 		}
 	}
 	return tile, nil
@@ -110,29 +110,18 @@ func SMSLoadTiles(fn string) ([]*SMSTile, error) {
 	if len(palette) < 1 {
 		return nil, Error{Message: "Too few palette entries."}
 	}
-	println("SMSLoadTiles palette, stride", len(palette), pimg.Stride)
 	res := []*SMSTile{}
 	rect := image.Rect(0, 0, tileWidth, tileHeight)
 	for y := 0; y < pimg.Bounds().Dy(); y += rect.Bounds().Dy() {
 		for x := 0; x < pimg.Bounds().Dx(); x += rect.Bounds().Dx() {
 			shift := rect.Add(image.Pt(x, y))
-			println("SMSLoadTiles", shift.Min.X, shift.Min.Y,
-				shift.Max.X, shift.Max.Y)
-
 			sub := pimg.SubImage(shift)
-			if IsBitmapEmpty(sub.(image.PalettedImage), 8, 8, 0, 0) {
-				println("sub is empty")
-			}
-
 			tile, err := SMSLoadTileFromImage(sub)
 			if err != nil {
 				return nil, err
 			}
 			res = append(res, tile)
 		}
-	}
-	if IsBitmapEmpty(pimg, 8, 8, 8, 8) {
-		println("main is empty, should not be so")
 	}
 	return res, nil
 }

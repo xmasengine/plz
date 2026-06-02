@@ -332,6 +332,10 @@ func (s *Statement) Parse(parser *Parser) error {
 		cmd := At{}
 		err = cmd.Parse(parser)
 		s.Command = cmd
+	case KeywordPragma:
+		cmd := Pragma{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	default:
 		return tok.Errorf("Statement: unexpected token %v", tok)
 	}
@@ -473,7 +477,7 @@ func (g *Constant) Parse(parser *Parser) error {
 	// Optional expression value.
 	tok := parser.Peek()
 	switch tok.TokenKind {
-	case TokenInt, TokenString, TokenChar, TokenIdent, KeywordInput, '(', '+', '-', '!':
+	case TokenInt, TokenString, TokenChar, TokenIdent, KeywordInput, KeywordLength, '(', '+', '-', '!':
 		return g.Expr.Parse(parser)
 	}
 	return nil
@@ -499,7 +503,7 @@ func (g *Data) Parse(parser *Parser) error {
 	for {
 		tok := parser.Peek()
 		switch tok.TokenKind {
-		case TokenInt, TokenString, TokenChar, TokenIdent, KeywordInput, '(', '+', '-', '!':
+		case TokenInt, TokenString, TokenChar, TokenIdent, KeywordInput, KeywordLength, '(', '+', '-', '!':
 			var expr Expression
 			if err := expr.Parse(parser); err != nil {
 				return err
@@ -554,11 +558,20 @@ func (b *Tile) Parse(parser *Parser) error {
 			return err
 		}
 		if str.TokenKind == TokenKind(KeywordLoad) {
-			fn, err := parser.Accept(TokenString, TokenKind(KeywordLoad))
+			fn, err := parser.Accept(TokenString)
 			if err != nil {
 				return err
 			}
-			tiles, err := SMSLoadTiles(fn.Text)
+			tilePath := fn.Text
+			if dir := filepath.Dir(fn.Position.Filename); dir != "." && dir != "" {
+				if !filepath.IsAbs(tilePath) {
+					tilePath = filepath.Join(dir, tilePath)
+				}
+			}
+			tiles, err := SMSLoadTiles(tilePath)
+			if err != nil {
+				return err
+			}
 			b.Tiles = append(b.Tiles, tiles...)
 		} else {
 			tile, err := SMSTileFromString(str.Text)
@@ -724,7 +737,7 @@ func (g *Return) Parse(parser *Parser) error {
 		// statement ended at a newline (invisible to the scanner) and the
 		// next token begins a new statement.
 		switch tok.TokenKind {
-		case TokenInt, TokenString, TokenChar, TokenIdent, KeywordInput, '(', '+', '-', '!':
+		case TokenInt, TokenString, TokenChar, TokenIdent, KeywordInput, KeywordLength, '(', '+', '-', '!':
 			var expr Expression
 			if err := expr.Parse(parser); err != nil {
 				return err
@@ -887,24 +900,22 @@ func (g *Declare) Parse(parser *Parser) error {
 	// Optional ARRAY [size] OF type (single dimension only).
 	if parser.Skip(KeywordArray) != nil {
 		parser.Skip(KeywordOf)
+		arr := &Array{}
 		if parser.Peek().TokenKind == '[' {
 			parser.Next()
 			tok := parser.Peek()
 			if tok.TokenKind == TokenInt {
 				parser.Next()
-				g.Size = tok.Number
-			} else {
-				g.Size = 0 // unbounded
+				arr.Size = tok.Number
 			}
 			if _, err := parser.Accept(TokenKind(']')); err != nil {
 				return err
 			}
-		} else {
-			g.Size = 0 // unbounded
 		}
-		if err := g.Type.Parse(parser); err != nil {
+		if err := arr.ElemType.Parse(parser); err != nil {
 			return err
 		}
+		g.Type = Type{Typ: arr}
 		// Optional AT suffix for absolute address.
 		if parser.Skip(KeywordAt) != nil {
 			g.At = &Expression{}
@@ -1028,25 +1039,11 @@ func (p *Parser) ReadOperator() (op Operator) {
 	return op
 }
 
-// ParseExpr is the core Pratt parser for expressions. It reads tokens
-// starting from the current position and builds an Expression tree.
-//
-// The minBp (minimum binding power) parameter sets the minimum precedence
-// that subsequent operators must have; operators with a lower priority than
-// minBp cause the loop to stop and the current expression to be returned.
-//
-// The parse proceeds in two phases:
-//
-//  1. Prefix (nud) phase: dispatches on the current token to parse atomic
-//     expressions (literals, identifiers, parenthesised sub-expressions) or
-//     prefix operators (unary '-', unary '!', unary '+' as a no-op).
-//
-//  2. Infix/suffix (led) phase: loops while the next token is a postfix
-//     operator ('[' for array indexing, '(' for function calls, '.' for field
-//     access) or an infix operator. Each iteration wraps the current left-hand
-//     expression into a larger expression node using the operator's precedence
-//     to recursively parse the right-hand side.
-func (left *Expression) ParseExpr(p *Parser, minBp int) error {
+// parsePrefix handles the prefix (nud) phase of expression parsing.
+// It dispatches on the current token to parse atomic expressions (literals,
+// identifiers, parenthesised sub-expressions) or prefix operators (unary
+// '-', '!', and '+' which is a no-op).
+func (left *Expression) parsePrefix(p *Parser, minBp int) error {
 	tok := p.Peek()
 
 	switch tok.TokenKind {
@@ -1080,6 +1077,20 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 		}
 		left.Expr = &Operand{Op: &Input{Port: port}}
 
+	case KeywordLength:
+		p.Next()
+		if _, err := p.Accept(TokenKind('(')); err != nil {
+			return err
+		}
+		tok, err := p.Accept(TokenIdent)
+		if err != nil {
+			return err
+		}
+		if _, err := p.Accept(TokenKind(')')); err != nil {
+			return err
+		}
+		left.Expr = &Operand{Op: &Length{Identifier: Identifier(tok.Text)}}
+
 	case '(':
 		p.Next()
 		var sub Expression
@@ -1093,7 +1104,6 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 		*left = sub
 
 	case '+':
-		// Unary plus – effectively a no-op, skip it.
 		p.Next()
 		err := left.ParseExpr(p, 0)
 		if err != nil {
@@ -1127,124 +1137,171 @@ func (left *Expression) ParseExpr(p *Parser, minBp int) error {
 	default:
 		return tok.Errorf("unexpected token in expression: %v", tok)
 	}
+	return nil
+}
+
+// parseSuffixIndex handles expr[index] in the infix/suffix loop.
+func (left *Expression) parseSuffixIndex(p *Parser) error {
+	tok := p.Peek()
+	p.Next()
+	if p.Peek().TokenKind == ']' {
+		return tok.Errorf("empty array subscript")
+	}
+	var index Expression
+	if err := index.Parse(p); err != nil {
+		return err
+	}
+	if _, err := p.Accept(TokenKind(']')); err != nil {
+		return err
+	}
+	prev := new(Expression)
+	*prev = *left
+	indexCopy := new(Expression)
+	*indexCopy = index
+	*left = Expression{}
+	left.Expr = &Suffix{
+		Operator: OperatorINDEX,
+		Operands: []Operand{
+			{Op: prev},
+			{Op: indexCopy},
+		},
+	}
+	return nil
+}
+
+// parseSuffixCall handles expr(args...) in the infix/suffix loop.
+func (left *Expression) parseSuffixCall(p *Parser) error {
+	p.Next()
+	var args []Expression
+	if p.Peek().TokenKind != ')' {
+		for {
+			var arg Expression
+			if err := arg.Parse(p); err != nil {
+				return err
+			}
+			args = append(args, arg)
+			if p.Peek().TokenKind == ')' {
+				break
+			}
+			if _, err := p.Accept(TokenKind(',')); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := p.Accept(TokenKind(')')); err != nil {
+		return err
+	}
+	prev := new(Expression)
+	*prev = *left
+	operands := make([]Operand, 0, 1+len(args))
+	operands = append(operands, Operand{Op: prev})
+	for i := range args {
+		ac := new(Expression)
+		*ac = args[i]
+		operands = append(operands, Operand{Op: ac})
+	}
+	*left = Expression{}
+	left.Expr = &Suffix{
+		Operator: OperatorCALL,
+		Operands: operands,
+	}
+	return nil
+}
+
+// parseSuffixField handles expr.field in the infix/suffix loop.
+func (left *Expression) parseSuffixField(p *Parser) error {
+	p.Next()
+	fieldTok, err := p.Accept(TokenIdent)
+	if err != nil {
+		return err
+	}
+	prev := new(Expression)
+	*prev = *left
+	*left = Expression{}
+	left.Expr = &Suffix{
+		Operator: OperatorFIELD,
+		Operands: []Operand{
+			{Op: prev},
+			{Op: &Reference{Identifier: Identifier(fieldTok.Text)}},
+		},
+	}
+	return nil
+}
+
+// parseInfixBinary handles binary operators in the infix/suffix loop.
+// The caller has already consumed the operator token.
+func (left *Expression) parseInfixBinary(p *Parser, op Operator) error {
+	prev := new(Expression)
+	*prev = *left
+
+	var right Expression
+	if err := right.ParseExpr(p, op.Priority()); err != nil {
+		return err
+	}
+	rightCopy := new(Expression)
+	*rightCopy = right
+
+	*left = Expression{}
+	left.Expr = &Infix{
+		Operator: op,
+		Operands: [2]Operand{
+			{Op: prev},
+			{Op: rightCopy},
+		},
+	}
+	return nil
+}
+
+// ParseExpr is the core Pratt parser for expressions. It reads tokens
+// starting from the current position and builds an Expression tree.
+//
+// The minBp (minimum binding power) parameter sets the minimum precedence
+// that subsequent operators must have; operators with a lower priority than
+// minBp cause the loop to stop and the current expression to be returned.
+//
+// The parse proceeds in two phases:
+//
+//  1. Prefix (nud) phase: dispatches on the current token to parse atomic
+//     expressions (literals, identifiers, parenthesised sub-expressions) or
+//     prefix operators (unary '-', unary '!', unary '+' as a no-op) via
+//     parsePrefix.
+//
+//  2. Infix/suffix (led) phase: loops while the next token is a postfix
+//     operator ('[' for array indexing, '(' for function calls, '.' for field
+//     access) or an infix operator. Each postfix kind is handled by its own
+//     method; binary operators are handled by parseInfixBinary.
+func (left *Expression) ParseExpr(p *Parser, minBp int) error {
+	if err := left.parsePrefix(p, minBp); err != nil {
+		return err
+	}
 
 	for {
 		tok := p.Peek()
 
-		// Array subscript: expr[index]
-		if tok.TokenKind == '[' {
-			p.Next()
-			if p.Peek().TokenKind == ']' {
-				return tok.Errorf("empty array subscript")
-			}
-			var index Expression
-			if err := index.Parse(p); err != nil {
+		switch tok.TokenKind {
+		case '[':
+			if err := left.parseSuffixIndex(p); err != nil {
 				return err
 			}
-			if _, err := p.Accept(TokenKind(']')); err != nil {
+		case '(':
+			if err := left.parseSuffixCall(p); err != nil {
 				return err
 			}
-			prev := new(Expression)
-			*prev = *left
-			indexCopy := new(Expression)
-			*indexCopy = index
-			*left = Expression{}
-			left.Expr = &Suffix{
-				Operator: OperatorINDEX,
-				Operands: []Operand{
-					{Op: prev},
-					{Op: indexCopy},
-				},
-			}
-			continue
-		}
-
-		// Function call: expr(args...)
-		if tok.TokenKind == '(' {
-			p.Next()
-			var args []Expression
-			if p.Peek().TokenKind != ')' {
-				for {
-					var arg Expression
-					if err := arg.Parse(p); err != nil {
-						return err
-					}
-					args = append(args, arg)
-					if p.Peek().TokenKind == ')' {
-						break
-					}
-					if _, err := p.Accept(TokenKind(',')); err != nil {
-						return err
-					}
-				}
-			}
-			if _, err := p.Accept(TokenKind(')')); err != nil {
+		case '.':
+			if err := left.parseSuffixField(p); err != nil {
 				return err
 			}
-			prev := new(Expression)
-			*prev = *left
-			operands := make([]Operand, 0, 1+len(args))
-			operands = append(operands, Operand{Op: prev})
-			for i := range args {
-				ac := new(Expression)
-				*ac = args[i]
-				operands = append(operands, Operand{Op: ac})
+		default:
+			op := p.PeekOperator()
+			if op == OperatorNone || op == OperatorNOT || op.Priority() < minBp {
+				return nil
 			}
-			*left = Expression{}
-			left.Expr = &Suffix{
-				Operator: OperatorCALL,
-				Operands: operands,
-			}
-			continue
-		}
-
-		// Struct field access: expr.field
-		if tok.TokenKind == '.' {
-			p.Next()
-			fieldTok, err := p.Accept(TokenIdent)
-			if err != nil {
+			p.ReadOperator()
+			if err := left.parseInfixBinary(p, op); err != nil {
 				return err
 			}
-			prev := new(Expression)
-			*prev = *left
-			*left = Expression{}
-			left.Expr = &Suffix{
-				Operator: OperatorFIELD,
-				Operands: []Operand{
-					{Op: prev},
-					{Op: &Reference{Identifier: Identifier(fieldTok.Text)}},
-				},
-			}
-			continue
-		}
-
-		op := p.PeekOperator()
-		if op == OperatorNone || op == OperatorNOT || op.Priority() < minBp {
-			break
-		}
-		p.ReadOperator()
-
-		prev := new(Expression)
-		*prev = *left
-
-		var right Expression
-		if err := right.ParseExpr(p, op.Priority()); err != nil {
-			return err
-		}
-		rightCopy := new(Expression)
-		*rightCopy = right
-
-		*left = Expression{}
-		left.Expr = &Infix{
-			Operator: op,
-			Operands: [2]Operand{
-				{Op: prev},
-				{Op: rightCopy},
-			},
 		}
 	}
-
-	return nil
 }
 
 // Parse parses an IF statement. The syntax is:
@@ -1562,6 +1619,30 @@ func (f *For) Parse(parser *Parser) error {
 		if err := f.By.Parse(parser); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// Parse parses a PRAGMA directive. The syntax is:
+//
+//	PRAGMA ident [ident ...]
+//
+// Pragmas are compiler-specific directives. PL/Z implements PRAGMA BOUNDCHECK
+// to enable runtime array bounds checking.
+func (p *Pragma) Parse(parser *Parser) error {
+	if _, err := parser.Accept(KeywordPragma); err != nil {
+		return err
+	}
+	for parser.Peek().TokenKind == TokenIdent {
+		// Stop before an identifier followed by ':' (next statement's label).
+		if parser.Have(TokenIdent, ':') {
+			break
+		}
+		tok := parser.Next()
+		p.Idents = append(p.Idents, Identifier(tok.Text))
+	}
+	if len(p.Idents) == 0 {
+		return parser.Peek().Errorf("PRAGMA requires at least one identifier")
 	}
 	return nil
 }

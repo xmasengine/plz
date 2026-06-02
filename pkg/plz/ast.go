@@ -63,6 +63,7 @@ func (c At) Command() Commander            { return c }
 func (c BankStmt) Command() Commander      { return c }
 func (c Save) Command() Commander          { return c }
 func (c Load) Command() Commander          { return c }
+func (c Pragma) Command() Commander        { return c }
 
 // Statement is a labeled or unlabeled command within a PL/Z program.
 // Each statement may carry an optional named label and exactly one
@@ -244,6 +245,14 @@ func (t Type) Size() int {
 // type, and the total is the element count times the element size.
 // Records are rounded up to the next power of two.
 func (d Declare) StorageSize() int {
+	if arr := d.Type.Array(); arr != nil {
+		elemSize := arr.ElemType.Size()
+		total := arr.Size * elemSize
+		if total == 0 {
+			total = elemSize
+		}
+		return total
+	}
 	elemSize := 1
 	if r := d.Type.Record(); r != nil {
 		elemSize = r.TotalSize()
@@ -251,11 +260,7 @@ func (d Declare) StorageSize() int {
 	} else if d.Type.Predeclared() == PredeclaredWord {
 		elemSize = 2
 	}
-	total := d.Size * elemSize
-	if total == 0 {
-		total = elemSize
-	}
-	return total
+	return elemSize
 }
 
 // nextPow2 rounds n up to the next power of two using bit-manipulation.
@@ -317,6 +322,13 @@ type Save struct {
 type Load struct {
 	Location *Expression // optional AT address in SRAM (nil = use declared AT)
 	Target   Expression  // reference to variable to load into
+}
+
+// Pragma represents a compiler pragma directive. Pragmas may be ignored
+// by conforming compilers. PL/Z implements PRAGMA BOUNDCHECK to enable
+// runtime array bounds checking.
+type Pragma struct {
+	Idents []Identifier // pragma identifiers, e.g. ["BOUNDCHECK"]
 }
 
 // Group represents a compound statement constructed from WHILE, CASE,
@@ -393,6 +405,15 @@ type Input struct {
 }
 
 func (i Input) operand() Operander { return i }
+
+// Length represents a LENGTH(identifier) expression. It evaluates to
+// the declared element count of an array, or 1 for a simple variable,
+// as a compile-time constant.
+type Length struct {
+	Identifier Identifier
+}
+
+func (l Length) operand() Operander { return l }
 
 // Data represents a DATA directive that embeds literal bytes or
 // words directly into the output at the current code position.
@@ -598,6 +619,10 @@ func (o Operand) Literal() *Literal { l, _ := o.Op.(*Literal); return l }
 // Input extracts the underlying *Input from o, or returns nil if o
 // is not a port input expression.
 func (o Operand) Input() *Input { i, _ := o.Op.(*Input); return i }
+
+// Length extracts the underlying *Length from o, or returns nil if o
+// is not a length expression.
+func (o Operand) Length() *Length { l, _ := o.Op.(*Length); return l }
 
 // Ref walks through Operand to find the innermost *Reference (if any).
 // It unwraps nested Expression operands recursively and returns nil

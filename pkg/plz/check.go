@@ -121,6 +121,8 @@ func (c *Checker) EvalConstExpr(e Expression) (int, error) {
 				return 0, fmt.Errorf("constant %q is not a number", ref.Identifier)
 			}
 			return 0, fmt.Errorf("undefined identifier %q in constant expression", ref.Identifier)
+		case op.Length() != nil:
+			return c.evalLength(op.Length())
 		default:
 			return 0, fmt.Errorf("CALL and INPUT cannot be used in constant expressions")
 		}
@@ -281,6 +283,22 @@ func (s Statement) Check(c *Checker) error {
 // Check validates a type alias definition. Define aliases are always valid,
 // so this is a no-op.
 func (s Define) Check(c *Checker) error {
+	return nil
+}
+
+// Check validates a PRAGMA directive. Unrecognized pragmas produce a
+// warning (returned as an error for now). Recognized pragmas are:
+//
+//	BOUNDCHECK — enable runtime array bounds checking
+func (s Pragma) Check(c *Checker) error {
+	for _, id := range s.Idents {
+		switch string(id) {
+		case "BOUNDCHECK":
+			// recognized, no validation needed
+		default:
+			return c.Errorf("", "unrecognized pragma %q", id)
+		}
+	}
 	return nil
 }
 
@@ -528,8 +546,15 @@ func (s Let) Check(c *Checker) error {
 					return err
 				}
 			}
+			if err := c.checkArrayBounds(r); err != nil {
+				return err
+			}
+			elemType := d.Type
+			if arr := elemType.Array(); arr != nil && len(r.Subscripts) > 0 {
+				elemType = arr.ElemType
+			}
 			for _, fname := range r.Fields {
-				rec := d.Type.Record()
+				rec := elemType.Record()
 				if rec == nil {
 					return c.Errorf("", "%q is not a record, cannot access field %q", r.Identifier, fname)
 				}
@@ -669,9 +694,50 @@ func (o Operand) Check(c *Checker) error {
 		return o.Call().Check(c)
 	case o.Input() != nil:
 		return o.Input().Check(c)
+	case o.Length() != nil:
+		return o.Length().Check(c)
 	case o.Literal() != nil:
 	}
 	return nil
+}
+
+// Check validates a LENGTH(identifier) expression. It verifies that the
+// identifier names a declared variable or DATA item and that it is not
+// an unbounded array.
+func (l Length) Check(c *Checker) error {
+	if d, ok := c.Lookup(l.Identifier); ok {
+		if arr := d.Type.Array(); arr != nil && arr.Size == 0 {
+			return c.Errorf("", "LENGTH: cannot determine length of unbounded array %s", l.Identifier)
+		}
+		return nil
+	}
+	if _, ok := c.Datas[l.Identifier]; ok {
+		return nil
+	}
+	return c.Errorf("", "LENGTH: undeclared variable or data %s", l.Identifier)
+}
+
+// evalLength returns the declared element count for a LENGTH expression.
+// For arrays, the size is stored on the Array type. For simple variables
+// (non-arrays), length is 1. For DATA items it returns the value count
+// or tile count.
+func (c *Checker) evalLength(l *Length) (int, error) {
+	if d, ok := c.Lookup(l.Identifier); ok {
+		if arr := d.Type.Array(); arr != nil {
+			if arr.Size > 0 {
+				return arr.Size, nil
+			}
+			return 0, c.Errorf("", "LENGTH: cannot determine length of unbounded array %s", l.Identifier)
+		}
+		return 1, nil
+	}
+	if data, ok := c.Datas[l.Identifier]; ok {
+		if data.Tile != nil {
+			return len(data.Tile.Tiles), nil
+		}
+		return len(data.Values), nil
+	}
+	return 0, c.Errorf("", "LENGTH: undeclared variable or data %s", l.Identifier)
 }
 
 // Check validates a prefix expression by checking its single operand.
@@ -702,6 +768,20 @@ func (s Suffix) Check(c *Checker) error {
 			return err
 		}
 	}
+	// Compile-time bounds check for array subscript expressions (e.g., x = arr[7]).
+	// The subscript is in the suffix, not the base reference, so we construct
+	// a synthetic Reference with the subscript to reuse checkArrayBounds.
+	if s.Operator == OperatorINDEX && len(s.Operands) == 2 {
+		if ref := s.Operands[0].Ref(); ref != nil {
+			if idxExpr := s.Operands[1].Expr(); idxExpr != nil {
+				synthetic := *ref
+				synthetic.Subscripts = []Expression{*idxExpr}
+				if err := c.checkArrayBounds(synthetic); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -725,6 +805,9 @@ func (r *Reference) Check(c *Checker) error {
 		if len(r.Fields) > 0 {
 			return c.Errorf("", "data %q cannot be used with field access", r.Identifier)
 		}
+		if err := c.checkArrayBounds(*r); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -737,8 +820,15 @@ func (r *Reference) Check(c *Checker) error {
 			return err
 		}
 	}
+	if err := c.checkArrayBounds(*r); err != nil {
+		return err
+	}
+	elemType := d.Type
+	if arr := elemType.Array(); arr != nil && len(r.Subscripts) > 0 {
+		elemType = arr.ElemType
+	}
 	for _, fname := range r.Fields {
-		rec := d.Type.Record()
+		rec := elemType.Record()
 		if rec == nil {
 			return c.Errorf("", "%q is not a record, cannot access field %q", r.Identifier, fname)
 		}
@@ -751,6 +841,54 @@ func (r *Reference) Check(c *Checker) error {
 		}
 		if !found {
 			return c.Errorf("", "struct %q has no field %q", r.Identifier, fname)
+		}
+	}
+	return nil
+}
+
+// checkArrayBounds checks if all constant subscript expressions in a reference
+// are within the declared array or DATA bounds. Non-constant subscripts are
+// silently skipped since they can only be checked at runtime.
+func (c *Checker) checkArrayBounds(ref Reference) error {
+	if len(ref.Subscripts) == 0 {
+		return nil
+	}
+	// Check declared variables.
+	if d, ok := c.lookup(ref.Identifier); ok {
+		arr := d.Type.Array()
+		if arr == nil || arr.Size == 0 {
+			return nil // not an array or unbounded
+		}
+		for _, sub := range ref.Subscripts {
+			v, err := c.EvalConstExpr(sub)
+			if err != nil {
+				continue
+			}
+			if v < 0 || v >= arr.Size {
+				return c.Errorf("", "index %d out of bounds for array %q (size %d)", v, ref.Identifier, arr.Size)
+			}
+		}
+		return nil
+	}
+	// Check DATA items.
+	if data, ok := c.Datas[ref.Identifier]; ok {
+		size := 0
+		if data.Tile != nil {
+			size = len(data.Tile.Tiles)
+		} else {
+			size = len(data.Values)
+		}
+		if size == 0 {
+			return nil
+		}
+		for _, sub := range ref.Subscripts {
+			v, err := c.EvalConstExpr(sub)
+			if err != nil {
+				continue
+			}
+			if v < 0 || v >= size {
+				return c.Errorf("", "index %d out of bounds for data %q (size %d)", v, ref.Identifier, size)
+			}
 		}
 	}
 	return nil
