@@ -64,6 +64,8 @@ func SMSLoadTileFromImage(img image.Image) (*SMSTile, error) {
 	}
 	tile := &SMSTile{}
 	bounds := pimg.Bounds()
+	// Have to use the bounds because subimages may not have a rectangle
+	// that ha a Min of (0,0).
 	for y := bounds.Min.Y; y < bounds.Max.Y && y-bounds.Min.Y < tileHeight; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X && x-bounds.Min.X < tileWidth; x++ {
 			col := pimg.ColorIndexAt(x, y)
