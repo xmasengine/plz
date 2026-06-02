@@ -26,6 +26,7 @@ Although PLZ is inspired by PL/M, it differs in several ways:
 - **No semicolons required**, statements end at keywords, `;` is allowed
 - **SWITCH statement** with proper OF blocks and DEFAULT handling
 - **Only one named label per statement** AT is used for locating code precisely.
+- **Labels are for GOTO** PLZ prefers to use names after a keyword, not labels to name things.
 
 ## Planned Features
 

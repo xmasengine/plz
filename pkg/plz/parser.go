@@ -238,6 +238,7 @@ func (s *Statement) Parse(parser *Parser) error {
 		err = cmd.Parse(parser)
 		s.Command = cmd
 	case KeywordData:
+		// TODO: change the stntax to DATA name in stead of label: data
 		if s.Label == nil {
 			return tok.Errorf("No label for DATA")
 		}
