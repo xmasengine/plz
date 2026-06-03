@@ -86,9 +86,12 @@ HALT, or an interrupt re-enters it:
 
 1. Save current task's SP into its TCB.
 2. Decrement all sleeping tasks' sleep counters; when one reaches 0,
-   set its state to READY.
-3. Round-robin scan starting from the next slot for the first READY
-   task with the highest priority.
+   set its state to READY only if the task is currently SLEEPING
+   (SUSPENDED tasks are not woken by expired sleep timers).
+3. Scan all 16 slots starting from the next slot. Among READY tasks,
+   pick the one with the lowest priority value (0=highest, 15=lowest).
+   If multiple have the same priority, the first encountered in scan
+   order wins (round-robin within priority level).
 4. If found, restore its SP and RET into it.
 5. If none, HALT (CPU sleeps until an interrupt re-enters the scheduler).
 
@@ -115,7 +118,7 @@ on three events:
 | Do | `DO stmts END` |
 | Case | `CASE expr [DO] { OF val stmt } [OF DEFAULT stmt] END` |
 | Procedure | `PROCEDURE name(params) type [REENTRANT] [INTERRUPT\|NMI] stmts END` |
-| Return | `RETURN [expr [, ...]]` |
+| Return | `RETURN [expr [, expr]]` |
 | Call | `CALL name(args)` |
 | Goto | `GOTO name` |
 | At | `AT literal` (set data address) |
@@ -126,7 +129,7 @@ on three events:
 | At suffix | `DECLARE name type AT literal` (declare at address) |
 | Output | `OUTPUT port expr` |
 | Input | `INPUT(port)` (as expression) |
-| Data | `name: DATA vals` |
+| Data | `DATA name vals` |
 | Data Tile | `name: DATA TILE \`...\`` (8x8 SMS tile from backtick string, chars: `.`=pal0, `0-9`=pal0-9, `A-F`=pal10-15) |
 | Constant | `CONSTANT name [=] val` |
 | Define | `DEFINE name type` (type alias) |
@@ -141,6 +144,7 @@ on three events:
 | Save | `SAVE [AT expr] expr` (save to battery-backed RAM) |
 | Load | `LOAD [AT expr] expr` (load from battery-backed RAM) |
 | Include | `INCLUDE "filename"` |
+| Pragma | `PRAGMA BOUNDCHECK` / `PRAGMA NOBOUNDCHECK` (toggle runtime array bounds checking) |
 
 ## Operators (precedence low→high)
 

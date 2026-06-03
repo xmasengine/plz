@@ -555,7 +555,7 @@ func TestGenBank(t *testing.T) {
 }
 
 func TestGenAtBank(t *testing.T) {
-	asm := genTest(t, "AT BANK 2\nfont: DATA 1, 2, 3")
+	asm := genTest(t, "AT BANK 2\nDATA font 1, 2, 3")
 	if !strings.Contains(asm, "bank 2") {
 		t.Errorf("expected bank 2 directive in output:\n%s", asm)
 	}
@@ -588,5 +588,183 @@ func TestGenBoundCheckNoPragma(t *testing.T) {
 	asm := genTest(t, "DECLARE arr ARRAY [5] BYTE\nDECLARE i WORD\nLET x = arr[i]")
 	if strings.Contains(asm, "_plz_bounds_error") {
 		t.Errorf("unexpected bounds check code without PRAGMA BOUNDCHECK:\n%s", asm)
+	}
+}
+
+func TestGenHalt(t *testing.T) {
+	asm := genTest(t, "HALT")
+	if !strings.Contains(asm, "halt") {
+		t.Errorf("expected halt, got:\n%s", asm)
+	}
+}
+
+func TestGenEnable(t *testing.T) {
+	asm := genTest(t, "ENABLE")
+	if !strings.Contains(asm, "ei") {
+		t.Errorf("expected ei, got:\n%s", asm)
+	}
+}
+
+func TestGenDisable(t *testing.T) {
+	asm := genTest(t, "DISABLE")
+	if !strings.Contains(asm, "di") {
+		t.Errorf("expected di, got:\n%s", asm)
+	}
+}
+
+func TestGenGoTo(t *testing.T) {
+	asm := genTest(t, "GOTO mylabel\nmylabel: HALT")
+	if !strings.Contains(asm, "jp mylabel") {
+		t.Errorf("expected jp mylabel, got:\n%s", asm)
+	}
+}
+
+func TestGenOutput(t *testing.T) {
+	asm := genTest(t, "OUTPUT 0 42")
+	if !strings.Contains(asm, "out") {
+		t.Errorf("expected out, got:\n%s", asm)
+	}
+}
+
+func TestGenOutputWord(t *testing.T) {
+	asm := genTest(t, "OUTPUT WORD 1 0x1234")
+	if !strings.Contains(asm, "out") {
+		t.Errorf("expected out, got:\n%s", asm)
+	}
+}
+
+func TestGenSleep(t *testing.T) {
+	asm := genTest(t, "SLEEP 10")
+	if !strings.Contains(asm, "_plz_scheduler") {
+		t.Errorf("expected scheduler call, got:\n%s", asm)
+	}
+}
+
+func TestGenYield(t *testing.T) {
+	asm := genTest(t, "YIELD")
+	if !strings.Contains(asm, "_plz_scheduler") {
+		t.Errorf("expected scheduler call, got:\n%s", asm)
+	}
+}
+
+func TestGenConstant(t *testing.T) {
+	asm := genTest(t, "CONSTANT FOO = 42\nLET x = FOO")
+	if !strings.Contains(asm, "ld hl, 42") {
+		t.Errorf("expected ld hl, 42, got:\n%s", asm)
+	}
+}
+
+func TestGenData(t *testing.T) {
+	asm := genTest(t, "DATA myarr 1, 2, 3")
+	if !strings.Contains(asm, "db") {
+		t.Errorf("expected db, got:\n%s", asm)
+	}
+}
+
+func TestGenPrefixNot(t *testing.T) {
+	asm := genTest(t, "DECLARE x BYTE\nLET y = !x")
+	if !strings.Contains(asm, "ld hl, 0") {
+		t.Errorf("expected NOT pattern, got:\n%s", asm)
+	}
+}
+
+func TestGenShiftLeftConst(t *testing.T) {
+	asm := genTest(t, "LET x = 1 << 3")
+	if !strings.Contains(asm, "add hl, hl") {
+		t.Errorf("expected shift left pattern, got:\n%s", asm)
+	}
+}
+
+func TestGenShiftRightConst(t *testing.T) {
+	asm := genTest(t, "LET x = 16 >> 2")
+	if !strings.Contains(asm, "srl h") {
+		t.Errorf("expected shift right pattern, got:\n%s", asm)
+	}
+}
+
+func TestGenCallExpr(t *testing.T) {
+	asm := genTest(t, "PROCEDURE foo() WORD\nRETURN 42\nEND\nPROCEDURE bar\nDECLARE x WORD\nLET x = foo()\nRETURN\nEND")
+	if !strings.Contains(asm, "call _plz_foo") {
+		t.Errorf("expected call _plz_foo, got:\n%s", asm)
+	}
+}
+
+func TestGenInterruptStmt(t *testing.T) {
+	asm := genTest(t, "PROCEDURE my_isr\nEND\nINTERRUPT my_isr")
+	if !strings.Contains(asm, "org 0x0038") {
+		t.Errorf("expected interrupt vector, got:\n%s", asm)
+	}
+	if !strings.Contains(asm, "jp _plz_my_isr") {
+		t.Errorf("expected jp _plz_my_isr, got:\n%s", asm)
+	}
+}
+
+func TestGenNMIStmt(t *testing.T) {
+	asm := genTest(t, "PROCEDURE my_nmi\nEND\nNMI my_nmi")
+	if !strings.Contains(asm, "org 0x0066") {
+		t.Errorf("expected NMI vector, got:\n%s", asm)
+	}
+	if !strings.Contains(asm, "jp _plz_my_nmi") {
+		t.Errorf("expected jp _plz_my_nmi, got:\n%s", asm)
+	}
+}
+
+func TestGenSave(t *testing.T) {
+	asm := genTest(t, "DECLARE var BYTE AT 0xC000\nSAVE AT 0xE000 var")
+	if !strings.Contains(asm, "ldir") {
+		t.Errorf("expected ldir, got:\n%s", asm)
+	}
+	if !strings.Contains(asm, "ld de, 0xe000") {
+		t.Errorf("expected dest address 0xe000, got:\n%s", asm)
+	}
+}
+
+func TestGenLoad(t *testing.T) {
+	asm := genTest(t, "DECLARE var BYTE AT 0xC000\nLOAD AT 0xE000 var")
+	if !strings.Contains(asm, "ldir") {
+		t.Errorf("expected ldir, got:\n%s", asm)
+	}
+	if !strings.Contains(asm, "ld hl, 0xe000") {
+		t.Errorf("expected src address 0xe000, got:\n%s", asm)
+	}
+}
+
+func TestGenSuspend(t *testing.T) {
+	asm := genTest(t, "TASK t\nYIELD\nEND\nSUSPEND t")
+	if !strings.Contains(asm, "ld a, 1") {
+		t.Errorf("expected suspend state, got:\n%s", asm)
+	}
+}
+
+func TestGenResume(t *testing.T) {
+	asm := genTest(t, "TASK t\nYIELD\nEND\nRESUME t")
+	if !strings.Contains(asm, "xor a") {
+		t.Errorf("expected resume clear, got:\n%s", asm)
+	}
+}
+
+func TestGenDataTile(t *testing.T) {
+	asm := genTest(t, "DATA myfont TILE\n"+
+		"`\n"+
+		"........\n"+
+		"...FF...\n"+
+		"........\n"+
+		"`\n")
+	if !strings.Contains(asm, "db ") {
+		t.Errorf("expected tile data bytes, got:\n%s", asm)
+	}
+}
+
+func TestGenCase(t *testing.T) {
+	asm := genTest(t, "DECLARE x BYTE\nCASE x OF 1 LET y = 2 OF 3 LET y = 4 END")
+	if !strings.Contains(asm, "_case") {
+		t.Errorf("expected case code, got:\n%s", asm)
+	}
+}
+
+func TestGenConstantGen(t *testing.T) {
+	asm := genTest(t, "CONSTANT FOO = 42")
+	if !strings.Contains(asm, "const FOO = 42") {
+		t.Errorf("expected const FOO = 42, got:\n%s", asm)
 	}
 }

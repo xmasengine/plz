@@ -1,8 +1,7 @@
 INCLUDE "libplz.plz"
 
 // A simple checkerboard tile pattern (2 tiles, 32 bytes each)
-tiles: DATA
-  0xFF, 0x81, 0x81, 0xFF, 0x81, 0x81, 0xFF, 0x81,
+DATA tiles 0xFF, 0x81, 0x81, 0xFF, 0x81, 0x81, 0xFF, 0x81,
   0x81, 0xFF, 0x81, 0x81, 0xFF, 0x81, 0x81, 0xFF,
   0xFF, 0x81, 0x81, 0xFF, 0x81, 0x81, 0xFF, 0x81,
   0x81, 0xFF, 0x81, 0x81, 0xFF, 0x81, 0x81, 0xFF,
@@ -14,8 +13,7 @@ tiles: DATA
 INTERRUPT int_vsync // install the interrupt handler.
 
 
-font: DATA
-	0b00000000,0b00000000,0b00000000,0b00000000,
+DATA font 0b00000000,0b00000000,0b00000000,0b00000000,
 	0b00011000,0b00011000,0b00011000,0b00011000,
 	0b00100100,0b00100100,0b00100100,0b00100100,
 	0b01000010,0b01000010,0b01000010,0b01000010,
@@ -24,7 +22,7 @@ font: DATA
 	0b01000010,0b01000010,0b01000010,0b01000010,
 	0b00000000,0b00000000,0b00000000,0b00000000
 
-font2: DATA TILE
+DATA font2 TILE
 `........
  ...FF...
  ..F..F..
@@ -35,7 +33,7 @@ font2: DATA TILE
  ........
 `
 
-church_tiles: DATA TILE LOAD "libplz_test.png"
+DATA church_tiles TILE LOAD "libplz_test.png"
 
 start:
   DISABLE

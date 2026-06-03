@@ -88,10 +88,12 @@ type Output struct {
 	IsWord bool // if true, writes low byte then high byte (WORD output)
 }
 
-// Let represents an assignment statement (LET) that stores a value into
-// a variable, array element, or record field.
+// Let represents an assignment statement (LET) that stores one or two values
+// into variables, array elements, or record fields. The second target captures
+// the DE return value from a multi-value CALL.
 type Let struct {
-	Reference
+	Reference // first target (HL return value)
+	Target2   *Reference // optional second target (DE return value)
 	Expression
 }
 

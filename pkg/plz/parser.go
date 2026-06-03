@@ -238,11 +238,7 @@ func (s *Statement) Parse(parser *Parser) error {
 		err = cmd.Parse(parser)
 		s.Command = cmd
 	case KeywordData:
-		// TODO: change the stntax to DATA name in stead of label: data
-		if s.Label == nil {
-			return tok.Errorf("No label for DATA")
-		}
-		cmd := Data{Name: s.Label.Name}
+		cmd := Data{}
 		err = cmd.Parse(parser)
 		s.Command = cmd
 	case KeywordDeclare:
@@ -501,6 +497,11 @@ func (g *Data) Parse(parser *Parser) error {
 	if err != nil {
 		return nil
 	}
+	nameTok, err := parser.Accept(TokenIdent)
+	if err != nil {
+		return err
+	}
+	g.Name = nameTok.Text
 	for {
 		tok := parser.Peek()
 		switch tok.TokenKind {
@@ -963,6 +964,13 @@ func (g *Let) Parse(parser *Parser) error {
 	err = g.Reference.Parse(parser)
 	if err != nil {
 		return err
+	}
+	// Optional second target for multi-value return: LET a, b = foo()
+	if parser.Skip(TokenKind(',')) != nil {
+		g.Target2 = &Reference{}
+		if err := g.Target2.Parse(parser); err != nil {
+			return err
+		}
 	}
 	_, err = parser.Accept(TokenKind('='))
 	if err != nil {

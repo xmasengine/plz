@@ -947,7 +947,7 @@ PROCEDURE play_song(song DATA)
   END
 END
 
-my_song: DATA 0x80, 0x00, 1, 0, 8, 0x40, 0x01, 1, 0, 8, 0, 0, 0, 0, 0xFF
+DATA my_song 0x80, 0x00, 1, 0, 8, 0x40, 0x01, 1, 0, 8, 0, 0, 0, 0, 0xFF
 
 TASK music_test PRIORITY 4
   CALL psg_silence()
@@ -1021,7 +1021,7 @@ HALT`)
 
 func TestIntegrationSaveWithData(t *testing.T) {
 	io := compileAndRun(t, `
-my_data: DATA 10, 20, 30
+DATA my_data 10, 20, 30
 DECLARE dst ARRAY [3] BYTE AT 0x8000
 SAVE AT 0x8000 my_data
 OUTPUT 0 dst[0]
@@ -1134,7 +1134,7 @@ HALT`)
 
 func TestIntegrationLoadWithData(t *testing.T) {
 	io := compileAndRun(t, `
-my_data: DATA 100, 200, 128, 255
+DATA my_data 100, 200, 128, 255
 DECLARE buf ARRAY [4] BYTE
 SAVE AT 0x8000 my_data
 LOAD AT 0x8000 buf
@@ -1162,7 +1162,7 @@ HALT`)
 
 func TestIntegrationLengthData(t *testing.T) {
 	io := compileAndRun(t, `
-my_data: DATA 10, 20, 30
+DATA my_data 10, 20, 30
 DECLARE n BYTE
 LET n = LENGTH(my_data)
 OUTPUT 0 n
@@ -1176,7 +1176,7 @@ HALT`)
 }
 
 func TestIntegrationLengthDataTile(t *testing.T) {
-	src := "tiles: DATA TILE `..XX..XX`\n" +
+	src := "DATA tiles TILE `..XX..XX`\n" +
 		"DECLARE n BYTE\n" +
 		"LET n = LENGTH(tiles)\n" +
 		"OUTPUT 0 n\n" +
@@ -1190,10 +1190,243 @@ func TestIntegrationLengthDataTile(t *testing.T) {
 	}
 }
 
+func TestIntegrationMul(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 6 * 7
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 42 {
+		t.Errorf("expected 42, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationDiv(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 100 / 7
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 14 {
+		t.Errorf("expected 14, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationMod(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 100 % 7
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 2 {
+		t.Errorf("expected 2, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationShiftLeft(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 3 << 2
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 12 {
+		t.Errorf("expected 12, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationShiftRight(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 48 >> 3
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 6 {
+		t.Errorf("expected 6, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationBitAnd(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 7 & 3
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 3 {
+		t.Errorf("expected 3, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationBitOr(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 4 | 3
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 7 {
+		t.Errorf("expected 7, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationBitXor(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 7 ^ 3
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 4 {
+		t.Errorf("expected 4, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationNotEqual(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 5 != 3
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 1 {
+		t.Errorf("expected 1, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationLt(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 3 < 5
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 1 {
+		t.Errorf("expected 1, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationGte(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 5 >= 5
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 1 {
+		t.Errorf("expected 1, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationLte(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 5 <= 5
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 1 {
+		t.Errorf("expected 1, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationUnaryNeg(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 0 - 5
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	// -5 = 0xFFFB, low byte = 0xFB = 251
+	if io.OutBytes[0][0] != 251 {
+		t.Errorf("expected 251 (low byte of -5), got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationGoTo(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 10
+GOTO skip
+LET x = 99
+skip: OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 10 {
+		t.Errorf("expected 10, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationGroupDo(t *testing.T) {
+	io := compileAndRun(t, `DECLARE x WORD
+LET x = 0
+DO
+  LET x = x + 1
+END
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 1 {
+		t.Errorf("expected 1, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationConstant(t *testing.T) {
+	io := compileAndRun(t, `CONSTANT answer = 42
+DECLARE x WORD
+LET x = answer
+OUTPUT 0 x
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 42 {
+		t.Errorf("expected 42, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationYield(t *testing.T) {
+	io := compileAndRun(t, `
+TASK demo PRIORITY 4
+  DECLARE x WORD
+  LET x = 1
+  YIELD
+  LET x = x + 1
+  OUTPUT 0 x
+  HALT
+END`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 2 {
+		t.Errorf("expected 2, got %d", io.OutBytes[0][0])
+	}
+}
+
 func TestIntegrationDataIndexBoundCheck(t *testing.T) {
 	io := compileAndRun(t, `
 PRAGMA BOUNDCHECK
-my_data: DATA 10, 20, 30
+DATA my_data 10, 20, 30
 OUTPUT 0 my_data[0]
 OUTPUT 0 my_data[1]
 OUTPUT 0 my_data[2]

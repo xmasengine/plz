@@ -6,32 +6,40 @@ import (
 	"testing"
 )
 
-func parseLetExpr(src string) (*Expression, error) {
+func parseExpr(t *testing.T, src string) *Expression {
+	t.Helper()
 	tokens, err := Scan(strings.NewReader(src))
 	if err != nil {
-		return nil, err
+		t.Fatalf("scan: %v", err)
 	}
-	// We need to consume the expression from the token stream.
-	// Wrap it in a LET statement so the scanner produces the right tokens,
-	// then manually skip past "LET x =" to the expression.
 	p := NewParser(tokens)
 	var s Statement
-	err = s.Parse(p)
+	if err := s.Parse(p); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	let, ok := s.Command.(Let)
+	if !ok {
+		t.Fatal("expected Let statement")
+	}
+	return &let.Expression
+}
+
+func parseProg(t *testing.T, src string) *Program {
+	t.Helper()
+	tokens, err := Scan(strings.NewReader(src))
 	if err != nil {
-		return nil, err
+		t.Fatalf("scan: %v", err)
 	}
-	if let, ok := s.Command.(Let); !ok {
-		panic("expected Let statement")
-	} else {
-		return &let.Expression, nil
+	p := NewParser(tokens)
+	prog := &Program{}
+	if err := prog.Parse(p); err != nil {
+		t.Fatalf("parse: %v", err)
 	}
+	return prog
 }
 
 func TestParseSimpleNumber(t *testing.T) {
-	expr, err := parseLetExpr("LET x = 42")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = 42")
 	if expr.Operand() == nil || expr.Operand().Literal() == nil || expr.Operand().Literal().Number() == nil {
 		t.Fatal("expected literal number")
 	}
@@ -41,10 +49,7 @@ func TestParseSimpleNumber(t *testing.T) {
 }
 
 func TestParseIdentifier(t *testing.T) {
-	expr, err := parseLetExpr("LET x = foo")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = foo")
 	if expr.Operand() == nil || expr.Ref() == nil {
 		t.Fatal("expected reference")
 	}
@@ -54,10 +59,7 @@ func TestParseIdentifier(t *testing.T) {
 }
 
 func TestParseBinaryExpr(t *testing.T) {
-	expr, err := parseLetExpr("LET x = 1 + 2")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = 1 + 2")
 	if expr.Infix() == nil {
 		t.Fatal("expected Infix expression")
 	}
@@ -77,10 +79,7 @@ func TestParseBinaryExpr(t *testing.T) {
 }
 
 func TestParseNested(t *testing.T) {
-	expr, err := parseLetExpr("LET x = 1 + 2 * 3")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = 1 + 2 * 3")
 	// Top is ADD (since + has lower priority than *)
 	if expr.Infix() == nil {
 		t.Fatal("expected Infix")
@@ -99,10 +98,7 @@ func TestParseNested(t *testing.T) {
 }
 
 func TestParseParens(t *testing.T) {
-	expr, err := parseLetExpr("LET x = (1 + 2) * 3")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = (1 + 2) * 3")
 	// Top is MUL
 	if expr.Infix() == nil || expr.Infix().Operator != OperatorMUL {
 		t.Fatalf("expected MUL at top, got %c", expr.Infix().Operator)
@@ -115,10 +111,7 @@ func TestParseParens(t *testing.T) {
 }
 
 func TestParseUnaryNeg(t *testing.T) {
-	expr, err := parseLetExpr("LET x = -5")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = -5")
 	if expr.Prefix() == nil {
 		t.Fatal("expected Prefix expression")
 	}
@@ -128,50 +121,35 @@ func TestParseUnaryNeg(t *testing.T) {
 }
 
 func TestParseUnaryNot(t *testing.T) {
-	expr, err := parseLetExpr("LET x = !flag")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = !flag")
 	if expr.Prefix() == nil || expr.Prefix().Operator != OperatorNOT {
 		t.Errorf("expected NOT, got %v", expr.Prefix().Operator)
 	}
 }
 
 func TestParseComparison(t *testing.T) {
-	expr, err := parseLetExpr("LET x = a > b")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = a > b")
 	if expr.Infix() == nil || expr.Infix().Operator != OperatorGT {
 		t.Errorf("expected GT, got %v", expr.Infix().Operator)
 	}
 }
 
 func TestParseEquality(t *testing.T) {
-	expr, err := parseLetExpr("LET x = a == b")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = a == b")
 	if expr.Infix() == nil || expr.Infix().Operator != OperatorEQU {
 		t.Errorf("expected EQU, got %v", expr.Infix().Operator)
 	}
 }
 
 func TestParseNotEqual(t *testing.T) {
-	expr, err := parseLetExpr("LET x = a != b")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = a != b")
 	if expr.Infix() == nil || expr.Infix().Operator != OperatorNEQ {
 		t.Errorf("expected NEQ, got %v", expr.Infix().Operator)
 	}
 }
 
 func TestParseSubscript(t *testing.T) {
-	expr, err := parseLetExpr("LET x = arr[i]")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = arr[i]")
 	if expr.Suffix() == nil || expr.Suffix().Operator != OperatorINDEX {
 		t.Fatalf("expected INDEX suffix, got %v", expr.Suffix())
 	}
@@ -197,10 +175,7 @@ func TestParseSubscript(t *testing.T) {
 }
 
 func TestParseSubscriptExpr(t *testing.T) {
-	expr, err := parseLetExpr("LET x = arr[i + 1]")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = arr[i + 1]")
 	if expr.Suffix() == nil || expr.Suffix().Operator != OperatorINDEX {
 		t.Fatalf("expected INDEX suffix")
 	}
@@ -215,10 +190,7 @@ func TestParseSubscriptExpr(t *testing.T) {
 }
 
 func TestParseFuncCall(t *testing.T) {
-	expr, err := parseLetExpr("LET x = foo(a, b)")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = foo(a, b)")
 	if expr.Suffix() == nil || expr.Suffix().Operator != OperatorCALL {
 		t.Fatalf("expected CALL suffix, got %v", expr.Suffix())
 	}
@@ -236,10 +208,7 @@ func TestParseFuncCall(t *testing.T) {
 }
 
 func TestParseFuncCallNoArgs(t *testing.T) {
-	expr, err := parseLetExpr("LET x = foo()")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = foo()")
 	if expr.Suffix() == nil || expr.Suffix().Operator != OperatorCALL {
 		t.Fatalf("expected CALL suffix")
 	}
@@ -249,10 +218,7 @@ func TestParseFuncCallNoArgs(t *testing.T) {
 }
 
 func TestParseChainedSubscript(t *testing.T) {
-	expr, err := parseLetExpr("LET x = a[i][j]")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = a[i][j]")
 	// Outer is INDEX with a[i] as first operand
 	if expr.Suffix() == nil || expr.Suffix().Operator != OperatorINDEX {
 		t.Fatalf("expected INDEX suffix")
@@ -265,10 +231,7 @@ func TestParseChainedSubscript(t *testing.T) {
 }
 
 func TestParseCallThenSubscript(t *testing.T) {
-	expr, err := parseLetExpr("LET x = f(a)[i]")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	expr := parseExpr(t, "LET x = f(a)[i]")
 	// Outer is INDEX; first operand is CALL
 	if expr.Suffix() == nil || expr.Suffix().Operator != OperatorINDEX {
 		t.Fatalf("expected INDEX suffix")
@@ -279,35 +242,26 @@ func TestParseCallThenSubscript(t *testing.T) {
 	}
 }
 
-type letResult struct {
-	Let
-	err error
-}
-
-func parseLetStmt(src string) letResult {
+func parseLetStmt(t *testing.T, src string) Let {
+	t.Helper()
 	tokens, err := Scan(strings.NewReader(src))
 	if err != nil {
-		return letResult{err: err}
+		t.Fatalf("scan: %v", err)
 	}
 	p := NewParser(tokens)
 	var s Statement
-	err = s.Parse(p)
-	if err != nil {
-		return letResult{err: err}
+	if err := s.Parse(p); err != nil {
+		t.Fatalf("parse: %v", err)
 	}
-
-	if let, ok := s.Command.(Let); !ok {
-		return letResult{err: Error{Message: "expected Let statement"}}
-	} else {
-		return letResult{Let: let}
+	let, ok := s.Command.(Let)
+	if !ok {
+		t.Fatal("expected Let statement")
 	}
+	return let
 }
 
 func TestLetSimpleVar(t *testing.T) {
-	r := parseLetStmt("LET x = 42")
-	if r.err != nil {
-		t.Fatalf("unexpected error: %v", r.err)
-	}
+	r := parseLetStmt(t, "LET x = 42")
 	if r.Identifier != Identifier("x") {
 		t.Errorf("expected x, got %s", r.Identifier)
 	}
@@ -317,10 +271,7 @@ func TestLetSimpleVar(t *testing.T) {
 }
 
 func TestLetArraySet(t *testing.T) {
-	r := parseLetStmt("LET arr[i] = 5")
-	if r.err != nil {
-		t.Fatalf("unexpected error: %v", r.err)
-	}
+	r := parseLetStmt(t, "LET arr[i] = 5")
 	if r.Identifier != Identifier("arr") {
 		t.Errorf("expected arr, got %s", r.Identifier)
 	}
@@ -337,10 +288,7 @@ func TestLetArraySet(t *testing.T) {
 }
 
 func TestLetArraySetExprIndex(t *testing.T) {
-	r := parseLetStmt("LET arr[i + 1] = x")
-	if r.err != nil {
-		t.Fatalf("unexpected error: %v", r.err)
-	}
+	r := parseLetStmt(t, "LET arr[i + 1] = x")
 	if len(r.Subscripts) != 1 {
 		t.Fatalf("expected 1 subscript, got %d", len(r.Subscripts))
 	}
@@ -351,10 +299,7 @@ func TestLetArraySetExprIndex(t *testing.T) {
 }
 
 func TestLetArraySetChained(t *testing.T) {
-	r := parseLetStmt("LET arr[i][j] = 42")
-	if r.err != nil {
-		t.Fatalf("unexpected error: %v", r.err)
-	}
+	r := parseLetStmt(t, "LET arr[i][j] = 42")
 	if r.Identifier != Identifier("arr") {
 		t.Errorf("expected arr, got %s", r.Identifier)
 	}
@@ -364,10 +309,7 @@ func TestLetArraySetChained(t *testing.T) {
 }
 
 func TestLetArraySetRHSWithSubscript(t *testing.T) {
-	r := parseLetStmt("LET arr[i] = other[j]")
-	if r.err != nil {
-		t.Fatalf("unexpected error: %v", r.err)
-	}
+	r := parseLetStmt(t, "LET arr[i] = other[j]")
 	if len(r.Subscripts) != 1 {
 		t.Fatalf("expected 1 subscript on LHS, got %d", len(r.Subscripts))
 	}
@@ -377,23 +319,23 @@ func TestLetArraySetRHSWithSubscript(t *testing.T) {
 	}
 }
 
-// parseStmt parses a full statement (IF, GROUP, etc.)
-func parseStmt(src string) (Statement, error) {
+func parseStmt(t *testing.T, src string) Statement {
+	t.Helper()
 	tokens, err := Scan(strings.NewReader(src))
 	if err != nil {
-		return Statement{}, err
+		t.Fatalf("scan: %v", err)
 	}
 	p := NewParser(tokens)
 	var s Statement
-	err = s.Parse(p)
-	return s, err
+	if err := s.Parse(p); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	return s
 }
 
 func parseStatementExpect[C Commander](t *testing.T, src string) C {
-	s, err := parseStmt(src)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	t.Helper()
+	s := parseStmt(t, src)
 	com, ok := s.Command.(C)
 	if !ok {
 		t.Fatalf("expected %T in statement\n", com)
@@ -434,14 +376,7 @@ func TestParseIfThenElse(t *testing.T) {
 }
 
 func TestParseGroupDo(t *testing.T) {
-	s, err := parseStmt("DO LET x = 1 END")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	sGroup, ok := s.Command.(Group)
-	if !ok {
-		t.Fatal("expected Group")
-	}
+	sGroup := parseStatementExpect[Group](t, "DO LET x = 1 END")
 	if sGroup.While != nil || sGroup.For != nil || sGroup.Case != nil {
 		t.Fatal("expected bare DO group")
 	}
@@ -451,15 +386,7 @@ func TestParseGroupDo(t *testing.T) {
 }
 
 func TestParseGroupWhile(t *testing.T) {
-	s, err := parseStmt("WHILE a DO LET x = 1 END")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	sGroup, ok := s.Command.(Group)
-	if !ok {
-		t.Fatal("expected Group")
-	}
+	sGroup := parseStatementExpect[Group](t, "WHILE a DO LET x = 1 END")
 	if sGroup.While == nil {
 		t.Fatal("expected While")
 	}
@@ -469,16 +396,7 @@ func TestParseGroupWhile(t *testing.T) {
 }
 
 func TestParseGroupFor(t *testing.T) {
-	s, err := parseStmt("FOR i = 1 TO 10 DO LET x = i END")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	sGroup, ok := s.Command.(Group)
-	if !ok {
-		t.Fatal("expected Group")
-	}
-
+	sGroup := parseStatementExpect[Group](t, "FOR i = 1 TO 10 DO LET x = i END")
 	if sGroup.For == nil {
 		t.Fatal("expected For")
 	}
@@ -491,16 +409,7 @@ func TestParseGroupFor(t *testing.T) {
 }
 
 func TestParseGroupForBy(t *testing.T) {
-	s, err := parseStmt("FOR i = 1 TO 10 BY 2 DO LET x = i END")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	sGroup, ok := s.Command.(Group)
-	if !ok {
-		t.Fatal("expected Group")
-	}
-
+	sGroup := parseStatementExpect[Group](t, "FOR i = 1 TO 10 BY 2 DO LET x = i END")
 	if sGroup.For == nil {
 		t.Fatal("expected For")
 	}
@@ -511,21 +420,7 @@ func TestParseGroupForBy(t *testing.T) {
 }
 
 func TestParseArrayDeclareUnbounded(t *testing.T) {
-	tokens, err := Scan(strings.NewReader("DECLARE arr ARRAY WORD"))
-	if err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	var s Statement
-	p := NewParser(tokens)
-	if err := s.Parse(p); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-
-	sDeclare, ok := s.Command.(Declare)
-	if !ok {
-		t.Fatal("expected Declare statement")
-	}
-
+	sDeclare := parseStatementExpect[Declare](t, "DECLARE arr ARRAY WORD")
 	arr := sDeclare.Type.Array()
 	if arr == nil {
 		t.Fatal("expected array type")
@@ -539,20 +434,7 @@ func TestParseArrayDeclareUnbounded(t *testing.T) {
 }
 
 func TestParseArrayDeclareFixed(t *testing.T) {
-	tokens, err := Scan(strings.NewReader("DECLARE arr ARRAY [10] BYTE"))
-	if err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	var s Statement
-	p := NewParser(tokens)
-	if err := s.Parse(p); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	sDeclare, ok := s.Command.(Declare)
-	if !ok {
-		t.Fatal("expected Declare statement")
-	}
-
+	sDeclare := parseStatementExpect[Declare](t, "DECLARE arr ARRAY [10] BYTE")
 	arr := sDeclare.Type.Array()
 	if arr == nil {
 		t.Fatal("expected array type")
@@ -566,20 +448,7 @@ func TestParseArrayDeclareFixed(t *testing.T) {
 }
 
 func TestParseArrayDeclareMultiDim(t *testing.T) {
-	tokens, err := Scan(strings.NewReader("DECLARE arr ARRAY [6] WORD"))
-	if err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	var s Statement
-	p := NewParser(tokens)
-	if err := s.Parse(p); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-
-	sDeclare, ok := s.Command.(Declare)
-	if !ok {
-		t.Fatal("expected Declare statement")
-	}
+	sDeclare := parseStatementExpect[Declare](t, "DECLARE arr ARRAY [6] WORD")
 	arr := sDeclare.Type.Array()
 	if arr == nil {
 		t.Fatal("expected array type")
@@ -590,39 +459,14 @@ func TestParseArrayDeclareMultiDim(t *testing.T) {
 }
 
 func TestParseProcBasic(t *testing.T) {
-	tokens, err := Scan(strings.NewReader("PROCEDURE foo\nRETURN\nEND"))
-	if err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	var s Statement
-	p := NewParser(tokens)
-	if err := s.Parse(p); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-
-	sProcedure, ok := s.Command.(Procedure)
-	if !ok {
-		t.Fatal("expected Procedure statement")
-	}
+	sProcedure := parseStatementExpect[Procedure](t, "PROCEDURE foo\nRETURN\nEND")
 	if sProcedure.Name.Name != "foo" {
 		t.Errorf("expected name foo, got %s", sProcedure.Name.Name)
 	}
 }
 
 func TestParseProcParams(t *testing.T) {
-	tokens, err := Scan(strings.NewReader("PROCEDURE add (x WORD, y WORD) WORD\nRETURN x + y\nEND"))
-	if err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	var s Statement
-	p := NewParser(tokens)
-	if err := s.Parse(p); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	sProcedure, ok := s.Command.(Procedure)
-	if !ok {
-		t.Fatal("expected Procedure statement")
-	}
+	sProcedure := parseStatementExpect[Procedure](t, "PROCEDURE add (x WORD, y WORD) WORD\nRETURN x + y\nEND")
 	if len(sProcedure.Parameters) != 2 {
 		t.Errorf("expected 2 params, got %d", len(sProcedure.Parameters))
 	}
@@ -632,19 +476,7 @@ func TestParseProcParams(t *testing.T) {
 }
 
 func TestParseProcReentrant(t *testing.T) {
-	tokens, err := Scan(strings.NewReader("PROCEDURE foo (a WORD, b WORD, c WORD) WORD REENTRANT RETURN a END"))
-	if err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	var s Statement
-	p := NewParser(tokens)
-	if err := s.Parse(p); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	sProcedure, ok := s.Command.(Procedure)
-	if !ok {
-		t.Fatal("expected Procedure statement")
-	}
+	sProcedure := parseStatementExpect[Procedure](t, "PROCEDURE foo (a WORD, b WORD, c WORD) WORD REENTRANT RETURN a END")
 	if !sProcedure.Reentrant {
 		t.Error("expected REENTRANT")
 	}
@@ -654,21 +486,7 @@ func TestParseProcReentrant(t *testing.T) {
 }
 
 func TestParseCallWithArgs(t *testing.T) {
-	tokens, err := Scan(strings.NewReader("CALL foo(1, 2)"))
-	if err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	var s Statement
-	p := NewParser(tokens)
-	if err := s.Parse(p); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-
-	sCall, ok := s.Command.(Call)
-	if !ok {
-		t.Fatal("expected Call statement")
-	}
-
+	sCall := parseStatementExpect[Call](t, "CALL foo(1, 2)")
 	if string(sCall.Identifier) != "foo" {
 		t.Errorf("expected name foo, got %s", string(sCall.Identifier))
 	}
@@ -837,6 +655,152 @@ func TestInclude(t *testing.T) {
 		}
 	}
 */
+
+func TestParseHalt(t *testing.T) {
+	parseStatementExpect[Halt](t, "HALT")
+}
+
+func TestParseEnable(t *testing.T) {
+	parseStatementExpect[Enable](t, "ENABLE")
+}
+
+func TestParseDisable(t *testing.T) {
+	parseStatementExpect[Disable](t, "DISABLE")
+}
+
+func TestParseGoTo(t *testing.T) {
+	s := parseStatementExpect[GoTo](t, "GOTO loop")
+	if s.Name != "loop" {
+		t.Errorf("expected loop, got %s", s.Name)
+	}
+}
+
+func TestParseSuspend(t *testing.T) {
+	s := parseStatementExpect[Suspend](t, "SUSPEND foo")
+	if s.Name != Identifier("foo") {
+		t.Errorf("expected foo, got %s", s.Name)
+	}
+}
+
+func TestParseResume(t *testing.T) {
+	s := parseStatementExpect[Resume](t, "RESUME foo")
+	if s.Name != Identifier("foo") {
+		t.Errorf("expected foo, got %s", s.Name)
+	}
+}
+
+func TestParseSleep(t *testing.T) {
+	s := parseStatementExpect[Sleep](t, "SLEEP 10")
+	if n := s.Duration.Operand().Literal().Number(); n == nil || n.Value != 10 {
+		t.Fatal("expected 10")
+	}
+}
+
+func TestParseYield(t *testing.T) {
+	parseStatementExpect[Yield](t, "YIELD")
+}
+
+func TestParseOutput(t *testing.T) {
+	s := parseStatementExpect[Output](t, "OUTPUT 0 x")
+	if s.Port != 0 || s.IsWord {
+		t.Fatal("expected port 0, not word")
+	}
+}
+
+func TestParseOutputWord(t *testing.T) {
+	s := parseStatementExpect[Output](t, "OUTPUT WORD 1 val")
+	if s.Port != 1 || !s.IsWord {
+		t.Fatal("expected port 1, word")
+	}
+}
+
+func TestParseSave(t *testing.T) {
+	s := parseStatementExpect[Save](t, "SAVE var")
+	if s.Location != nil {
+		t.Error("expected no Location")
+	}
+}
+
+func TestParseSaveAt(t *testing.T) {
+	s := parseStatementExpect[Save](t, "SAVE AT 0x8000 var")
+	if s.Location == nil {
+		t.Error("expected Location")
+	}
+}
+
+func TestParseLoad(t *testing.T) {
+	s := parseStatementExpect[Load](t, "LOAD var")
+	if s.Location != nil {
+		t.Error("expected no Location")
+	}
+}
+
+func TestParseLoadAt(t *testing.T) {
+	s := parseStatementExpect[Load](t, "LOAD AT 0x8000 var")
+	if s.Location == nil {
+		t.Error("expected Location")
+	}
+}
+
+func TestParseInterruptStmt(t *testing.T) {
+	s := parseStatementExpect[InterruptStmt](t, "INTERRUPT my_isr")
+	if s.NMI || s.Target != Identifier("my_isr") {
+		t.Fatal("expected interrupt, target my_isr")
+	}
+}
+
+func TestParseNMIStmt(t *testing.T) {
+	s := parseStatementExpect[InterruptStmt](t, "NMI my_nmi")
+	if !s.NMI || s.Target != Identifier("my_nmi") {
+		t.Fatal("expected nmi, target my_nmi")
+	}
+}
+
+func TestParseCase(t *testing.T) {
+	g := parseStatementExpect[Group](t, "CASE x OF 1 LET y = 2 END")
+	if g.Case == nil || len(g.Case.Branches) != 1 || g.Case.Default != nil {
+		t.Fatal("expected Case with 1 branch")
+	}
+}
+
+func TestParseCaseDefault(t *testing.T) {
+	g := parseStatementExpect[Group](t, "CASE x OF DEFAULT LET y = 2 END")
+	if g.Case == nil || len(g.Case.Branches) != 0 || g.Case.Default == nil {
+		t.Fatal("expected Case with Default")
+	}
+}
+
+func TestParseTask(t *testing.T) {
+	s := parseStatementExpect[Task](t, "TASK t PRIORITY 1\nYIELD\nEND")
+	if s.Name.Name != "t" || s.Priority != 1 || len(s.Body) != 1 {
+		t.Fatal("expected task t, priority 1, 1 body stmt")
+	}
+}
+
+func TestParseTaskNoPriority(t *testing.T) {
+	s := parseStatementExpect[Task](t, "TASK t\nYIELD\nEND")
+	if s.Name.Name != "t" || s.Priority != 0 {
+		t.Fatal("expected task t, priority 0")
+	}
+}
+
+func TestParseLabel(t *testing.T) {
+	s := parseStmt(t, "loop: HALT")
+	if s.Label == nil || s.Label.Name != "loop" {
+		t.Fatal("expected label loop")
+	}
+	if _, ok := s.Command.(Halt); !ok {
+		t.Fatal("expected Halt")
+	}
+}
+
+func TestParseDataBasic(t *testing.T) {
+	s := parseStatementExpect[Data](t, "DATA myarr 1, 2, 3")
+	if s.Name != "myarr" || len(s.Values) != 3 {
+		t.Fatal("expected myarr with 3 values")
+	}
+}
+
 func TestSMSTileFromString(t *testing.T) {
 	tile, err := SMSTileFromString("........" +
 		"\n...FF..." +
@@ -901,20 +865,7 @@ func TestSMSTileFromStringSimple(t *testing.T) {
 }
 
 func TestParseBank(t *testing.T) {
-	src := "BANK 3\n"
-	tokens, err := Scan(strings.NewReader(src))
-	if err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	var s Statement
-	p := NewParser(tokens)
-	if err := s.Parse(p); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	bank, ok := s.Command.(BankStmt)
-	if !ok {
-		t.Fatalf("expected BankStmt, got %T", s.Command)
-	}
+	bank := parseStatementExpect[BankStmt](t, "BANK 3\n")
 	if bank.Number.Operand() == nil || bank.Number.Operand().Literal() == nil || bank.Number.Operand().Literal().Number() == nil {
 		t.Fatal("expected literal number")
 	}
@@ -924,20 +875,7 @@ func TestParseBank(t *testing.T) {
 }
 
 func TestParseAtBank(t *testing.T) {
-	src := "AT BANK 2\n"
-	tokens, err := Scan(strings.NewReader(src))
-	if err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	var s Statement
-	p := NewParser(tokens)
-	if err := s.Parse(p); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	at, ok := s.Command.(At)
-	if !ok {
-		t.Fatalf("expected At command, got %T", s.Command)
-	}
+	at := parseStatementExpect[At](t, "AT BANK 2\n")
 	if !at.HasBank {
 		t.Fatal("expected HasBank to be true")
 	}
@@ -966,21 +904,12 @@ func TestSMSTileFromStringNewlines(t *testing.T) {
 }
 
 func TestParseDataTile(t *testing.T) {
-	src := "myfont: DATA TILE\n" +
-		"`\n" +
-		"........\n" +
-		"...FF...\n" +
-		"........\n" +
-		"`\n"
-	tokens, err := Scan(strings.NewReader(src))
-	if err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	p := NewParser(tokens)
-	prog := Program{}
-	if err := prog.Parse(p); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
+	prog := parseProg(t, "DATA myfont TILE\n"+
+		"`\n"+
+		"........\n"+
+		"...FF...\n"+
+		"........\n"+
+		"`\n")
 	if len(prog.Statements) != 1 {
 		t.Fatalf("expected 1 statement, got %d", len(prog.Statements))
 	}

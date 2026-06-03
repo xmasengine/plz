@@ -9,6 +9,7 @@ import "fmt"
 type Scope struct {
 	Name    string                 // Name of the scope (e.g. "global", procedure name)
 	Parent  *Scope                 // Parent scope
+	IsProc  bool                   // true when this scope is a procedure body
 	Symbols map[Identifier]Declare // Symbols in this scope
 }
 
@@ -16,32 +17,52 @@ type Scope struct {
 // It maintains the current scope chain, a registry of all declared procedures
 // and tasks, and provides helper methods for scope management and error reporting.
 type Checker struct {
-	current    *Scope                 // innermost scope during checking
-	root       *Scope                 // global scope
-	Procedures map[string]Procedure   // procedure name → definition
-	Tasks      map[string]int         // task name → task index
-	TaskDefs   []Task                 // task definitions in order
+	current    *Scope               // innermost scope during checking
+	root       *Scope               // global scope
+	Procedures map[string]Procedure // procedure name → definition
+	Tasks      map[string]int       // task name → task index
+	TaskDefs   []Task               // task definitions in order
 	Constants  map[Identifier]Literal // named constant values
-	Datas      map[Identifier]Data    // named data values
+	Datas      map[Identifier]Data  // named data values
+	Labels     map[string]bool      // named labels (GOTO targets)
+	usedVectors    map[int]bool     // interrupt vectors already installed
 }
 
 // NewChecker returns a new Checker with an initialized global scope.
 func NewChecker() *Checker {
 	c := &Checker{
-		Procedures: make(map[string]Procedure),
-		Tasks:      make(map[string]int),
-		Constants:  make(map[Identifier]Literal),
-		Datas:      make(map[Identifier]Data),
+		Procedures:   make(map[string]Procedure),
+		Tasks:        make(map[string]int),
+		Constants:    make(map[Identifier]Literal),
+		Datas:        make(map[Identifier]Data),
+		Labels:       make(map[string]bool),
+		usedVectors:  make(map[int]bool),
 	}
 	c.root = &Scope{Name: "global", Symbols: make(map[Identifier]Declare)}
 	c.current = c.root
 	return c
 }
 
-// pushScope creates a new scope with the given name, sets its parent to the
-// current innermost scope, and makes it the new current scope.
-func (c *Checker) pushScope(name string) {
-	c.current = &Scope{Name: name, Parent: c.current, Symbols: make(map[Identifier]Declare)}
+// pushBlockScope creates a new non-procedure scope with the given name and
+// makes it the new current scope.
+func (c *Checker) pushBlockScope(name string) {
+	c.current = &Scope{Name: name, Parent: c.current, IsProc: false, Symbols: make(map[Identifier]Declare)}
+}
+
+// pushProcedureScope creates a new procedure scope with the given name and
+// makes it the new current scope.
+func (c *Checker) pushProcedureScope(name string) {
+	c.current = &Scope{Name: name, Parent: c.current, IsProc: true, Symbols: make(map[Identifier]Declare)}
+}
+
+// inProcedure reports whether the current scope is inside a procedure body.
+func (c *Checker) inProcedure() bool {
+	for s := c.current; s != nil; s = s.Parent {
+		if s.IsProc {
+			return true
+		}
+	}
+	return false
 }
 
 // popScope restores the parent scope as the current innermost scope.
@@ -261,13 +282,53 @@ func (p Program) Check(c *Checker) error {
 		}
 	}
 
-	// Second pass: walk statements with scope push/pop.
+	// Second pass: walk statements to collect labels.
+	for _, stmt := range p.Statements {
+		c.collectLabels(stmt)
+	}
+
+	// Third pass: walk statements with scope push/pop.
 	for _, stmt := range p.Statements {
 		if err := stmt.Check(c); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// collectLabels recursively walks statements and their nested bodies to
+// register all named labels in the checker's Labels map.
+func (c *Checker) collectLabels(s Statement) {
+	if s.Label != nil && s.Label.Name != "" {
+		c.Labels[s.Label.Name] = true
+	}
+	switch cmd := s.Command.(type) {
+	case Procedure:
+		for _, stmt := range cmd.Statements {
+			c.collectLabels(stmt)
+		}
+	case Task:
+		for _, stmt := range cmd.Body {
+			c.collectLabels(stmt)
+		}
+	case Group:
+		for _, stmt := range cmd.Statements {
+			c.collectLabels(stmt)
+		}
+		if cmd.Case != nil {
+			for _, branch := range cmd.Case.Branches {
+				c.collectLabels(branch.Statement)
+			}
+			if cmd.Case.Default != nil {
+				c.collectLabels(*cmd.Case.Default)
+			}
+		}
+	case If:
+		c.collectLabels(cmd.Then)
+		if cmd.Else != nil {
+			c.collectLabels(*cmd.Else)
+		}
+	}
 }
 
 // Check delegates semantic analysis to the underlying command's Checklet
@@ -289,11 +350,12 @@ func (s Define) Check(c *Checker) error {
 // Check validates a PRAGMA directive. Unrecognized pragmas produce a
 // warning (returned as an error for now). Recognized pragmas are:
 //
-//	BOUNDCHECK — enable runtime array bounds checking
+//	BOUNDCHECK   — enable runtime array bounds checking
+//	NOBOUNDCHECK — disable runtime array bounds checking
 func (s Pragma) Check(c *Checker) error {
 	for _, id := range s.Idents {
 		switch string(id) {
-		case "BOUNDCHECK":
+		case "BOUNDCHECK", "NOBOUNDCHECK":
 			// recognized, no validation needed
 		default:
 			return c.Errorf("", "unrecognized pragma %q", id)
@@ -314,11 +376,20 @@ func (s BankStmt) Check(c *Checker) error {
 }
 
 // Check validates an INTERRUPT or NMI install statement. It verifies
-// that the target identifier names a declared procedure.
+// that the target identifier names a declared procedure and that the
+// interrupt vector has not already been installed.
 func (s InterruptStmt) Check(c *Checker) error {
 	if _, ok := c.Procedures[string(s.Target)]; !ok {
 		return fmt.Errorf("INTERRUPT/NMI: undefined procedure %q", s.Target)
 	}
+	addr := 0x0038
+	if s.NMI {
+		addr = 0x0066
+	}
+	if c.usedVectors[addr] {
+		return c.Errorf("", "duplicate interrupt installation at vector 0x%04X", addr)
+	}
+	c.usedVectors[addr] = true
 	return nil
 }
 
@@ -424,7 +495,7 @@ func (s Group) Check(c *Checker) error {
 		}
 		return nil
 	}
-	c.pushScope("do")
+	c.pushBlockScope("do")
 	defer c.popScope()
 	for _, stmt := range s.Statements {
 		if err := stmt.Check(c); err != nil {
@@ -538,14 +609,14 @@ func (s Let) Check(c *Checker) error {
 	if _, ok := c.Constants[s.Reference.Identifier]; ok {
 		return c.Errorf("", "cannot assign to constant %q", s.Reference.Identifier)
 	}
-	// Validate subscripts and fields if the base variable is already declared.
+	// Validate subscript expressions and field access always.
 	if r := s.Reference; r.Identifier != "" {
-		if d, ok := c.lookup(r.Identifier); ok {
-			for _, sub := range r.Subscripts {
-				if err := sub.Check(c); err != nil {
-					return err
-				}
+		for _, sub := range r.Subscripts {
+			if err := sub.Check(c); err != nil {
+				return err
 			}
+		}
+		if d, ok := c.lookup(r.Identifier); ok {
 			if err := c.checkArrayBounds(r); err != nil {
 				return err
 			}
@@ -579,7 +650,7 @@ func (s Let) Check(c *Checker) error {
 // DATA parameters as pass-by-reference), and then validates each statement in
 // the procedure body.
 func (s Procedure) Check(c *Checker) error {
-	c.pushScope(s.Name.Name)
+	c.pushProcedureScope(s.Name.Name)
 	defer c.popScope()
 	// Register parameters in the procedure scope.
 	for i, param := range s.Parameters {
@@ -606,7 +677,7 @@ func (s Procedure) Check(c *Checker) error {
 // Check validates a task definition. It pushes a new scope for the task body
 // and validates each statement within it.
 func (t Task) Check(c *Checker) error {
-	c.pushScope(t.Name.Name)
+	c.pushBlockScope(t.Name.Name)
 	defer c.popScope()
 	for i := range t.Body {
 		if err := t.Body[i].Check(c); err != nil {
@@ -639,12 +710,27 @@ func (s Sleep) Check(c *Checker) error {
 	return s.Duration.Check(c)
 }
 
-// Check validates a RETURN statement by checking each return expression.
+// Check validates a RETURN statement. It rejects RETURN at global scope,
+// checks each return expression, and limits the number of return values to 2.
 func (s Return) Check(c *Checker) error {
+	if !c.inProcedure() {
+		return c.Errorf("", "RETURN outside procedure")
+	}
+	if len(s.Expressions) > 2 {
+		return c.Errorf("", "RETURN: too many return values (%d, max 2)", len(s.Expressions))
+	}
 	for i := range s.Expressions {
 		if err := s.Expressions[i].Check(c); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// Check validates a GOTO statement by verifying that the target label exists.
+func (s GoTo) Check(c *Checker) error {
+	if !c.Labels[s.Name] {
+		return c.Errorf("", "GOTO: undefined label %q", s.Name)
 	}
 	return nil
 }

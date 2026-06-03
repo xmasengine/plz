@@ -381,6 +381,7 @@ func (p Program) Gen(g *Gen) error {
 	var dataItems []dataItem
 	var procedures []Procedure
 	var dataStmts []Data
+	var taskDeclares []Statement
 	for _, statement := range p.Statements {
 		switch cmd := statement.Command.(type) {
 		case At:
@@ -402,13 +403,8 @@ func (p Program) Gen(g *Gen) error {
 		case Task:
 			continue // emitted separately
 		default:
-			genner, ok := (cmd.(interface{ Gen(*Gen) error }))
-			if ok {
-				if err := genner.Gen(g); err != nil {
-					return err
-				}
-			} else {
-				g.Emitf("// statement not implemented: %v\n", statement)
+			if err := statement.Gen(g); err != nil {
+				return err
 			}
 		}
 	}
@@ -431,12 +427,17 @@ func (p Program) Gen(g *Gen) error {
 	}
 
 	// Emit task bodies after procedures and data.
+	// Task-local DECLAREs are collected and emitted alongside global data items.
 	for i := range c.TaskDefs {
 		t := c.TaskDefs[i]
 		g.Emitf("_plz_task_%d:\n", i)
 		g.InTask = true
-		for _, stmt := range t.Body {
-			if err := stmt.Gen(g); err != nil {
+		for j := range t.Body {
+			if _, ok := t.Body[j].Command.(Declare); ok {
+				taskDeclares = append(taskDeclares, t.Body[j])
+				continue
+			}
+			if err := t.Body[j].Gen(g); err != nil {
 				return err
 			}
 		}
@@ -508,6 +509,12 @@ func (p Program) Gen(g *Gen) error {
 		} else {
 			g.Emitln("")
 			item.declare.Gen(g)
+		}
+	}
+	// Emit task-local DECLAREs after global data items.
+	for _, s := range taskDeclares {
+		if err := s.Gen(g); err != nil {
+			return err
 		}
 	}
 
@@ -1953,12 +1960,14 @@ func (s At) Gen(g *Gen) error {
 }
 
 // Gen processes a PRAGMA directive at code-generation time.
-// PRAGMA BOUNDCHECK toggles runtime array bounds checking.
+// PRAGMA BOUNDCHECK and PRAGMA NOBOUNDCHECK toggle runtime array bounds checking.
 func (s Pragma) Gen(g *Gen) error {
 	for _, id := range s.Idents {
 		switch string(id) {
 		case "BOUNDCHECK":
 			g.BoundCheck = true
+		case "NOBOUNDCHECK":
+			g.BoundCheck = false
 		}
 	}
 	return nil
@@ -2421,14 +2430,16 @@ func (t Task) Gen(g *Gen) error {
 
 // SchedulerCode is the assembly block implementing the cooperative task
 // scheduler. It saves the current task's stack pointer, decrements all sleeping
-// tasks' counters (waking those that reach zero), performs round-robin task
-// selection among ready tasks, and restores the chosen task's stack pointer.
+// tasks' counters (waking only SLEEPING tasks that reach zero), performs
+// priority-based task selection among ready tasks (lower priority value =
+// higher priority, round-robin among equal-priority tasks), and restores the
+// chosen task's stack pointer.
 const SchedulerCode = `
 // -------------------------------------------------------------------
 // Task scheduler: save current SP, pick next ready task, restore SP
 // -------------------------------------------------------------------
 _plz_scheduler:
-	// Compute current TCB address = _plz_tcbs + current_task * 8
+	// Save current task's SP in its TCB
 	ld a, (_plz_current_task)
 	ld l, a
 	ld h, 0
@@ -2437,16 +2448,15 @@ _plz_scheduler:
 	add hl, hl
 	ld de, _plz_tcbs
 	add hl, de
-	// Save SP at TCB[0-1]
 	ld (_plz_sch_sp), sp
 	ld de, (_plz_sch_sp)
 	ld (hl), e
 	inc hl
 	ld (hl), d
-	// HL now at TCB+2 (state byte) - not needed
 
 	// Decrement all sleeping tasks' sleep counters.
-	// When a counter reaches 0, set state to ready.
+	// When a counter reaches 0, if the task is SLEEPING (state=2),
+	// set its state to READY. SUSPENDED tasks are not woken.
 	ld hl, _plz_tcbs+3
 	ld b, 16
 	ld de, 8
@@ -2456,50 +2466,77 @@ _slp_dec_loop:
 	jr z, _slp_dec_cont
 	dec (hl)
 	jr nz, _slp_dec_cont
-	// Sleep counter hit 0 => set state to ready
+	// Sleep counter hit 0 — only wake if task is SLEEPING
 	dec hl
+	ld a, (hl)
+	cp 2
+	jr nz, _slp_nowake
 	ld (hl), 0
+_slp_nowake:
 	inc hl
 _slp_dec_cont:
 	add hl, de
 	djnz _slp_dec_loop
 
-	// Find next ready task (round-robin, start from current+1)
+	// Priority-based task selection.
+	// Scan all 16 slots starting from current+1 (wrap).
+	// Among READY tasks, pick the one with the lowest priority value
+	// (0 = highest, 15 = lowest). If multiple have the same priority,
+	// the first encountered in scan order wins (round-robin).
+	// Uses _plz_sch_sp as a temporary scan pointer.
 	ld a, (_plz_current_task)
-	ld c, a
 	inc a
 	cp 16
-	jr c, _sch_ok
+	jr c, _sch_init
 	xor a
-_sch_ok:
-	ld (_plz_current_task), a
-	ld b, 16
+_sch_init:
+	ld (_plz_sch_sp), a	// scan pointer
+	ld b, 16		// loop counter
+	ld d, 0xFF		// best_pri (lowest value = highest priority)
+	ld e, 0xFF		// best_idx (0xFF = none)
 _sch_loop:
-	ld a, (_plz_current_task)
+	ld a, (_plz_sch_sp)
 	ld l, a
 	ld h, 0
 	add hl, hl
 	add hl, hl
 	add hl, hl
+	push de
 	ld de, _plz_tcbs+2
 	add hl, de
-	ld a, (hl)
+	pop de
+	ld a, (hl)		// state
 	or a
-	jr z, _sch_found
-	ld a, (_plz_current_task)
+	jr nz, _sch_next	// not READY, skip
+	// READY — compare priority
+	inc hl
+	inc hl			// HL = &priority
+	ld a, (hl)
+	cp d			// compare with best so far
+	jr nc, _sch_next	// priority >= best_pri, skip
+	ld d, a			// best_pri = priority
+	ld a, (_plz_sch_sp)
+	ld e, a			// best_idx = current slot
+_sch_next:
+	ld a, (_plz_sch_sp)
 	inc a
 	cp 16
-	jr c, _sch_next
+	jr c, _sch_wrap
 	xor a
-_sch_next:
-	ld (_plz_current_task), a
+_sch_wrap:
+	ld (_plz_sch_sp), a
 	djnz _sch_loop
-	// No ready task found - halt
+
+	// Check if any READY task was found
+	ld a, e
+	cp 0xFF
+	jr nz, _sch_found
+	// No ready task — halt and wait for interrupt
 	halt
 	jp _plz_scheduler
 _sch_found:
+	ld (_plz_current_task), a
 	// Restore SP from TCB
-	ld a, (_plz_current_task)
 	ld l, a
 	ld h, 0
 	add hl, hl
