@@ -8,10 +8,12 @@ While C is often called a low-level language, it abstracts the machine
 and has no direct support for interrupts, chip-level I/O, ROM location,
 or memory mapping. In C we rely on undefined behavior or assembly.
 
-In PLZ there is no undefined behavior. Statements like `INPUT`, `OUTPUT`,
+In PLZ the compile is not allowed to exhibit undefined behavior.
+While there are 'dangerous' statements like DECLARE ... AT these have
+defined demantics.  Statements like `INPUT`, `OUTPUT`,
 and `INTERRUPT` allow true low-level programming without assembly. The
-syntax uses easy-to-read full English keywords, resembling BASIC or PL/1
-without being as verbose as COBOL or FORTRAN.
+syntax uses easy-to-read full English UPPERCASE keywords, resembling BASIC or
+PL/1 without being as verbose as COBOL or as obtuse as FORTRAN.
 
 ## Differences from PL/M
 
@@ -28,13 +30,55 @@ Although PLZ is inspired by PL/M, it differs in several ways:
 - **Only one named label per statement** AT is used for locating code precisely.
 - **Labels are for GOTO** PLZ prefers to use names after a keyword, not labels to name things.
 
-## Planned Features
+## Features
 
 - **TASK**: Lightweight cooperative task system (up to 16 statically allocated named
   tasks with SLEEP, SUSPEND, RESUME, YIELD)
 - **BANK**: Banked ROM handling
 - **SAVE**: Battery-backed RAM handling
 - **MUSIC/SCREEN/TILE/SPRITE**: Game-oriented library support via the TASK system
+
+# Rationale And Credits
+
+## Rationale
+PLM was designed for the purpose of developing the Lord Of Christmas game
+for the Sega Master System. While I started development in BASIC, I was not
+satisfied with the result. And C is bad fit for small architectures. When I
+found out about PL/M this inspired me to make PLZ.
+
+## On the use of LLM.
+
+Since 2026 some LLM and agents which produce passable results have become freely
+available. I have used these resources to help me develop the first version of
+PLM. While not ideal, it does allow me to make more progress than unassisted.
+
+However, the design of the programming language, while based on PL/M, I
+tried to make more easy to use, in the hope it would ease software development
+on Z80 platforms.
+
+The Go language architecture of the compiler is according to my personal taste,
+in as far as the LLM was able to imitate it. The goal is not to build a Babylon
+but a Jerusalem. I thank anyone and everyone who made PLZ possible.
+
+## Credits
+
+PLZ uses [koron-go/z80](https://github.com/koron-go/z80) as the Z80 emulator
+for testing, under the MIT License.
+
+The Z80 assembler is based on [paulhankin/z80asm](https://github.com/paulhankin/z80asm),
+forked and modified under the MIT License.
+
+PLZ uses the resource loader github.com/mrcook/smstilemap for loading
+graphics, under the MIT license.
+
+PLZ uses github.com/user-none/go-chip-sn76489 as the sound chip emulator
+for testing, under the MIT license.
+
+And Gary Kildall for his brilliant design of PL/M. We need such programming
+languages to truly trn software development into software engineering.
+
+
+# Documentation
 
 ## EBNF Grammar
 
@@ -175,13 +219,14 @@ PL/Z source → Scanner (tokens) → Parser (AST)
   → Emulator (execute & verify)
 ```
 
-## Memory Model
+## Memory Model on SMS
 
 - Code at `0x0000` (boot vector, interrupt handlers, main entry)
 - Stack at `0xDFF0` (near top of 64 KB)
 - Heap/data at `0xC000`
-- Procedures use static frame allocation (default) or stack-based (`REENTRANT`)
+- Procedures use static heap allocation (default) or stack-based (`REENTRANT`)
 - Register convention: HL = first return value/parameter, DE = second parameter
+  or second return value.
 
 ## Task System
 
@@ -267,13 +312,6 @@ SLEEP 60                          // ~1 second on NTSC (60 Hz)
 | `_plz_task_N_stack` | 128-byte dedicated stack for task N |
 | `_plz_task_N` | Entry label for task N's body |
 
-## Credits
-
-PLZ uses [koron-go/z80](https://github.com/koron-go/z80) as the Z80 emulator
-for testing, under the MIT License.
-
-The Z80 assembler is based on [paulhankin/z80asm](https://github.com/paulhankin/z80asm),
-forked and modified under the MIT License.
 
 ## License
 
