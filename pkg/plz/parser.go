@@ -529,28 +529,6 @@ func (g *Data) Parse(parser *Parser) error {
 	return nil
 }
 
-func colorForRune(r rune) (col byte, skip bool, next bool, err error) {
-	switch r {
-	case '\n':
-		return 0, false, true, nil
-	case ' ':
-		return 0, true, true, nil
-	case '.':
-		return 0, false, false, nil
-	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		return byte(r - '0'), false, false, nil
-
-	case 'A', 'B', 'C', 'D', 'E', 'F':
-		return byte(r - 'A' + 10), false, false, nil
-
-	case 'X':
-		return 15, false, false, nil
-
-	default:
-		return 0, false, false, fmt.Errorf("Unknown character in Tile, expected .X0123456789ABCDEF")
-	}
-}
-
 func (b *Tile) Parse(parser *Parser) error {
 	for tok := parser.Peek(); tok.TokenKind == KeywordTile; tok = parser.Peek() {
 		parser.Skip(KeywordTile)

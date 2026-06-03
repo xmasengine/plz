@@ -9,7 +9,7 @@ import "fmt"
 type Scope struct {
 	Name    string                 // Name of the scope (e.g. "global", procedure name)
 	Parent  *Scope                 // Parent scope
-	IsProc  bool                   // true when this scope is a procedure body
+	IsProc  bool                   // IsProc is true when this scope is a procedure body
 	Symbols map[Identifier]Declare // Symbols in this scope
 }
 
@@ -17,26 +17,26 @@ type Scope struct {
 // It maintains the current scope chain, a registry of all declared procedures
 // and tasks, and provides helper methods for scope management and error reporting.
 type Checker struct {
-	current    *Scope               // innermost scope during checking
-	root       *Scope               // global scope
-	Procedures map[string]Procedure // procedure name → definition
-	Tasks      map[string]int       // task name → task index
-	TaskDefs   []Task               // task definitions in order
-	Constants  map[Identifier]Literal // named constant values
-	Datas      map[Identifier]Data  // named data values
-	Labels     map[string]bool      // named labels (GOTO targets)
-	usedVectors    map[int]bool     // interrupt vectors already installed
+	current     *Scope                 // innermost scope during checking
+	root        *Scope                 // global scope
+	Procedures  map[string]Procedure   // Procedures is a map of procedure name to definition
+	Tasks       map[string]int         // Tasks is a map of task name to task index
+	TaskDefs    []Task                 // TaskDefs are the task definitions in order
+	Constants   map[Identifier]Literal // Constants are named constant values
+	Datas       map[Identifier]Data    // Datas are named data values
+	Labels      map[string]bool        // Labels are named labels (GOTO targets)
+	usedVectors map[int]bool           // interrupt vectors already installed
 }
 
 // NewChecker returns a new Checker with an initialized global scope.
 func NewChecker() *Checker {
 	c := &Checker{
-		Procedures:   make(map[string]Procedure),
-		Tasks:        make(map[string]int),
-		Constants:    make(map[Identifier]Literal),
-		Datas:        make(map[Identifier]Data),
-		Labels:       make(map[string]bool),
-		usedVectors:  make(map[int]bool),
+		Procedures:  make(map[string]Procedure),
+		Tasks:       make(map[string]int),
+		Constants:   make(map[Identifier]Literal),
+		Datas:       make(map[Identifier]Data),
+		Labels:      make(map[string]bool),
+		usedVectors: make(map[int]bool),
 	}
 	c.root = &Scope{Name: "global", Symbols: make(map[Identifier]Declare)}
 	c.current = c.root
@@ -88,6 +88,7 @@ func (c *Checker) lookup(id Identifier) (Declare, bool) {
 // Lookup searches for an identifier starting from the root (global) scope and
 // walking toward inner scopes. It is the public counterpart of lookup,
 // intended for use by the code generator after semantic analysis is complete.
+// Note that lookup works from the inside out, and Lookup from the outside in.
 func (c *Checker) Lookup(id Identifier) (Declare, bool) {
 	for s := c.root; s != nil; s = s.Parent {
 		if d, ok := s.Symbols[id]; ok {
@@ -107,6 +108,7 @@ func (c *Checker) Errorf(pos string, form string, args ...any) error {
 // It resolves references to previously defined constants, evaluates all
 // standard arithmetic, bitwise, comparison, shift, and logical operators,
 // and rejects non-constant sub-expressions (variables, CALL, INPUT, etc.).
+// This allows us to use compute time constant expressions.
 func (c *Checker) EvalConstExpr(e Expression) (int, error) {
 	switch {
 	case e.Operand() != nil:
@@ -243,16 +245,19 @@ func (c *Checker) EvalConstExpr(e Expression) (int, error) {
 	return 0, fmt.Errorf("empty expression")
 }
 
-// Check runs semantic analysis on the program using a two-pass approach.
+// Check runs semantic analysis on the program using a three-pass approach.
 //
 // Pass 1 collects procedure and task signatures into the Checker's
 // procedure and task registries. It also registers procedure names in the
 // global scope so that CALL expressions can resolve them. Duplicate procedure
 // or task names are reported as errors.
 //
-// Pass 2 walks each top-level statement with proper scope push/pop,
+// Pass 2 collects all the labels.
+//
+// Pass 3 walks each top-level statement with proper scope push/pop,
 // validating that all referenced identifiers have been declared and that field
 // accesses, subscripts, and other constructs are semantically correct.
+// Pass 3 also calculates the value of constant expressions.
 func (p Program) Check(c *Checker) error {
 	// First pass: collect procedure and task signatures.
 	for _, stmt := range p.Statements {
@@ -555,13 +560,7 @@ func (s Save) Check(c *Checker) error {
 		return c.Errorf("", "SAVE does not support record field access")
 	}
 	if s.Location == nil {
-		d, ok := c.Lookup(ref.Identifier)
-		if !ok {
-			return c.Errorf("", "SAVE without AT: %q not found", ref.Identifier)
-		}
-		if d.At == nil {
-			return c.Errorf("", "SAVE without AT requires %q to be declared with AT", ref.Identifier)
-		}
+		// Save at SRAMBase
 	}
 	return nil
 }
@@ -589,13 +588,7 @@ func (s Load) Check(c *Checker) error {
 		return c.Errorf("", "LOAD does not support record field access")
 	}
 	if s.Location == nil {
-		d, ok := c.Lookup(ref.Identifier)
-		if !ok {
-			return c.Errorf("", "LOAD without AT: %q not found", ref.Identifier)
-		}
-		if d.At == nil {
-			return c.Errorf("", "LOAD without AT requires %q to be declared with AT", ref.Identifier)
-		}
+		// Load from SRAMBase
 	}
 	return nil
 }
@@ -603,6 +596,7 @@ func (s Load) Check(c *Checker) error {
 // Check validates a LET assignment by checking the right-hand side expression
 // and validating any subscripts or field accesses on the left-hand side.
 // The left-hand side variable is implicitly declared if it does not exist.
+// TODO: decide if implicit declaration this is correct and desirable.
 // Constants cannot be assigned to.
 func (s Let) Check(c *Checker) error {
 	// Reject assignment to constants.
@@ -712,6 +706,7 @@ func (s Sleep) Check(c *Checker) error {
 
 // Check validates a RETURN statement. It rejects RETURN at global scope,
 // checks each return expression, and limits the number of return values to 2.
+// The limit on the amount of returns epressions is platform dependent.
 func (s Return) Check(c *Checker) error {
 	if !c.inProcedure() {
 		return c.Errorf("", "RETURN outside procedure")
@@ -857,6 +852,7 @@ func (s Suffix) Check(c *Checker) error {
 	// Compile-time bounds check for array subscript expressions (e.g., x = arr[7]).
 	// The subscript is in the suffix, not the base reference, so we construct
 	// a synthetic Reference with the subscript to reuse checkArrayBounds.
+	// TODO: this should be factored better.
 	if s.Operator == OperatorINDEX && len(s.Operands) == 2 {
 		if ref := s.Operands[0].Ref(); ref != nil {
 			if idxExpr := s.Operands[1].Expr(); idxExpr != nil {

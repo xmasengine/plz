@@ -92,7 +92,7 @@ type Output struct {
 // into variables, array elements, or record fields. The second target captures
 // the DE return value from a multi-value CALL.
 type Let struct {
-	Reference // first target (HL return value)
+	Reference            // first target (HL return value)
 	Target2   *Reference // optional second target (DE return value)
 	Expression
 }
@@ -111,7 +111,8 @@ type Procedure struct {
 }
 
 // Interrupt specifies whether a procedure is an interrupt handler and,
-// if so, which interrupt vector it services.
+// if so, which interrupt vector it services if the platform has multiple
+// vectors.
 type Interrupt struct {
 	Interrupt int
 	NMI       bool
@@ -300,7 +301,9 @@ type GoTo struct {
 	Name string
 }
 
-// Halt represents a HALT statement that stops program execution.
+// Halt represents a HALT statement that stops program execution,
+// or on some platforms like the SMS until an interrupt occurs
+// if the interrupts were enabled.
 type Halt struct{}
 
 // BankStmt represents a BANK statement that switches the active ROM
@@ -312,7 +315,8 @@ type BankStmt struct {
 
 // Save represents a SAVE statement that copies data to battery-backed RAM.
 // The optional AT location specifies the destination address in SRAM.
-// The source expression must be a reference whose size is known at compile time.
+// The source expression must be a reference with a size that is known
+// at compile time.
 type Save struct {
 	Location *Expression // optional AT address (nil = use declared AT)
 	Source   Expression  // reference to data to save
@@ -328,7 +332,8 @@ type Load struct {
 
 // Pragma represents a compiler pragma directive. Pragmas may be ignored
 // by conforming compilers. PL/Z implements PRAGMA BOUNDCHECK to enable
-// runtime array bounds checking.
+// runtime array bounds checking, and NOBOUNDCHECK to disable it, although
+// the latter is the default.
 type Pragma struct {
 	Idents []Identifier // pragma identifiers, e.g. ["BOUNDCHECK"]
 }
@@ -336,6 +341,7 @@ type Pragma struct {
 // Group represents a compound statement constructed from WHILE, CASE,
 // FOR, or a bare DO-block. Exactly one of While, Case, or For may be
 // set; when all are nil the group is a simple DO...END block.
+// For and While block iterate, Case and Do blocks do not.
 type Group struct {
 	While      *While
 	Case       *Case
@@ -389,6 +395,8 @@ type If struct {
 
 // Label represents an optional named label attached to a statement.
 // Labels are used as targets for GOTO statements.
+// Since PLZ is a low level language it is allowed to jump out of any inner
+// scope to any outer scope.
 type Label struct {
 	Name string
 }
@@ -406,6 +414,7 @@ type Input struct {
 	Port Expression
 }
 
+// Operander marks Input as an expression operand.
 func (i Input) operand() Operander { return i }
 
 // Length represents a LENGTH(identifier) expression. It evaluates to
@@ -415,10 +424,12 @@ type Length struct {
 	Identifier Identifier
 }
 
+// Operander marks Length as an expression operand.
 func (l Length) operand() Operander { return l }
 
 // Data represents a DATA directive that embeds literal bytes or
-// words directly into the output at the current code position.
+// words directly into the output. This if usefup for program data like
+// image and sound.
 type Data struct {
 	Name   string
 	Values []Expression
@@ -426,14 +437,14 @@ type Data struct {
 }
 
 // Tile represents a DATA directive that embeds a SMS 8x8 Tile in a
-// more convenient format, for example from a string.
+// more convenient format, for example from a string or a file.
 type Tile struct {
 	Tiles []*SMSTile
 }
 
 // At represents an AT directive that sets the absolute memory address
 // for subsequent data declarations, or switches the active ROM bank
-// when HasBank is true.
+// the program section will be compiled to when HasBank is true.
 type At struct {
 	Address    Expression
 	HasBank    bool
@@ -451,8 +462,8 @@ type Declare struct {
 	Type        Type
 	Size        int
 	Initializer *Initializer
-	At          *Expression // absolute address (no initializer allowed)
-	ParamRef    bool        // true when this is a record/array parameter (passed by reference)
+	At          *Expression // Absolute address (no initializer allowed)
+	ParamRef    bool        // True when this is a record/array parameter (passed by reference)
 }
 
 // Initializer wraps an Expression to provide an initial value for a

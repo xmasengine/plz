@@ -122,24 +122,24 @@ func TestCheckSaveNoAtUndeclared(t *testing.T) {
 	checkErr(t, "SAVE var", "undeclared")
 }
 
-func TestCheckSaveNoAtWithoutAt(t *testing.T) {
-	checkErr(t, "DECLARE var BYTE\nSAVE var", "SAVE without AT")
+func TestCheckSaveWithoutAt(t *testing.T) {
+	checkOK(t, "DECLARE var BYTE\nSAVE var")
 }
 
 func TestCheckSaveWithAt(t *testing.T) {
-	checkOK(t, "DECLARE var BYTE AT 0xC000\nSAVE var")
+	checkOK(t, "DECLARE var BYTE AT 0x8100\nSAVE var")
 }
 
 func TestCheckSaveNotRef(t *testing.T) {
-	checkErr(t, "DECLARE arr ARRAY [5] BYTE AT 0xC000\nSAVE arr[0]", "must be a variable")
+	checkErr(t, "DECLARE arr ARRAY [5] BYTE AT 0x8100\nSAVE arr[0]", "must be a variable")
 }
 
 func TestCheckLoadNoAtUndeclared(t *testing.T) {
 	checkErr(t, "LOAD var", "undeclared")
 }
 
-func TestCheckLoadNoAtWithoutAt(t *testing.T) {
-	checkErr(t, "DECLARE var BYTE\nLOAD var", "LOAD without AT")
+func TestCheckLoadWithoutAt(t *testing.T) {
+	checkOK(t, "DECLARE var BYTE\nLOAD var")
 }
 
 func TestCheckLoadWithAt(t *testing.T) {

@@ -51,6 +51,8 @@ found out about PL/M this inspired me to make PLZ.
 Since 2026 some LLM and agents which produce passable results have become freely
 available. I have used these resources to help me develop the first version of
 PLM. While not ideal, it does allow me to make more progress than unassisted.
+I do manually review all of generated code line by line and mark or correct
+anything too strange.
 
 However, the design of the programming language, while based on PL/M, I
 tried to make more easy to use, in the hope it would ease software development
@@ -75,7 +77,7 @@ PLZ uses github.com/user-none/go-chip-sn76489 as the sound chip emulator
 for testing, under the MIT license.
 
 And Gary Kildall for his brilliant design of PL/M. We need such programming
-languages to truly trn software development into software engineering.
+languages to truly turn software development into software engineering.
 
 
 # Documentation

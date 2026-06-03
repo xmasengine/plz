@@ -6,22 +6,22 @@ import (
 	"strconv"
 )
 
-// HeapBase is the base address of the heap/RAM region at 0xC000.
+// HeapBase is the base address of the heap/RAM region at 0xC000 for the SMS.
 const HeapBase = 0xC000 // RAM memory.
 
 // Gen is the code generator that emits Z80 assembly text from a checked AST.
 // It holds an output file, a scope stack for name resolution, and generation
 // state such as the current procedure name and label counter.
 type Gen struct {
-	file           *os.File
-	Heap           int // Pointer to last allocated heap RAM memory.
-	label          int // counter for unique local labels
-	Checker        *Checker
-	InTask         bool                      // set when generating inside a task body
-	procName       string                    // current procedure name (empty = global scope)
-	symStack       []map[Identifier]symEntry // scope stack
-	ProcReturnType Type                      // return type of current procedure (for BYTE zero-extend in Return.Gen)
-	ProcInterrupt  *Interrupt                // interrupt type of current procedure (for reti/retn in Return.Gen)
+	file               *os.File
+	Heap               int                       // Heap pointer to last allocated heap RAM memory.
+	label              int                       // counter for unique local labels
+	Checker            *Checker                  // Checker also used for holding semantic information of the source code.
+	InTask             bool                      // InTaks is set when generating inside a task body
+	procName           string                    // current procedure name (empty = global scope)
+	symStack           []map[Identifier]symEntry // scope stack: TODO is this redundant with the checker's scope stack?
+	ProcReturnType     Type                      // return type of current procedure (for BYTE zero-extend in Return.Gen)
+	ProcInterrupt      *Interrupt                // interrupt type of current procedure (for reti/retn in Return.Gen)
 	BoundCheck         bool                      // when true, emit runtime bounds checks before array accesses
 	boundsErrorEmitted bool                      // tracks whether _plz_bounds_error label has been emitted
 	strings            []strEntry                // string literal labels and content for ROM emission
@@ -87,6 +87,7 @@ func (g *Gen) localSym(id Identifier) Identifier {
 // localType resolves an identifier's type by walking the scope stack from
 // innermost to outermost, falling back to the checker's root scope.
 func (g *Gen) localType(id Identifier) (Type, bool) {
+	// TODO is the sym stack redundant with the checker's scope stack?
 	for i := len(g.symStack) - 1; i >= 0; i-- {
 		if e, ok := g.symStack[i][id]; ok {
 			return e.typ, true
@@ -102,6 +103,7 @@ func (g *Gen) localType(id Identifier) (Type, bool) {
 
 // isParamRef returns true when id is a record or data parameter passed by reference.
 func (g *Gen) isParamRef(id Identifier) bool {
+	// TODO is the sym stack redundant with the checker's scope stack?
 	for i := len(g.symStack) - 1; i >= 0; i-- {
 		if e, ok := g.symStack[i][id]; ok {
 			return e.paramRef
@@ -193,7 +195,7 @@ main:
 // running into the data section.
 const ProgramFooter = `
 _plz_all_done:
-	di
+	ei
 	halt
 	jp _plz_all_done
 
@@ -334,6 +336,7 @@ _plz_cmp_false:
 // and procedures are emitted after the main body so they are not reachable by
 // fall-through.
 func (p Program) Gen(g *Gen) error {
+	// TODO this functiom is too long and needs to be refactored.
 	c := NewChecker()
 	if err := p.Check(c); err != nil {
 		return err
@@ -661,6 +664,7 @@ func (e Expression) Gen(g *Gen) error {
 // ROM and load HL with its address. Variable references load the value from
 // memory (byte references zero-extend through A). Parenthesized sub-expressions
 // recurse.
+// TODO: TEXT is not well fleshed out.
 func (o Operand) Gen(g *Gen) error {
 	switch {
 	case o.Literal() != nil:
@@ -785,6 +789,7 @@ func constShift(op Operand) int {
 // isSimpleOperand checks if evaluating the operand does not clobber DE.
 // Simple operands are: literals, variable references, parenthesized simple
 // expressions, and INPUT with a simple port expression.
+// TODO: this should be a method of Operand, not a function
 func isSimpleOperand(op Operand) bool {
 	switch {
 	case op.Literal() != nil:
@@ -804,6 +809,7 @@ func isSimpleOperand(op Operand) bool {
 // isSimpleExpr checks if evaluating the expression does not clobber DE.
 // Simple expressions are: simple operands and NOT-of-simple-operand.
 // Infix, suffix, and NEG expressions may clobber DE and are not simple.
+// TODO: this should be a method of Expression, not a function
 func isSimpleExpr(e Expression) bool {
 	switch {
 	case e.Operand() != nil:
@@ -1178,6 +1184,8 @@ func (g *Gen) genIndexAddr(operands []Operand) (elemSize int, err error) {
 	} else {
 		return 0, fmt.Errorf("genIndexAddr: first operand must be a reference or field expression")
 	}
+
+	// TODO: This goto is evidence the function needs to be refactored
 gotAddr:
 
 	if len(operands) >= 2 {
@@ -1241,6 +1249,7 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 	genCallArg := func(i int) error {
 		if ok && i < len(proc.ParamTypes) {
 			pt := proc.ParamTypes[i]
+			// TODO: this needs refactoring too deep.
 			if pt.Record() != nil || pt.Predeclared() == PredeclaredData {
 				refArg := args[i].Ref()
 				if refArg != nil && refArg.Identifier != "" && len(refArg.Fields) == 0 && len(refArg.Subscripts) == 0 {
@@ -1288,6 +1297,7 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 	default:
 		isReentrant := !ok || proc.Reentrant
 		var totalExtra int
+		// TODO needs to be refactored for the two cases
 		if !isReentrant {
 			for i := 2; i < len(args); i++ {
 				if err := genCallArg(i); err != nil {
@@ -2146,14 +2156,34 @@ func (s Output) Gen(g *Gen) error {
 	return nil
 }
 
+const SRAMBase = 0x8000
+const SRAMControl = 0xFFFC
+const SRAMEnable = 0x8
+const SRAMDisable = 0x0
+
+// generates code to enable SRAM
+func genEnableSRAM(g *Gen) {
+	g.Emitf("\tld a, %d\n", SRAMEnable)
+	g.Emitf("\tld (%d), a\n", SRAMControl)
+}
+
+// generates code to disable SRAM
+func genDisableSRAM(g *Gen) {
+	g.Emitf("\tld a, %d\n", SRAMDisable)
+	g.Emitf("\tld (%d), a\n", SRAMControl)
+}
+
 // Gen generates assembly for a SAVE statement. It emits an LDIR loop to copy
-// data from the source reference to the destination address (from AT or the
-// declaration's AT clause).
+// data from the source reference to the destination address (from AT or
+// SRAMBase if not given).
 func (s Save) Gen(g *Gen) error {
 	ref := s.Source.Ref()
 	if ref == nil {
 		return fmt.Errorf("SAVE source must be a reference")
 	}
+	// must enable SRAM
+	genEnableSRAM(g)
+	defer genDisableSRAM(g)
 
 	// Load source address into HL.
 	if g.isParamRef(ref.Identifier) {
@@ -2162,21 +2192,11 @@ func (s Save) Gen(g *Gen) error {
 		g.Emitf("\tld hl, %s\n", g.localSym(ref.Identifier))
 	}
 
-	// Load destination address into DE.
-	var destAddr int
+	// Load destination address into DE, default SRAMBase.
+	var destAddr int = SRAMBase
 	if s.Location != nil {
 		var err error
 		destAddr, err = g.Checker.EvalConstExpr(*s.Location)
-		if err != nil {
-			return err
-		}
-	} else {
-		d, ok := g.Checker.Lookup(ref.Identifier)
-		if !ok || d.At == nil {
-			return fmt.Errorf("SAVE: cannot determine destination address for %q", ref.Identifier)
-		}
-		var err error
-		destAddr, err = g.Checker.EvalConstExpr(*d.At)
 		if err != nil {
 			return err
 		}
@@ -2198,29 +2218,21 @@ func (s Save) Gen(g *Gen) error {
 }
 
 // Gen generates assembly for a LOAD statement. It emits an LDIR loop to copy
-// data from the SRAM address (from AT or the declaration's AT clause) into the
+// data from the SRAM address (from AT or SRAMBase) into the
 // target variable.
 func (s Load) Gen(g *Gen) error {
 	ref := s.Target.Ref()
 	if ref == nil {
 		return fmt.Errorf("LOAD target must be a reference")
 	}
+	genEnableSRAM(g)
+	defer genDisableSRAM(g)
 
 	// Load source address (SRAM) into HL.
-	var srcAddr int
+	var srcAddr int = SRAMBase
 	if s.Location != nil {
 		var err error
 		srcAddr, err = g.Checker.EvalConstExpr(*s.Location)
-		if err != nil {
-			return err
-		}
-	} else {
-		d, ok := g.Checker.Lookup(ref.Identifier)
-		if !ok || d.At == nil {
-			return fmt.Errorf("LOAD: cannot determine source address for %q", ref.Identifier)
-		}
-		var err error
-		srcAddr, err = g.Checker.EvalConstExpr(*d.At)
 		if err != nil {
 			return err
 		}
@@ -2254,6 +2266,8 @@ func (g *Gen) saveSize(id Identifier) (int, error) {
 	// Check for a DATA block first.
 	if data, ok := g.Checker.Datas[id]; ok {
 		size := 0
+		// XXX this is not correct , certainly not for tile data. Although it is
+		// unlikely we will save a tile to SRAM, except for an image editor or such.
 		for _, val := range data.Values {
 			if op := val.Operand(); op != nil {
 				if lit := op.Literal(); lit != nil {

@@ -17,6 +17,25 @@ type SMSPaletteID = sms.PaletteId
 const tileWidth = 8
 const tileHeight = 8
 
+func colorForRune(r rune) (col byte, skip bool, next bool, err error) {
+	switch r {
+	case '\n':
+		return 0, false, true, nil
+	case ' ':
+		return 0, true, true, nil
+	case '.':
+		return 0, false, false, nil
+	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		return byte(r - '0'), false, false, nil
+	case 'A', 'B', 'C', 'D', 'E', 'F':
+		return byte(r - 'A' + 10), false, false, nil
+	case 'X':
+		return 15, false, false, nil
+	default:
+		return 0, false, false, Error{Message: "Unknown character in Tile, expected .X0123456789ABCDEF"}
+	}
+}
+
 func SMSTileFromString(s string) (SMSTile, error) {
 	res := SMSTile{}
 
@@ -65,7 +84,7 @@ func SMSLoadTileFromImage(img image.Image) (*SMSTile, error) {
 	tile := &SMSTile{}
 	bounds := pimg.Bounds()
 	// Have to use the bounds because subimages may not have a rectangle
-	// that ha a Min of (0,0).
+	// that has a Min of (0,0).
 	for y := bounds.Min.Y; y < bounds.Max.Y && y-bounds.Min.Y < tileHeight; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X && x-bounds.Min.X < tileWidth; x++ {
 			col := pimg.ColorIndexAt(x, y)
