@@ -755,6 +755,19 @@ func (s GoTo) Check(c *Checker) error {
 
 // Check validates a CALL statement by checking each argument expression.
 func (s Call) Check(c *Checker) error {
+	id := string(s.Reference.Identifier)
+	proc, ok := c.Procedures[id]
+	if !ok {
+		return c.Errorf("", "CALL: %s unknown procedure", id)
+	}
+
+	obs := len(s.Arguments)
+	ex := len(proc.Parameters)
+
+	if ex != obs {
+		return c.Errorf("", "CALL: argument count is %d, expected %d", ex, obs)
+	}
+
 	for i := range s.Arguments {
 		if err := s.Arguments[i].Check(c); err != nil {
 			return err
@@ -882,6 +895,22 @@ func (s Suffix) Check(c *Checker) error {
 				if err := c.checkArraySubscript(ref.Identifier, *idxExpr); err != nil {
 					return err
 				}
+			}
+		}
+	}
+	// Check function call
+	if s.Operator == OperatorCALL {
+		println(len(s.Operands))
+		if called := s.Operands[0].Ref(); called != nil {
+			id := string(called.Identifier)
+			proc, ok := c.Procedures[id]
+			if !ok {
+				return c.Errorf("", "CALL: %s unknown procedure", id)
+			}
+			obs := len(s.Operands) - 1
+			ex := len(proc.Parameters)
+			if ex != obs {
+				return c.Errorf("", "CALL: argument count is %d, expected %d", ex, obs)
 			}
 		}
 	}
