@@ -505,7 +505,22 @@ func (g *Data) Parse(parser *Parser) error {
 	for {
 		tok := parser.Peek()
 		switch tok.TokenKind {
-		case TokenInt, TokenString, TokenChar, TokenIdent, KeywordInput, KeywordLength, '(', '+', '-', '!':
+		case TokenInt, TokenString, TokenChar, KeywordInput, KeywordLength, '(', '+', '-', '!':
+			var expr Expression
+			if err := expr.Parse(parser); err != nil {
+				return err
+			}
+			g.Values = append(g.Values, expr)
+		case TokenIdent:
+			if tok.Text == "TEXT" {
+				parser.Next() // consume TEXT keyword
+				strTok, err := parser.Accept(TokenString)
+				if err != nil {
+					return err
+				}
+				g.Text = &TextLit{Value: strTok.Text}
+				break
+			}
 			var expr Expression
 			if err := expr.Parse(parser); err != nil {
 				return err
@@ -516,7 +531,7 @@ func (g *Data) Parse(parser *Parser) error {
 			g.Tile = bmp
 			return g.Tile.Parse(parser)
 		default:
-			if len(g.Values) == 0 {
+			if len(g.Values) == 0 && g.Text == nil && g.Tile == nil {
 				return tok.Errorf("DATA: expected expression")
 			}
 			break

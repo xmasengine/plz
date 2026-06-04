@@ -670,15 +670,15 @@ func TestGenPrefixNot(t *testing.T) {
 
 func TestGenShiftLeftConst(t *testing.T) {
 	asm := genTest(t, "LET x = 1 << 3")
-	if !strings.Contains(asm, "add hl, hl") {
-		t.Errorf("expected shift left pattern, got:\n%s", asm)
+	if !strings.Contains(asm, "add a, a") {
+		t.Errorf("expected shift left pattern (8-bit add a, a), got:\n%s", asm)
 	}
 }
 
 func TestGenShiftRightConst(t *testing.T) {
 	asm := genTest(t, "LET x = 16 >> 2")
-	if !strings.Contains(asm, "srl h") {
-		t.Errorf("expected shift right pattern, got:\n%s", asm)
+	if !strings.Contains(asm, "srl a") {
+		t.Errorf("expected shift right pattern (8-bit srl a), got:\n%s", asm)
 	}
 }
 
@@ -686,6 +686,26 @@ func TestGenCallExpr(t *testing.T) {
 	asm := genTest(t, "PROCEDURE foo() WORD\nRETURN 42\nEND\nPROCEDURE bar\nDECLARE x WORD\nLET x = foo()\nRETURN\nEND")
 	if !strings.Contains(asm, "call _plz_foo") {
 		t.Errorf("expected call _plz_foo, got:\n%s", asm)
+	}
+}
+
+func TestGenMultiLet(t *testing.T) {
+	asm := genTest(t, "PROCEDURE foo() WORD\nRETURN 1, 2\nEND\nDECLARE x WORD\nDECLARE y WORD\nLET x, y = foo()")
+	if !strings.Contains(asm, "ld (x), hl") {
+		t.Errorf("expected first target store (hl), got:\n%s", asm)
+	}
+	if !strings.Contains(asm, "ld (y), de") {
+		t.Errorf("expected second target store (de), got:\n%s", asm)
+	}
+}
+
+func TestGenTextStringArg(t *testing.T) {
+	asm := genTest(t, "PROCEDURE p(msg TYPE TEXT)\nEND\nCALL p(\"Hi\")")
+	if !strings.Contains(asm, "_plz_str_") {
+		t.Errorf("expected string literal label, got:\n%s", asm)
+	}
+	if !strings.Contains(asm, "db 2, 72, 105") {
+		t.Errorf("expected 'Hi' data (H=72, i=105), got:\n%s", asm)
 	}
 }
 
@@ -752,6 +772,38 @@ func TestGenDataTile(t *testing.T) {
 		"`\n")
 	if !strings.Contains(asm, "db ") {
 		t.Errorf("expected tile data bytes, got:\n%s", asm)
+	}
+}
+
+func TestGenLocalInitByte(t *testing.T) {
+	asm := genTest(t, "PROCEDURE foo\nDECLARE x BYTE = 42\nOUTPUT 0 x\nEND\nCALL foo()")
+	if !strings.Contains(asm, "ld a, 42") {
+		t.Errorf("expected ld a, 42 for byte init, got:\n%s", asm)
+	}
+	if !strings.Contains(asm, "ld (_plz_foo_x), a") {
+		t.Errorf("expected store to _plz_foo_x, got:\n%s", asm)
+	}
+}
+
+func TestGenLocalInitWord(t *testing.T) {
+	asm := genTest(t, "PROCEDURE foo\nDECLARE x WORD = 0xABCD\nOUTPUT 0 x\nEND\nCALL foo()")
+	if !strings.Contains(asm, "ld hl, 43981") {
+		t.Errorf("expected ld hl, 43981 for word init, got:\n%s", asm)
+	}
+	if !strings.Contains(asm, "ld (_plz_foo_x), hl") {
+		t.Errorf("expected store hl to _plz_foo_x, got:\n%s", asm)
+	}
+}
+
+func TestGenDataText(t *testing.T) {
+	asm := genTest(t, `DATA msg TEXT "Hello"`+"\n"+`CALL print(msg)
+PROCEDURE print(m TYPE TEXT)
+END`)
+	if !strings.Contains(asm, "msg:\n\tdb 5\n\tds \"Hello\"") {
+		t.Errorf("expected TEXT data with length prefix, got:\n%s", asm)
+	}
+	if !strings.Contains(asm, "ld hl, msg") {
+		t.Errorf("expected ld hl, msg, got:\n%s", asm)
 	}
 }
 

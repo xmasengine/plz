@@ -12,6 +12,13 @@ const HeapBase = 0xC000 // RAM memory.
 // Gen is the code generator that emits Z80 assembly text from a checked AST.
 // It holds an output file, a scope stack for name resolution, and generation
 // state such as the current procedure name and label counter.
+//
+// 8-bit code generation is handled inline: Infix.Gen, Prefix.Gen, and the
+// byte-variable load/store paths in Operand.Gen and Let.Gen all check the
+// types of their operands and emit 8-bit Z80 instructions (A register, cp,
+// add a, etc.) when all values involved are BYTE-typed. Remaining
+// opportunities: 8-bit MUL/DIV runtime helpers, 8-bit suffix (index/field)
+// operations, and 8-bit CALL argument passing.
 type Gen struct {
 	file               *os.File
 	Heap               int                       // Heap pointer to last allocated heap RAM memory.
@@ -195,9 +202,8 @@ main:
 // running into the data section.
 const ProgramFooter = `
 _plz_all_done:
-	ei
+	di
 	halt
-	jp _plz_all_done
 
 `
 
@@ -336,61 +342,28 @@ _plz_cmp_false:
 // and procedures are emitted after the main body so they are not reachable by
 // fall-through.
 func (p Program) Gen(g *Gen) error {
-	// TODO this functiom is too long and needs to be refactored.
 	c := NewChecker()
 	if err := p.Check(c); err != nil {
 		return err
 	}
 	g.Checker = c
 
-	// Emit main code.
-
 	g.Emit(ProgramHeader)
 	g.Emitln("\tjp _plz_start")
 	g.Emit(RuntimeHeader)
 	g.Emitln("_plz_start:")
 
-	// Task initialization
 	if len(c.TaskDefs) > 0 {
-		g.Emitf("\tld hl, _plz_tcbs\n")
-		g.Emitf("\tld de, _plz_tcbs+1\n")
-		g.Emitf("\tld bc, %d\n", 128)
-		g.Emitln("\tld (hl), 0")
-		g.Emitln("\tldir")
-		for i, task := range c.TaskDefs {
-			g.Emitf("\tld hl, _plz_task_%d\n", i)
-			g.Emitf("\tld sp, _plz_task%d_stack+128\n", i)
-			g.Emitln("\tpush hl")
-			g.Emitf("\tld (_plz_tcbs+%d), sp\n", i*8)
-			g.Emitf("\tld a, %d\n", task.Priority)
-			g.Emitf("\tld (_plz_tcbs+%d), a\n", i*8+4)
-		}
-		// Mark unused task slots as dead
-		for i := len(c.TaskDefs); i < 16; i++ {
-			g.Emitf("\tld a, 3\n")
-			g.Emitf("\tld (_plz_tcbs+%d), a\n", i*8+2)
-		}
-		g.Emitln("\txor a")
-		g.Emitln("\tld (_plz_current_task), a")
-		// Restore task 0's SP (which points to push'd ret addr) and "return" to it.
-		g.Emitln("\tld sp, (_plz_tcbs+0)")
-		g.Emitln("\tret")
+		g.genTaskInit(c.TaskDefs)
 	}
 
-	type dataItem struct {
-		at      *At
-		declare *Declare
-	}
 	var dataItems []dataItem
 	var procedures []Procedure
 	var dataStmts []Data
-	var taskDeclares []Statement
 	for _, statement := range p.Statements {
 		switch cmd := statement.Command.(type) {
 		case At:
 			if cmd.HasBank {
-				// AT BANK is emitted inline (affects code placement),
-				// not queued with data items.
 				if err := cmd.Gen(g); err != nil {
 					return err
 				}
@@ -403,8 +376,6 @@ func (p Program) Gen(g *Gen) error {
 			dataStmts = append(dataStmts, cmd)
 		case Procedure:
 			procedures = append(procedures, cmd)
-		case Task:
-			continue // emitted separately
 		default:
 			if err := statement.Gen(g); err != nil {
 				return err
@@ -412,98 +383,27 @@ func (p Program) Gen(g *Gen) error {
 		}
 	}
 
-	// Emit program footer to stop fallthough.
 	g.Emit(ProgramFooter)
 
-	// Emit procedure bodies after main code (must not be reachable by fall-through).
 	for _, proc := range procedures {
 		if err := proc.Gen(g); err != nil {
 			return err
 		}
 	}
-
-	// Emit data statements after procedures (must not be reachable by fall-through).
 	for _, ds := range dataStmts {
 		if err := ds.Gen(g); err != nil {
 			return err
 		}
 	}
 
-	// Emit task bodies after procedures and data.
-	// Task-local DECLAREs are collected and emitted alongside global data items.
-	for i := range c.TaskDefs {
-		t := c.TaskDefs[i]
-		g.Emitf("_plz_task_%d:\n", i)
-		g.InTask = true
-		for j := range t.Body {
-			if _, ok := t.Body[j].Command.(Declare); ok {
-				taskDeclares = append(taskDeclares, t.Body[j])
-				continue
-			}
-			if err := t.Body[j].Gen(g); err != nil {
-				return err
-			}
-		}
-		g.InTask = false
-		g.Emitln("\tjp _plz_task_done")
-	}
+	taskDeclares := g.genTaskBodies(c.TaskDefs)
 
-	// Emit string literal data in ROM (after all code, before RAM data).
-	for _, s := range g.strings {
-		g.Emitf("%s: db %d", s.label, len(s.data))
-		for _, c := range s.data {
-			g.Emitf(", %d", byte(c))
-		}
-		g.Emit("\n")
-	}
-
-	// Emit scheduler and task runtime.
+	g.genStringData()
 	if len(c.TaskDefs) > 0 {
-		g.Emit(SchedulerCode)
-		g.Emitf("org 0x%x\n", g.Heap)
-		g.Emitf("_plz_current_task: db 0\n")
-		g.Emitf("_plz_sch_sp: dw 0\n")
-		g.Emitf("_plz_tcbs: ds 128\n")
-		for i := range c.TaskDefs {
-			g.Emitf("_plz_task%d_stack: ds 128\n", i)
-			g.Heap += 128
-		}
-		g.Heap += 131 // current_task(1) + sch_sp(2) + tcbs(128)
+		g.genSchedulerRuntime(c.TaskDefs)
 	}
+	g.genProcStorage(p.Statements)
 
-	// Emit procedure parameter and local variable storage in RAM.
-	for _, stmt := range p.Statements {
-		proc, ok := stmt.Command.(Procedure)
-		if !ok || proc.Reentrant {
-			continue
-		}
-		for i, param := range proc.Parameters {
-			psize := proc.paramByteSize(i)
-			g.emitStorage("_plz_%s_%s", psize, proc.Name.Name, param)
-		}
-		var emitLocals func(stmts []Statement, depth int)
-		emitLocals = func(stmts []Statement, depth int) {
-			for _, s := range stmts {
-				switch cmd := s.Command.(type) {
-				case Declare:
-					var label string
-					if depth == 0 {
-						label = fmt.Sprintf("_plz_%s_%s", proc.Name.Name, cmd.Identifier)
-					} else {
-						label = fmt.Sprintf("_plz_%s_%d_%s", proc.Name.Name, depth, cmd.Identifier)
-					}
-					g.emitStorageRaw(label, cmd.StorageSize())
-				case Group:
-					emitLocals(cmd.Statements, depth+1)
-				}
-			}
-		}
-		emitLocals(proc.Statements, 0)
-	}
-
-	// Emit data items (AT directives and global declarations) at the end in
-	// source order. Each AT directive sets the ORG address; each DECLARE
-	// allocates storage at the current heap position.
 	for _, item := range dataItems {
 		if item.at != nil {
 			if err := item.at.Gen(g); err != nil {
@@ -514,7 +414,6 @@ func (p Program) Gen(g *Gen) error {
 			item.declare.Gen(g)
 		}
 	}
-	// Emit task-local DECLAREs after global data items.
 	for _, s := range taskDeclares {
 		if err := s.Gen(g); err != nil {
 			return err
@@ -525,6 +424,110 @@ func (p Program) Gen(g *Gen) error {
 		g.genOnceBoundsError()
 	}
 	return nil
+}
+
+type dataItem struct {
+	at      *At
+	declare *Declare
+}
+
+func (g *Gen) genTaskInit(tasks []Task) {
+	g.Emitf("\tld hl, _plz_tcbs\n")
+	g.Emitf("\tld de, _plz_tcbs+1\n")
+	g.Emitf("\tld bc, %d\n", 128)
+	g.Emitln("\tld (hl), 0")
+	g.Emitln("\tldir")
+	for i, task := range tasks {
+		g.Emitf("\tld hl, _plz_task_%d\n", i)
+		g.Emitf("\tld sp, _plz_task%d_stack+128\n", i)
+		g.Emitln("\tpush hl")
+		g.Emitf("\tld (_plz_tcbs+%d), sp\n", i*8)
+		g.Emitf("\tld a, %d\n", task.Priority)
+		g.Emitf("\tld (_plz_tcbs+%d), a\n", i*8+4)
+	}
+	for i := len(tasks); i < 16; i++ {
+		g.Emitf("\tld a, 3\n")
+		g.Emitf("\tld (_plz_tcbs+%d), a\n", i*8+2)
+	}
+	g.Emitln("\txor a")
+	g.Emitln("\tld (_plz_current_task), a")
+	g.Emitln("\tld sp, (_plz_tcbs+0)")
+	g.Emitln("\tret")
+}
+
+func (g *Gen) genTaskBodies(tasks []Task) []Statement {
+	var taskDeclares []Statement
+	for i := range tasks {
+		t := tasks[i]
+		g.Emitf("_plz_task_%d:\n", i)
+		g.InTask = true
+		for j := range t.Body {
+			if _, ok := t.Body[j].Command.(Declare); ok {
+				taskDeclares = append(taskDeclares, t.Body[j])
+				continue
+			}
+			if err := t.Body[j].Gen(g); err != nil {
+				panic(err) // or return error — kept for simplicity
+			}
+		}
+		g.InTask = false
+		g.Emitln("\tjp _plz_task_done")
+	}
+	return taskDeclares
+}
+
+func (g *Gen) genStringData() {
+	for _, s := range g.strings {
+		g.Emitf("%s: db %d", s.label, len(s.data))
+		for _, c := range s.data {
+			g.Emitf(", %d", byte(c))
+		}
+		g.Emit("\n")
+	}
+}
+
+func (g *Gen) genSchedulerRuntime(tasks []Task) {
+	g.Emit(SchedulerCode)
+	g.Emitf("org 0x%x\n", g.Heap)
+	g.Emitf("_plz_current_task: db 0\n")
+	g.Emitf("_plz_sch_sp: dw 0\n")
+	g.Emitf("_plz_tcbs: ds 128\n")
+	for i := range tasks {
+		g.Emitf("_plz_task%d_stack: ds 128\n", i)
+		g.Heap += 128
+	}
+	g.Heap += 131
+}
+
+func (g *Gen) genProcStorage(stmts []Statement) {
+	for _, stmt := range stmts {
+		proc, ok := stmt.Command.(Procedure)
+		if !ok || proc.Reentrant {
+			continue
+		}
+		for i, param := range proc.Parameters {
+			psize := proc.paramByteSize(i)
+			g.emitStorage("_plz_%s_%s", psize, proc.Name.Name, param)
+		}
+		g.emitProcLocals(proc.Statements, proc.Name.Name, 0)
+	}
+}
+
+func (g *Gen) emitProcLocals(stmts []Statement, procName string, depth int) {
+	for _, s := range stmts {
+		switch cmd := s.Command.(type) {
+		case Declare:
+			var label string
+			if depth == 0 {
+				label = fmt.Sprintf("_plz_%s_%s", procName, cmd.Identifier)
+			} else {
+				label = fmt.Sprintf("_plz_%s_%d_%s", procName, depth, cmd.Identifier)
+			}
+			g.emitStorageRaw(label, cmd.StorageSize())
+		case Group:
+			g.emitProcLocals(cmd.Statements, procName, depth+1)
+		}
+	}
 }
 
 // Gen generates assembly code for a statement, first emitting its label if
@@ -661,10 +664,12 @@ func (e Expression) Gen(g *Gen) error {
 
 // Gen generates assembly code for an operand. Numeric literals load the value
 // into HL. String literals emit a TEXT record (length-prefixed byte array) in
-// ROM and load HL with its address. Variable references load the value from
-// memory (byte references zero-extend through A). Parenthesized sub-expressions
-// recurse.
-// TODO: TEXT is not well fleshed out.
+// ROM and load HL with its address (an HL pointing to a TEXT-compatible
+// struct { byte length; byte text[] }). The TEXT type alias (record with
+// length and text fields) allows field access via .length and .text[i].
+// Assignment of a string literal to a TEXT variable is not yet supported;
+// string literals are ROM-based and can only be used as expression operands
+// (passed to procedures, compared, etc.).
 func (o Operand) Gen(g *Gen) error {
 	switch {
 	case o.Literal() != nil:
@@ -740,31 +745,92 @@ func (r *Reference) isByteRef(g *Gen) bool {
 	return t.Predeclared() == PredeclaredByte
 }
 
+// isByteOperand reports whether evaluating the operand produces a BYTE value
+// (fits in 0–255). This is used to select 8-bit code generation paths.
+func isByteOperand(g *Gen, op Operand) bool {
+	switch {
+	case op.Literal() != nil:
+		if n := op.Literal().Number(); n != nil {
+			return n.Value >= 0 && n.Value <= 255
+		}
+		return false
+	case op.Reference() != nil:
+		return op.Reference().isByteRef(g)
+	case op.Expr() != nil:
+		return isByteExpression(g, *op.Expr())
+	case op.Input() != nil:
+		return true // INPUT returns a byte
+	case op.Length() != nil:
+		return false // LENGTH is WORD
+	}
+	return false
+}
+
+// isByteExpression reports whether the expression produces a BYTE value.
+func isByteExpression(g *Gen, e Expression) bool {
+	switch {
+	case e.Operand() != nil:
+		return isByteOperand(g, *e.Operand())
+	case e.Prefix() != nil:
+		return isByteOperand(g, e.Prefix().Operand)
+	case e.Infix() != nil:
+		inf := e.Infix()
+		return isByteOperand(g, inf.Operands[0]) && isByteOperand(g, inf.Operands[1])
+	case e.Suffix() != nil:
+		return false
+	}
+	return false
+}
+
+// isByteInfix reports whether both operands of an infix expression are
+// BYTE-typed, enabling 8-bit arithmetic/logic code generation.
+func isByteInfix(g *Gen, i Infix) bool {
+	return isByteOperand(g, i.Operands[0]) && isByteOperand(g, i.Operands[1])
+}
+
 // Gen generates assembly for a prefix expression. OperatorNEG computes two's
 // complement negation of the operand into HL. OperatorNOT computes logical
-// negation (0 → 1, non-zero → 0).
+// negation (0 → 1, non-zero → 0). When the operand is BYTE-typed, 8-bit
+// instructions are used for smaller/faster code.
 func (p Prefix) Gen(g *Gen) error {
 	switch p.Operator {
 	case OperatorNEG:
 		if err := p.Operand.Gen(g); err != nil {
 			return err
 		}
-		g.Emitln("\tex de, hl")
-		g.Emitln("\tld hl, 0")
-		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")
+		if isByteOperand(g, p.Operand) {
+			g.Emitln("\tld a, l")
+			g.Emitln("\tneg")
+			g.Emitln("\tld l, a")
+			g.Emitln("\tld h, 0")
+		} else {
+			g.Emitln("\tex de, hl")
+			g.Emitln("\tld hl, 0")
+			g.Emitln("\tor a")
+			g.Emitln("\tsbc hl, de")
+		}
 
 	case OperatorNOT:
 		if err := p.Operand.Gen(g); err != nil {
 			return err
 		}
-		n := g.nextLabel()
-		g.Emitln("\tld a, h")
-		g.Emitln("\tor l")
-		g.Emitf("\tld hl, 0\n")
-		g.Emitf("\tjr nz, _lbl_%d\n", n)
-		g.Emitln("\tinc l")
-		g.Emitf("_lbl_%d:\n", n)
+		if isByteOperand(g, p.Operand) {
+			n := g.nextLabel()
+			g.Emitln("\tld a, l")
+			g.Emitf("\tld hl, 0\n")
+			g.Emitln("\tor a")
+			g.Emitf("\tjr nz, _lbl_%d\n", n)
+			g.Emitln("\tinc l")
+			g.Emitf("_lbl_%d:\n", n)
+		} else {
+			n := g.nextLabel()
+			g.Emitln("\tld a, h")
+			g.Emitln("\tor l")
+			g.Emitf("\tld hl, 0\n")
+			g.Emitf("\tjr nz, _lbl_%d\n", n)
+			g.Emitln("\tinc l")
+			g.Emitf("_lbl_%d:\n", n)
+		}
 	}
 	return nil
 }
@@ -838,160 +904,305 @@ func (i Infix) Gen(g *Gen) error {
 	if err := i.Operands[0].Gen(g); err != nil {
 		return err
 	}
-
 	useDE := isSimpleOperand(i.Operands[1])
 	if useDE {
 		g.Emitln("\tex de, hl")
 	} else {
 		g.Emitln("\tpush hl")
 	}
-
 	// Right operand
 	if err := i.Operands[1].Gen(g); err != nil {
 		return err
 	}
-
 	g.Emitln("\tex de, hl")
 	if !useDE {
 		g.Emitln("\tpop hl")
 	}
+	isByte := isByteInfix(g, i)
 
 	switch i.Operator {
 	case OperatorADD:
-		g.Emitln("\tadd hl, de")
-
+		g.genInfixAdd(isByte)
 	case OperatorSUB:
-		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")
-
+		g.genInfixSub(isByte)
 	case OperatorShiftLeft:
-		if n := constShift(i.Operands[1]); n >= 0 {
-			for j := 0; j < n; j++ {
-				g.Emitln("\tadd hl, hl")
-			}
-		} else {
-			loop := g.nextLabel()
-			end := g.nextLabel()
-			g.Emitln("\tld a, e")
-			g.Emitf("_lbl_%d:\n", loop)
-			g.Emitln("\tor a")
-			g.Emitf("\tjr z, _lbl_%d\n", end)
-			g.Emitln("\tadd hl, hl")
-			g.Emitln("\tdec a")
-			g.Emitf("\tjr _lbl_%d\n", loop)
-			g.Emitf("_lbl_%d:\n", end)
-		}
-
+		g.genInfixShiftLeft(isByte, i.Operands[1])
 	case OperatorShiftRight:
-		if n := constShift(i.Operands[1]); n >= 0 {
-			for j := 0; j < n; j++ {
-				g.Emitln("\tsrl h")
-				g.Emitln("\trr l")
-			}
-		} else {
-			loop := g.nextLabel()
-			end := g.nextLabel()
-			g.Emitln("\tld a, e")
-			g.Emitf("_lbl_%d:\n", loop)
-			g.Emitln("\tor a")
-			g.Emitf("\tjr z, _lbl_%d\n", end)
-			g.Emitln("\tsrl h")
-			g.Emitln("\trr l")
-			g.Emitln("\tdec a")
-			g.Emitf("\tjr _lbl_%d\n", loop)
-			g.Emitf("_lbl_%d:\n", end)
-		}
-
+		g.genInfixShiftRight(isByte, i.Operands[1])
 	case OperatorAND:
-		g.Emitln("\tld a, h")
-		g.Emitln("\tand d")
-		g.Emitln("\tld h, a")
-		g.Emitln("\tld a, l")
-		g.Emitln("\tand e")
-		g.Emitln("\tld l, a")
-
+		g.genInfixBitwise(isByte, "\tand e", "\tand d")
 	case OperatorOR:
-		g.Emitln("\tld a, h")
-		g.Emitln("\tor d")
-		g.Emitln("\tld h, a")
-		g.Emitln("\tld a, l")
-		g.Emitln("\tor e")
-		g.Emitln("\tld l, a")
-
+		g.genInfixBitwise(isByte, "\tor e", "\tor d")
 	case OperatorXOR:
-		g.Emitln("\tld a, h")
-		g.Emitln("\txor d")
-		g.Emitln("\tld h, a")
-		g.Emitln("\tld a, l")
-		g.Emitln("\txor e")
-		g.Emitln("\tld l, a")
-
+		g.genInfixBitwise(isByte, "\txor e", "\txor d")
 	case OperatorMUL:
 		g.Emitln("\tcall _plz_mul")
 	case OperatorDIV:
 		g.Emitln("\tcall _plz_div")
 	case OperatorMOD:
 		g.Emitln("\tcall _plz_mod")
-
 	case OperatorEQU:
-		n := g.nextLabel()
+		g.genInfixCmp(isByte, cmpEQ)
+	case OperatorNEQ:
+		g.genInfixCmp(isByte, cmpNEQ)
+	case OperatorGT:
+		g.genInfixCmp(isByte, cmpGT)
+	case OperatorLT:
+		g.genInfixCmp(isByte, cmpLT)
+	case OperatorGTE:
+		g.genInfixCmp(isByte, cmpGTE)
+	case OperatorLTE:
+		g.genInfixCmp(isByte, cmpLTE)
+	}
+	return nil
+}
+
+type cmpKind int
+
+const (
+	cmpEQ  cmpKind = iota
+	cmpNEQ
+	cmpGT
+	cmpLT
+	cmpGTE
+	cmpLTE
+)
+
+func (g *Gen) genInfixAdd(isByte bool) {
+	if isByte {
+		g.Emitln("\tld a, l")
+		g.Emitln("\tadd a, e")
+		g.Emitln("\tld l, a")
+		g.Emitln("\tld h, 0")
+	} else {
+		g.Emitln("\tadd hl, de")
+	}
+}
+
+func (g *Gen) genInfixSub(isByte bool) {
+	if isByte {
+		g.Emitln("\tld a, l")
+		g.Emitln("\tsub e")
+		g.Emitln("\tld l, a")
+		g.Emitln("\tld h, 0")
+	} else {
 		g.Emitln("\tor a")
 		g.Emitln("\tsbc hl, de")
+	}
+}
+
+func (g *Gen) genInfixShiftLeft(isByte bool, rhs Operand) {
+	if isByte {
+		g.genShiftLeftByte(rhs)
+	} else if n := constShift(rhs); n >= 0 {
+		for j := 0; j < n; j++ {
+			g.Emitln("\tadd hl, hl")
+		}
+	} else {
+		g.genVarShift("add hl, hl", rhs, false)
+	}
+}
+
+func (g *Gen) genInfixShiftRight(isByte bool, rhs Operand) {
+	if isByte {
+		g.genShiftRightByte(rhs)
+	} else if n := constShift(rhs); n >= 0 {
+		for j := 0; j < n; j++ {
+			g.Emitln("\tsrl h")
+			g.Emitln("\trr l")
+		}
+	} else {
+		g.genVarShift("srl h\n\trr l", rhs, false)
+	}
+}
+
+func (g *Gen) genShiftLeftByte(rhs Operand) {
+	if n := constShift(rhs); n >= 0 {
+		g.Emitln("\tld a, l")
+		for j := 0; j < n; j++ {
+			g.Emitln("\tadd a, a")
+		}
+		g.Emitln("\tld l, a")
+		g.Emitln("\tld h, 0")
+	} else {
+		loop := g.nextLabel()
+		end := g.nextLabel()
+		g.Emitln("\tld a, e")
+		g.Emitf("_lbl_%d:\n", loop)
+		g.Emitln("\tor a")
+		g.Emitf("\tjr z, _lbl_%d\n", end)
+		g.Emitln("\tld a, l")
+		g.Emitln("\tadd a, a")
+		g.Emitln("\tld l, a")
+		g.Emitln("\tdec a")
+		g.Emitf("\tjr _lbl_%d\n", loop)
+		g.Emitf("_lbl_%d:\n", end)
+		g.Emitln("\tld h, 0")
+	}
+}
+
+func (g *Gen) genShiftRightByte(rhs Operand) {
+	if n := constShift(rhs); n >= 0 {
+		g.Emitln("\tld a, l")
+		for j := 0; j < n; j++ {
+			g.Emitln("\tsrl a")
+		}
+		g.Emitln("\tld l, a")
+		g.Emitln("\tld h, 0")
+	} else {
+		loop := g.nextLabel()
+		end := g.nextLabel()
+		g.Emitln("\tld a, e")
+		g.Emitf("_lbl_%d:\n", loop)
+		g.Emitln("\tor a")
+		g.Emitf("\tjr z, _lbl_%d\n", end)
+		g.Emitln("\tsrl l")
+		g.Emitln("\tdec a")
+		g.Emitf("\tjr _lbl_%d\n", loop)
+		g.Emitf("_lbl_%d:\n", end)
+		g.Emitln("\tld h, 0")
+	}
+}
+
+func (g *Gen) genVarShift(shiftOp string, rhs Operand, _ bool) {
+	loop := g.nextLabel()
+	end := g.nextLabel()
+	g.Emitln("\tld a, e")
+	g.Emitf("_lbl_%d:\n", loop)
+	g.Emitln("\tor a")
+	g.Emitf("\tjr z, _lbl_%d\n", end)
+	g.Emit(shiftOp)
+	g.Emit("\n")
+	g.Emitln("\tdec a")
+	g.Emitf("\tjr _lbl_%d\n", loop)
+	g.Emitf("_lbl_%d:\n", end)
+}
+
+func (g *Gen) genInfixBitwise(isByte bool, byteOp, wordHighOp string) {
+	if isByte {
+		g.Emitln("\tld a, l")
+		g.Emit(byteOp)
+		g.Emit("\n")
+		g.Emitln("\tld l, a")
+		g.Emitln("\tld h, 0")
+	} else {
+		g.Emitln("\tld a, h")
+		g.Emit(wordHighOp)
+		g.Emit("\n")
+		g.Emitln("\tld h, a")
+		g.Emitln("\tld a, l")
+		g.Emit(byteOp)
+		g.Emit("\n")
+		g.Emitln("\tld l, a")
+	}
+}
+
+func (g *Gen) genInfixCmp(isByte bool, kind cmpKind) {
+	n := g.nextLabel()
+	if isByte {
+		g.genByteCmp(kind, n)
+	} else {
+		g.genWordCmp(kind, n)
+	}
+}
+
+func (g *Gen) genByteCmp(kind cmpKind, n int) {
+	switch kind {
+	case cmpEQ:
+		g.Emitln("\tld a, l")
+		g.Emitln("\tcp e")
 		g.Emitln("\tld hl, 0")
 		g.Emitf("\tjr nz, _cmp_%d\n", n)
 		g.Emitln("\tinc l")
 		g.Emitf("_cmp_%d:\n", n)
-	case OperatorNEQ:
-		n := g.nextLabel()
-		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")
+	case cmpNEQ:
+		g.Emitln("\tld a, l")
+		g.Emitln("\tcp e")
 		g.Emitln("\tld hl, 0")
 		g.Emitf("\tjr z, _cmp_%d\n", n)
 		g.Emitln("\tinc l")
 		g.Emitf("_cmp_%d:\n", n)
-	case OperatorGT:
-		n := g.nextLabel()
-		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")
-		g.Emitf("\tjr c, _cmp_%d\n", n)
-		g.Emitf("\tjr z, _cmp_%d\n", n)
-		g.Emitln("\tld hl, 1")
-		g.Emitf("\tjr _cmpd_%d\n", n)
-		g.Emitf("_cmp_%d:\n", n)
-		g.Emitln("\tld hl, 0")
-		g.Emitf("_cmpd_%d:\n", n)
-	case OperatorLT:
-		n := g.nextLabel()
-		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")
+	case cmpGT:
+		g.Emitln("\tld a, e")
+		g.Emitln("\tcp l")
 		g.Emitf("\tjr nc, _cmp_%d\n", n)
 		g.Emitln("\tld hl, 1")
 		g.Emitf("\tjr _cmpd_%d\n", n)
 		g.Emitf("_cmp_%d:\n", n)
 		g.Emitln("\tld hl, 0")
 		g.Emitf("_cmpd_%d:\n", n)
-	case OperatorGTE:
-		n := g.nextLabel()
-		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")
+	case cmpLT:
+		g.Emitln("\tld a, l")
+		g.Emitln("\tcp e")
+		g.Emitf("\tjr nc, _cmp_%d\n", n)
+		g.Emitln("\tld hl, 1")
+		g.Emitf("\tjr _cmpd_%d\n", n)
+		g.Emitf("_cmp_%d:\n", n)
+		g.Emitln("\tld hl, 0")
+		g.Emitf("_cmpd_%d:\n", n)
+	case cmpGTE:
+		g.Emitln("\tld a, l")
+		g.Emitln("\tcp e")
 		g.Emitf("\tjr c, _cmp_%d\n", n)
 		g.Emitln("\tld hl, 1")
 		g.Emitf("\tjr _cmpd_%d\n", n)
 		g.Emitf("_cmp_%d:\n", n)
 		g.Emitln("\tld hl, 0")
 		g.Emitf("_cmpd_%d:\n", n)
-	case OperatorLTE:
-		n := g.nextLabel()
-		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")
+	case cmpLTE:
+		g.Emitln("\tld a, l")
+		g.Emitln("\tcp e")
 		g.Emitln("\tld hl, 1")
 		g.Emitf("\tjr z, _cmp_%d\n", n)
 		g.Emitf("\tjr c, _cmp_%d\n", n)
 		g.Emitln("\tdec l")
 		g.Emitf("_cmp_%d:\n", n)
 	}
+}
 
-	return nil
+func (g *Gen) genWordCmp(kind cmpKind, n int) {
+	g.Emitln("\tor a")
+	g.Emitln("\tsbc hl, de")
+	switch kind {
+	case cmpEQ:
+		g.Emitln("\tld hl, 0")
+		g.Emitf("\tjr nz, _cmp_%d\n", n)
+		g.Emitln("\tinc l")
+		g.Emitf("_cmp_%d:\n", n)
+	case cmpNEQ:
+		g.Emitln("\tld hl, 0")
+		g.Emitf("\tjr z, _cmp_%d\n", n)
+		g.Emitln("\tinc l")
+		g.Emitf("_cmp_%d:\n", n)
+	case cmpGT:
+		g.Emitf("\tjr c, _cmp_%d\n", n)
+		g.Emitf("\tjr z, _cmp_%d\n", n)
+		g.Emitln("\tld hl, 1")
+		g.Emitf("\tjr _cmpd_%d\n", n)
+		g.Emitf("_cmp_%d:\n", n)
+		g.Emitln("\tld hl, 0")
+		g.Emitf("_cmpd_%d:\n", n)
+	case cmpLT:
+		g.Emitf("\tjr nc, _cmp_%d\n", n)
+		g.Emitln("\tld hl, 1")
+		g.Emitf("\tjr _cmpd_%d\n", n)
+		g.Emitf("_cmp_%d:\n", n)
+		g.Emitln("\tld hl, 0")
+		g.Emitf("_cmpd_%d:\n", n)
+	case cmpGTE:
+		g.Emitf("\tjr c, _cmp_%d\n", n)
+		g.Emitln("\tld hl, 1")
+		g.Emitf("\tjr _cmpd_%d\n", n)
+		g.Emitf("_cmp_%d:\n", n)
+		g.Emitln("\tld hl, 0")
+		g.Emitf("_cmpd_%d:\n", n)
+	case cmpLTE:
+		g.Emitln("\tld hl, 1")
+		g.Emitf("\tjr z, _cmp_%d\n", n)
+		g.Emitf("\tjr c, _cmp_%d\n", n)
+		g.Emitln("\tdec l")
+		g.Emitf("_cmp_%d:\n", n)
+	}
 }
 
 // Gen generates assembly for a suffix expression (index, function call, or field access).
@@ -1122,27 +1333,64 @@ func (g *Gen) elemSize(name Identifier) int {
 // When g.BoundCheck is true and the array size is known, it emits a runtime
 // bounds check that halts the CPU if the index is out of range.
 func (g *Gen) genIndexAddr(operands []Operand) (elemSize int, err error) {
-	ref := operands[0].Ref()
-	var baseSuffix *Suffix
-	var arrSize int // element count for bounds check (0 = unknown/unbounded)
+	ref, baseSuffix := g.resolveIndexBase(operands)
 	if ref == nil {
-		if expr := operands[0].Expr(); expr != nil {
-			baseSuffix = expr.Suffix()
-			if baseSuffix != nil && len(baseSuffix.Operands) > 0 {
-				ref = baseSuffix.Operands[0].Ref()
-			} else {
-				ref = expr.Ref()
-			}
-		}
+		return 0, fmt.Errorf("genIndexAddr: first operand must be a reference or field expression")
 	}
 
-	elem := 2 // default fallback
+	elem, arrSize, err := g.indexElemAndBounds(ref, baseSuffix)
+	if err != nil {
+		return 0, err
+	}
+	g.emitIndexBaseAddr(ref, baseSuffix)
+
+	if len(operands) >= 2 {
+		g.Emitln("\tpush hl")
+		if err := operands[1].Expr().Gen(g); err != nil {
+			return 0, err
+		}
+		if g.BoundCheck && arrSize > 0 {
+			g.Emitf("\tld de, %d\n", arrSize)
+			g.Emitln("\tor a")
+			g.Emitln("\tsbc hl, de")
+			g.Emitln("\tjr nc, _plz_bounds_error")
+			g.Emitln("\tadd hl, de")
+		}
+		for size := elem; size > 1; size >>= 1 {
+			g.Emitln("\tadd hl, hl")
+		}
+		g.Emitln("\tex de, hl")
+		g.Emitln("\tpop hl")
+		g.Emitln("\tadd hl, de")
+	}
+	return elem, nil
+}
+
+// resolveIndexBase extracts the underlying Reference and optional field Suffix
+// from the first operand of an index expression.
+func (g *Gen) resolveIndexBase(operands []Operand) (*Reference, *Suffix) {
+	ref := operands[0].Ref()
+	if ref != nil {
+		return ref, nil
+	}
+	if expr := operands[0].Expr(); expr != nil {
+		if s := expr.Suffix(); s != nil && len(s.Operands) > 0 {
+			return s.Operands[0].Ref(), s
+		}
+		return expr.Ref(), nil
+	}
+	return nil, nil
+}
+
+// indexElemAndBounds determines the element size (in bytes) and the array size
+// (for bounds checking) for the reference or field-suffix at the base of an
+// index expression.
+func (g *Gen) indexElemAndBounds(ref *Reference, baseSuffix *Suffix) (elem int, arrSize int, err error) {
+	elem = 2
 	if baseSuffix != nil && baseSuffix.Operator == OperatorFIELD {
-		// Field expression base (e.g., rec.arr[i]): compute field address first.
-		// genFieldAddr returns the field type, which may be an array.
 		ft, err := g.genFieldAddr(baseSuffix.Operands)
 		if err != nil {
-			return 0, err
+			return 2, 0, err
 		}
 		if ft.Array() != nil {
 			if g.BoundCheck {
@@ -1153,62 +1401,45 @@ func (g *Gen) genIndexAddr(operands []Operand) (elemSize int, err error) {
 			} else if ft.Array().ElemType.Record() != nil {
 				elem = ft.Array().ElemType.Record().TotalSize()
 				elem = nextPow2(elem)
+			}
+		}
+		return elem, arrSize, nil
+	}
+
+	elem = g.elemSize(ref.Identifier)
+	if g.BoundCheck {
+		if t, ok := g.localType(ref.Identifier); ok {
+			if arr := t.Array(); arr != nil {
+				arrSize = arr.Size
+			}
+		} else if data, ok := g.Checker.Datas[ref.Identifier]; ok {
+			if data.Tile != nil {
+				arrSize = len(data.Tile.Tiles)
+			} else if data.Text != nil {
+				arrSize = len(data.Text.Value) + 1
 			} else {
-				elem = 2
+				arrSize = len(data.Values)
 			}
 		}
-	} else if ref != nil {
-		elem = g.elemSize(ref.Identifier)
-		if g.BoundCheck {
-			if t, ok := g.localType(ref.Identifier); ok {
-				if arr := t.Array(); arr != nil {
-					arrSize = arr.Size
-				}
-			} else if data, ok := g.Checker.Datas[ref.Identifier]; ok {
-				if data.Tile != nil {
-					arrSize = len(data.Tile.Tiles)
-				} else {
-					arrSize = len(data.Values)
-				}
-			}
-		}
-		// DATA items store each numeric value as 1 byte (db).
-		if _, ok := g.Checker.Datas[ref.Identifier]; ok {
-			elem = 1
-		}
-		if g.isParamRef(ref.Identifier) {
-			g.Emitf("\tld hl, (%s)\n", g.localSym(ref.Identifier))
-			goto gotAddr
-		}
-		g.Emitf("\tld hl, %s\n", g.localSym(ref.Identifier))
+	}
+	if _, ok := g.Checker.Datas[ref.Identifier]; ok {
+		elem = 1
+	}
+	return elem, arrSize, nil
+}
+
+// emitIndexBaseAddr emits a load of the base address for an index expression.
+// For field suffixes (rec.arr[i]), genFieldAddr already emitted the address,
+// so this is a no-op.
+func (g *Gen) emitIndexBaseAddr(ref *Reference, baseSuffix *Suffix) {
+	if baseSuffix != nil && baseSuffix.Operator == OperatorFIELD {
+		return
+	}
+	if g.isParamRef(ref.Identifier) {
+		g.Emitf("\tld hl, (%s)\n", g.localSym(ref.Identifier))
 	} else {
-		return 0, fmt.Errorf("genIndexAddr: first operand must be a reference or field expression")
+		g.Emitf("\tld hl, %s\n", g.localSym(ref.Identifier))
 	}
-
-	// TODO: This goto is evidence the function needs to be refactored
-gotAddr:
-
-	if len(operands) >= 2 {
-		g.Emitln("\tpush hl")
-		if err := operands[1].Expr().Gen(g); err != nil {
-			return 0, err
-		}
-		// Runtime bounds check: verify 0 ≤ index < arrSize.
-		if g.BoundCheck && arrSize > 0 {
-			g.Emitf("\tld de, %d\n", arrSize)
-			g.Emitln("\tor a")
-			g.Emitln("\tsbc hl, de")
-			g.Emitln("\tjr nc, _plz_bounds_error")
-			g.Emitln("\tadd hl, de") // restore original index
-		}
-		for size := elem; size > 1; size >>= 1 {
-			g.Emitln("\tadd hl, hl")
-		}
-		g.Emitln("\tex de, hl")
-		g.Emitln("\tpop hl")
-		g.Emitln("\tadd hl, de")
-	}
-	return elem, nil
 }
 
 // genIndexRead generates code to read arr[index] into HL. Operands are
@@ -1242,41 +1473,14 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 	}
 	name := string(ref.Identifier)
 	args := operands[1:]
-
-	// Look up the procedure definition for param type info.
 	proc, ok := g.Checker.Procedures[name]
 
 	genCallArg := func(i int) error {
-		if ok && i < len(proc.ParamTypes) {
-			pt := proc.ParamTypes[i]
-			// TODO: this needs refactoring too deep.
-			if pt.Record() != nil || pt.Predeclared() == PredeclaredData {
-				refArg := args[i].Ref()
-				if refArg != nil && refArg.Identifier != "" && len(refArg.Fields) == 0 && len(refArg.Subscripts) == 0 {
-					if g.isParamRef(refArg.Identifier) {
-						g.Emitf("\tld hl, (%s)\n", g.localSym(refArg.Identifier))
-					} else {
-						g.Emitf("\tld hl, %s\n", g.localSym(refArg.Identifier))
-					}
-					return nil
-				}
-				// Non-trivial argument: compute address instead of value.
-				if expr := args[i].Expr(); expr != nil {
-					if suff := expr.Suffix(); suff != nil {
-						switch suff.Operator {
-						case OperatorINDEX:
-							_, err := g.genIndexAddr(suff.Operands)
-							return err
-						case OperatorFIELD:
-							_, err := g.genFieldAddr(suff.Operands)
-							return err
-						}
-					}
-				}
-				return fmt.Errorf("cannot take address of argument %d", i)
-			}
+		e := args[i].Expr()
+		if e == nil {
+			return fmt.Errorf("cannot evaluate argument %d", i)
 		}
-		return args[i].Expr().Gen(g)
+		return g.genCallArg(*e, proc, ok, i)
 	}
 
 	switch len(args) {
@@ -1295,39 +1499,7 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 		}
 		g.Emitln("\tpop de")
 	default:
-		isReentrant := !ok || proc.Reentrant
-		var totalExtra int
-		// TODO needs to be refactored for the two cases
-		if !isReentrant {
-			for i := 2; i < len(args); i++ {
-				if err := genCallArg(i); err != nil {
-					return err
-				}
-				paramName := proc.Parameters[i]
-				if ok && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared() == PredeclaredByte {
-					g.Emitf("\tld a, l\n\tld (_plz_%s_%s), a\n", name, paramName)
-				} else {
-					g.Emitf("\tld (_plz_%s_%s), hl\n", name, paramName)
-				}
-			}
-		} else {
-			for i := len(args) - 1; i >= 2; i-- {
-				if err := genCallArg(i); err != nil {
-					return err
-				}
-				psize := 2
-				if ok && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared() == PredeclaredByte {
-					psize = 1
-				}
-				totalExtra += psize
-				if psize == 1 {
-					g.Emitln("\tld a, l")
-					g.Emitln("\tpush af")
-				} else {
-					g.Emitln("\tpush hl")
-				}
-			}
-		}
+		totalExtra := g.emitExtraCallArgs(name, proc, ok, genCallArg, len(args))
 		if err := genCallArg(1); err != nil {
 			return err
 		}
@@ -1336,7 +1508,7 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 			return err
 		}
 		g.Emitln("\tpop de")
-
+		isReentrant := !ok || proc.Reentrant
 		g.Emitf("\tcall _plz_%s\n", name)
 		if isReentrant && totalExtra > 0 {
 			g.Emitf("\tld hl, %d\n", totalExtra)
@@ -1345,7 +1517,6 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 		}
 		return nil
 	}
-
 	g.Emitf("\tcall _plz_%s\n", name)
 	return nil
 }
@@ -1357,203 +1528,205 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 // Gen generates assembly for a LET assignment. It evaluates the RHS, pushes it,
 // computes the target address (handling subscripts, field access, and their
 // combinations), then stores the value. Byte targets store only the low byte;
-// word targets store both bytes.
+// word targets store both bytes. When Target2 is set (multi-return CALL), DE
+// holds the second return value and is stored into Target2 after the first.
 func (s Let) Gen(g *Gen) error {
-	// Evaluate RHS into hl.
 	if err := s.Expression.Gen(g); err != nil {
 		return err
 	}
-
-	// Determine base decl type for record field access.
 	t, _ := g.localType(s.Identifier)
-	// Unwrap array to get element type for field access.
 	if arr := t.Array(); arr != nil {
 		t = arr.ElemType
 	}
 
-	// Three cases:
-	// 1. Simple store (no subscripts, no fields)
-	// 2. Array of records field store: arr[i].x (both subscripts and fields)
-	// 3. Subscripted field store: rec.arr[i] (fields then subscripts, field is array)
-	// 4. Simple field store: rec.x (fields only)
-	// 5. Simple array store: arr[i] (subscripts only)
-
+	// Simple store (no subscripts, no fields).
 	if len(s.Subscripts) == 0 && len(s.Fields) == 0 {
-		// Simple variable store.
-		if s.isByteRef(g) {
-			g.Emitln("\tld a, l")
-			g.Emitf("\tld (%s), a\n", g.localSym(s.Identifier))
-		} else {
-			g.Emitf("\tld (%s), hl\n", g.localSym(s.Identifier))
-		}
-		return nil
+		return g.genLetSimple(s)
 	}
 
-	// Save RHS value.
+	// Complex stores: save RHS value(s) and compute target address.
+	if s.Target2 != nil {
+		g.Emitln("\tpush de")
+	}
 	g.Emitln("\tpush hl")
 
-	// Compute target address.
 	if len(s.Subscripts) > 0 && len(s.Fields) > 0 {
-		// Two cases look the same in the flat Reference:
-		//   arr[i].x  -> subscripts index the base array, field accesses the result record
-		//   rec.arr[i] -> field accesses the base record, subscripts index the result array
-		// Distinguish: if the first field has an Array type, it's rec.arr[i].
-		isArrOfRecords := true
-		if t.Record() != nil {
-			fname := s.Fields[0]
-			for _, f := range t.Record().Fields {
-				if f.Identifier == fname && f.Type.Array() != nil {
-					isArrOfRecords = false
-					break
-				}
-			}
-		}
-		if isArrOfRecords {
-			// arr[i].x: array of records, field write.
-			if t.Record() == nil {
-				return fmt.Errorf("let: %s is not an array of records", s.Identifier)
-			}
-			recSize := g.elemSize(s.Identifier)
-			fname := s.Fields[0]
-			fieldIdx := -1
-			for i, f := range t.Record().Fields {
-				if f.Identifier == fname {
-					fieldIdx = i
-					break
-				}
-			}
-			if fieldIdx < 0 {
-				return fmt.Errorf("let: struct %s has no field %s", s.Identifier, fname)
-			}
-			off := t.Record().FieldOffset(fieldIdx)
-			ft := t.Record().Fields[fieldIdx].Type
-
-			if g.isParamRef(s.Identifier) {
-				g.Emitf("\tld hl, (%s)\n", g.localSym(s.Identifier))
-			} else {
-				g.Emitf("\tld hl, %s\n", g.localSym(s.Identifier))
-			}
-			// Add scaled index.
-			if len(s.Subscripts) >= 1 {
-				g.Emitln("\tpush hl")
-				if err := s.Subscripts[0].Gen(g); err != nil {
-					return err
-				}
-				for size := recSize; size > 1; size >>= 1 {
-					g.Emitln("\tadd hl, hl")
-				}
-				g.Emitln("\tex de, hl")
-				g.Emitln("\tpop hl")
-				g.Emitln("\tadd hl, de")
-			}
-			// Add field offset.
-			if off > 0 {
-				g.Emitf("\tld de, %d\n", off)
-				g.Emitln("\tadd hl, de")
-			}
-			g.Emitln("\tpop de") // value to store
-			if ft.Predeclared() == PredeclaredByte {
-				g.Emitln("\tld (hl), e")
-			} else {
-				g.Emitln("\tld (hl), e")
-				g.Emitln("\tinc hl")
-				g.Emitln("\tld (hl), d")
-			}
-			return nil
-		}
+		return g.genLetArrField(s, t)
 	}
-
 	if len(s.Fields) > 0 {
-		// Struct field store: s.field = rhs (possibly with subscripts if field is array).
-		if t.Record() == nil {
-			return fmt.Errorf("let: %s is not a struct", s.Identifier)
-		}
+		return g.genLetField(s, t)
+	}
+	return g.genLetArray(s)
+}
+
+func (g *Gen) genLetSimple(s Let) error {
+	if s.isByteRef(g) {
+		g.Emitln("\tld a, l")
+		g.Emitf("\tld (%s), a\n", g.localSym(s.Identifier))
+	} else {
+		g.Emitf("\tld (%s), hl\n", g.localSym(s.Identifier))
+	}
+	if s.Target2 != nil && s.Target2.Identifier != "" {
+		g.emitTarget2Store(s.Target2)
+	}
+	return nil
+}
+
+func (g *Gen) genLetArrField(s Let, t Type) error {
+	isArrOfRecords := true
+	if t.Record() != nil {
 		fname := s.Fields[0]
-		fieldIdx := -1
-		for i, f := range t.Record().Fields {
-			if f.Identifier == fname {
-				fieldIdx = i
+		for _, f := range t.Record().Fields {
+			if f.Identifier == fname && f.Type.Array() != nil {
+				isArrOfRecords = false
 				break
 			}
 		}
-		if fieldIdx < 0 {
-			return fmt.Errorf("let: struct %s has no field %s", s.Identifier, fname)
-		}
-		off := t.Record().FieldOffset(fieldIdx)
-		ft := t.Record().Fields[fieldIdx].Type
-
-		if g.isParamRef(s.Identifier) {
-			g.Emitf("\tld hl, (%s)\n", g.localSym(s.Identifier))
-		} else {
-			g.Emitf("\tld hl, %s\n", g.localSym(s.Identifier))
-		}
-		if off > 0 {
-			g.Emitf("\tld de, %d\n", off)
-			g.Emitln("\tadd hl, de")
-		}
-		// If field is an array and there are subscripts, add scaled index.
-		if ft.Array() != nil && len(s.Subscripts) > 0 {
-			arrElemSize := 1
-			if ft.Array().ElemType.Predeclared() == PredeclaredWord {
-				arrElemSize = 2
-			} else if ft.Array().ElemType.Record() != nil {
-				arrElemSize = ft.Array().ElemType.Record().TotalSize()
-				arrElemSize = nextPow2(arrElemSize)
-			}
-			g.Emitln("\tpush hl")
-			if err := s.Subscripts[0].Gen(g); err != nil {
-				return err
-			}
-			for size := arrElemSize; size > 1; size >>= 1 {
-				g.Emitln("\tadd hl, hl")
-			}
-			g.Emitln("\tex de, hl")
-			g.Emitln("\tpop hl")
-			g.Emitln("\tadd hl, de")
-		}
-		g.Emitln("\tpop de")
-		if ft.Predeclared() == PredeclaredByte {
-			g.Emitln("\tld (hl), e")
-		} else if ft.Array() != nil && ft.Array().ElemType.Predeclared() == PredeclaredByte {
-			g.Emitln("\tld (hl), e")
-		} else {
-			g.Emitln("\tld (hl), e")
-			g.Emitln("\tinc hl")
-			g.Emitln("\tld (hl), d")
-		}
-		return nil
 	}
-
-	// Array element set: lhs[i] = rhs
-
-	elem := g.elemSize(s.Identifier)
-	if g.isParamRef(s.Identifier) {
-		g.Emitf("\tld hl, (%s)\n", g.localSym(s.Identifier))
-	} else {
-		g.Emitf("\tld hl, %s\n", g.localSym(s.Identifier))
+	if isArrOfRecords {
+		return g.genLetArrOfRecField(s, t)
 	}
-	for i := range s.Subscripts {
-		g.Emitln("\tpush hl")
-		if err := s.Subscripts[i].Gen(g); err != nil {
+	return g.genLetFieldArr(s, t)
+}
+
+// genLetArrOfRecField handles arr[i].x — field write into array of records.
+func (g *Gen) genLetArrOfRecField(s Let, t Type) error {
+	if t.Record() == nil {
+		return fmt.Errorf("let: %s is not an array of records", s.Identifier)
+	}
+	recSize := g.elemSize(s.Identifier)
+	fname := s.Fields[0]
+	fieldIdx := findField(t.Record(), fname)
+	if fieldIdx < 0 {
+		return fmt.Errorf("let: struct %s has no field %s", s.Identifier, fname)
+	}
+	off := t.Record().FieldOffset(fieldIdx)
+	ft := t.Record().Fields[fieldIdx].Type
+
+	g.emitLetBaseAddr(s.Identifier)
+	if len(s.Subscripts) >= 1 {
+		if err := g.emitScaledIndex(s.Subscripts[0], recSize); err != nil {
 			return err
 		}
-		for size := elem; size > 1; size >>= 1 {
-			g.Emitln("\tadd hl, hl")
-		}
-		g.Emitln("\tex de, hl")
-		g.Emitln("\tpop hl")
+	}
+	if off > 0 {
+		g.Emitf("\tld de, %d\n", off)
 		g.Emitln("\tadd hl, de")
 	}
-
 	g.Emitln("\tpop de")
-	if elem == 1 {
+	g.emitStoreDE(ft.Predeclared() == PredeclaredByte)
+	return nil
+}
+
+// genLetFieldArr handles rec.arr[i] — array field access with index.
+func (g *Gen) genLetFieldArr(s Let, t Type) error {
+	return g.genLetField(s, t) // same path; genLetField handles subscripted array fields
+}
+
+func (g *Gen) genLetField(s Let, t Type) error {
+	if t.Record() == nil {
+		return fmt.Errorf("let: %s is not a struct", s.Identifier)
+	}
+	fname := s.Fields[0]
+	fieldIdx := findField(t.Record(), fname)
+	if fieldIdx < 0 {
+		return fmt.Errorf("let: struct %s has no field %s", s.Identifier, fname)
+	}
+	off := t.Record().FieldOffset(fieldIdx)
+	ft := t.Record().Fields[fieldIdx].Type
+
+	g.emitLetBaseAddr(s.Identifier)
+	if off > 0 {
+		g.Emitf("\tld de, %d\n", off)
+		g.Emitln("\tadd hl, de")
+	}
+	if ft.Array() != nil && len(s.Subscripts) > 0 {
+		arrElemSize := 1
+		if ft.Array().ElemType.Predeclared() == PredeclaredWord {
+			arrElemSize = 2
+		} else if ft.Array().ElemType.Record() != nil {
+			arrElemSize = ft.Array().ElemType.Record().TotalSize()
+			arrElemSize = nextPow2(arrElemSize)
+		}
+		if err := g.emitScaledIndex(s.Subscripts[0], arrElemSize); err != nil {
+			return err
+		}
+	}
+	g.Emitln("\tpop de")
+	isByte := ft.Predeclared() == PredeclaredByte ||
+		(ft.Array() != nil && ft.Array().ElemType.Predeclared() == PredeclaredByte)
+	g.emitStoreDE(isByte)
+	return nil
+}
+
+func (g *Gen) genLetArray(s Let) error {
+	elem := g.elemSize(s.Identifier)
+	g.emitLetBaseAddr(s.Identifier)
+	for i := range s.Subscripts {
+		if err := g.emitScaledIndex(s.Subscripts[i], elem); err != nil {
+			return err
+		}
+	}
+	g.Emitln("\tpop de")
+	g.emitStoreDE(elem == 1)
+	if s.Target2 != nil && s.Target2.Identifier != "" {
+		g.Emitln("\tpop de")
+		g.emitTarget2Store(s.Target2)
+	}
+	return nil
+}
+
+func (g *Gen) emitLetBaseAddr(id Identifier) {
+	if g.isParamRef(id) {
+		g.Emitf("\tld hl, (%s)\n", g.localSym(id))
+	} else {
+		g.Emitf("\tld hl, %s\n", g.localSym(id))
+	}
+}
+
+// emitScaledIndex computes address = hl + expr * scale and leaves result in HL.
+func (g *Gen) emitScaledIndex(expr Expression, scale int) error {
+	g.Emitln("\tpush hl")
+	if err := expr.Gen(g); err != nil {
+		return err
+	}
+	for size := scale; size > 1; size >>= 1 {
+		g.Emitln("\tadd hl, hl")
+	}
+	g.Emitln("\tex de, hl")
+	g.Emitln("\tpop hl")
+	g.Emitln("\tadd hl, de")
+	return nil
+}
+
+func (g *Gen) emitStoreDE(isByte bool) {
+	if isByte {
 		g.Emitln("\tld (hl), e")
 	} else {
 		g.Emitln("\tld (hl), e")
 		g.Emitln("\tinc hl")
 		g.Emitln("\tld (hl), d")
 	}
-	return nil
+}
+
+func findField(rec *Record, name Identifier) int {
+	for i, f := range rec.Fields {
+		if f.Identifier == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// emitTarget2Store emits code to store the second return value (in DE) into
+// the target reference. Only simple variable targets are supported.
+func (g *Gen) emitTarget2Store(t2 *Reference) {
+	if t2.isByteRef(g) {
+		g.Emitln("\tld a, e")
+		g.Emitf("\tld (%s), a\n", g.localSym(t2.Identifier))
+	} else {
+		g.Emitf("\tld (%s), de\n", g.localSym(t2.Identifier))
+	}
 }
 
 // Gen generates assembly for a group statement. It handles three forms:
@@ -1831,52 +2004,19 @@ func (s Return) Gen(g *Gen) error {
 func (s Call) Gen(g *Gen) error {
 	name := string(s.Identifier)
 	args := s.Arguments
-
-	// Look up the procedure definition for param type info.
 	proc, procOk := g.Checker.Procedures[name]
 
-	// genCallArg emits code to load the i-th argument into HL.
-	// For RECORD params it loads the ADDRESS (not the value).
 	genCallArg := func(i int) error {
-		if i < len(proc.ParamTypes) {
-			pt := proc.ParamTypes[i]
-			if pt.Record() != nil || pt.Predeclared() == PredeclaredData {
-				// Load address of record or DATA argument.
-				ref := args[i].Ref()
-				if ref != nil && ref.Identifier != "" && len(ref.Fields) == 0 && len(ref.Subscripts) == 0 {
-					if g.isParamRef(ref.Identifier) {
-						g.Emitf("\tld hl, (%s)\n", g.localSym(ref.Identifier))
-					} else {
-						g.Emitf("\tld hl, %s\n", g.localSym(ref.Identifier))
-					}
-					return nil
-				}
-				// Non-trivial argument: compute address instead of value.
-				if suff, ok := args[i].Expr.(*Suffix); ok {
-					switch suff.Operator {
-					case OperatorINDEX:
-						_, err := g.genIndexAddr(suff.Operands)
-						return err
-					case OperatorFIELD:
-						_, err := g.genFieldAddr(suff.Operands)
-						return err
-					}
-				}
-				return fmt.Errorf("cannot take address of argument %d", i)
-			}
-		}
-		return args[i].Gen(g)
+		return g.genCallArg(args[i], proc, procOk, i)
 	}
 
 	switch len(args) {
 	case 0:
-		// No arguments.
 	case 1:
 		if err := genCallArg(0); err != nil {
 			return err
 		}
 	case 2:
-		// Arg2 into DE, arg1 into HL.
 		if err := genCallArg(1); err != nil {
 			return err
 		}
@@ -1886,42 +2026,7 @@ func (s Call) Gen(g *Gen) error {
 		}
 		g.Emitln("\tpop de")
 	default:
-		// 3+ arguments.
-		isReentrant := !procOk || proc.Reentrant
-		var totalExtra int // total bytes of extra args for REENTRANT cleanup
-		if !isReentrant {
-			// Non-REENTRANT: store extra args in the procedure's individual labels.
-			for i := 2; i < len(args); i++ {
-				if err := genCallArg(i); err != nil {
-					return err
-				}
-				paramName := proc.Parameters[i]
-				if i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared() == PredeclaredByte {
-					g.Emitf("\tld a, l\n\tld (_plz_%s_%s), a\n", name, paramName)
-				} else {
-					g.Emitf("\tld (_plz_%s_%s), hl\n", name, paramName)
-				}
-			}
-		} else {
-			// REENTRANT or no proc info: push remaining args onto stack right-to-left.
-			for i := len(args) - 1; i >= 2; i-- {
-				if err := genCallArg(i); err != nil {
-					return err
-				}
-				psize := 2
-				if procOk && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared() == PredeclaredByte {
-					psize = 1
-				}
-				totalExtra += psize
-				if psize == 1 {
-					g.Emitln("\tld a, l")
-					g.Emitln("\tpush af")
-				} else {
-					g.Emitln("\tpush hl")
-				}
-			}
-		}
-		// Set up HL=arg1, DE=arg2.
+		totalExtra := g.emitExtraCallArgs(name, proc, procOk, genCallArg, len(args))
 		if err := genCallArg(1); err != nil {
 			return err
 		}
@@ -1930,7 +2035,7 @@ func (s Call) Gen(g *Gen) error {
 			return err
 		}
 		g.Emitln("\tpop de")
-
+		isReentrant := !procOk || proc.Reentrant
 		g.Emitf("\tcall _plz_%s\n", name)
 		if isReentrant && totalExtra > 0 {
 			g.Emitf("\tld hl, %d\n", totalExtra)
@@ -1939,9 +2044,95 @@ func (s Call) Gen(g *Gen) error {
 		}
 		return nil
 	}
-
 	g.Emitf("\tcall _plz_%s\n", name)
 	return nil
+}
+
+// genCallArg emits code to load the i-th argument into HL.
+// For RECORD or DATA params it loads the address rather than the value.
+// expr is the AST expression for the argument; proc/ok provide type info.
+func (g *Gen) genCallArg(expr Expression, proc Procedure, ok bool, i int) error {
+	if !ok || i >= len(proc.ParamTypes) {
+		return expr.Gen(g)
+	}
+	pt := proc.ParamTypes[i]
+	if pt.Record() == nil && pt.Predeclared() != PredeclaredData {
+		return expr.Gen(g)
+	}
+
+	ref := expr.Ref()
+	if ref != nil && ref.Identifier != "" && len(ref.Fields) == 0 && len(ref.Subscripts) == 0 {
+		if g.isParamRef(ref.Identifier) {
+			g.Emitf("\tld hl, (%s)\n", g.localSym(ref.Identifier))
+		} else {
+			g.Emitf("\tld hl, %s\n", g.localSym(ref.Identifier))
+		}
+		return nil
+	}
+
+	if suff := expr.Suffix(); suff != nil {
+		switch suff.Operator {
+		case OperatorINDEX:
+			_, err := g.genIndexAddr(suff.Operands)
+			return err
+		case OperatorFIELD:
+			_, err := g.genFieldAddr(suff.Operands)
+			return err
+		}
+	}
+
+	if op := expr.Operand(); op != nil {
+		if lit := op.Literal(); lit != nil {
+			if t := lit.Text(); t != nil {
+				n := g.nextLabel()
+				label := fmt.Sprintf("_plz_str_%d", n)
+				g.strings = append(g.strings, strEntry{label: label, data: t.Value})
+				g.Emitf("\tld hl, %s\n", label)
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("cannot take address of argument %d", i)
+}
+
+// emitExtraCallArgs emits code for arguments 3+ of a procedure call. For
+// non-REENTRANT procedures it stores each extra arg into its dedicated RAM
+// label; for REENTRANT it pushes them right-to-left. Returns total extra bytes
+// pushed (for REENTRANT cleanup).
+func (g *Gen) emitExtraCallArgs(name string, proc Procedure, ok bool, genArg func(int) error, argc int) int {
+	isReentrant := !ok || proc.Reentrant
+	var totalExtra int
+	if !isReentrant {
+		for i := 2; i < argc; i++ {
+			if err := genArg(i); err != nil {
+				panic(err)
+			}
+			paramName := proc.Parameters[i]
+			if ok && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared() == PredeclaredByte {
+				g.Emitf("\tld a, l\n\tld (_plz_%s_%s), a\n", name, paramName)
+			} else {
+				g.Emitf("\tld (_plz_%s_%s), hl\n", name, paramName)
+			}
+		}
+	} else {
+		for i := argc - 1; i >= 2; i-- {
+			if err := genArg(i); err != nil {
+				panic(err)
+			}
+			psize := 2
+			if ok && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared() == PredeclaredByte {
+				psize = 1
+			}
+			totalExtra += psize
+			if psize == 1 {
+				g.Emitln("\tld a, l")
+				g.Emitln("\tpush af")
+			} else {
+				g.Emitln("\tpush hl")
+			}
+		}
+	}
+	return totalExtra
 }
 
 // Gen generates assembly for a GOTO statement, emitting a JP to the named label.
@@ -2032,6 +2223,20 @@ func (s Declare) Gen(g *Gen) error {
 		g.symStack[len(g.symStack)-1][s.Identifier] = symEntry{
 			label: label,
 			typ:   s.Type,
+		}
+		// Emit initialization code for the local variable.
+		if s.Initializer != nil {
+			initVal, err := g.evalConstExpr(s.Initializer.Expr)
+			if err != nil {
+				return err
+			}
+			if g.elemSize(s.Identifier) == 1 {
+				g.Emitf("\tld a, %d\n", initVal&0xFF)
+				g.Emitf("\tld (%s), a\n", label)
+			} else {
+				g.Emitf("\tld hl, %d\n", initVal&0xFFFF)
+				g.Emitf("\tld (%s), hl\n", label)
+			}
 		}
 		return nil
 	}
@@ -2265,6 +2470,9 @@ func (s Load) Gen(g *Gen) error {
 func (g *Gen) saveSize(id Identifier) (int, error) {
 	// Check for a DATA block first.
 	if data, ok := g.Checker.Datas[id]; ok {
+		if data.Text != nil {
+			return len(data.Text.Value) + 1, nil // length byte + string
+		}
 		size := 0
 		// XXX this is not correct , certainly not for tile data. Although it is
 		// unlikely we will save a tile to SRAM, except for an image editor or such.
@@ -2311,6 +2519,11 @@ func (s Data) Gen(g *Gen) error {
 	g.Emitf("%s:\n", s.Name)
 	if s.Tile != nil {
 		return s.Tile.Gen(g)
+	}
+	if s.Text != nil {
+		g.Emitf("\tdb %d\n", len(s.Text.Value))
+		g.Emitf("\tds %s\n", strconv.Quote(s.Text.Value))
+		return nil
 	}
 
 	for _, val := range s.Values {

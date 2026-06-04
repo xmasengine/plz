@@ -4,34 +4,43 @@ This document analyzes the PL/Z language implementation against its
 specification, identifying design problems, undefined behavior, and memory
 safety issues. References point to the implementation in `pkg/plz/`.
 
+> **Status:** Some items have been fixed since this review was written.
+> See `doc/plz-todo.md` for the current consolidated TODO list, and
+> `doc/plz-review-2.md` for a supplementary review. Items below are
+> annotated with ✓ (fixed), ~ (partially fixed), or (open).
+
 ---
 
 ## Critical Bugs
 
-### Initializer Values Silently Discarded
+### Initializer Values Silently Discarded ✓
 
 `DECLARE x BYTE = 42` parses and checks without error, but the `42` is
-silently thrown away during code generation. The variable is zero-initialized
-at runtime. This is the most misleading bug in the compiler — the language
+silently thrown away during code generation. ~~The variable is zero-initialized
+at runtime.~~ This is the most misleading bug in the compiler — the language
 accepts initializer syntax, the semantic checker validates the expression, yet
 the code generator never reads `Declare.Initializer`.
 
 **Location:** `gen.go:1923-1966` (`Declare.Gen` never inspects `s.Initializer`)
 **Impact:** Every `DECLARE ... = expr` is a no-op. Users believe their
 variables have initial values when they do not.
+**Status:** ✓ Fixed. `Declare.Gen` now emits store code for initializers.
 
-### No Array Bounds Checking
+### No Array Bounds Checking ~
 
-Array subscripts are never validated at compile time or runtime. Accessing
-`arr[9999]` on a 10-element array silently reads or writes arbitrary memory.
-The checker validates that subscripts parse but never compares them against
-the declared size. The code generator emits address arithmetic with no guard.
+Array subscripts are never validated ~~at compile time or~~ at runtime.
+Accessing `arr[9999]` on a 10-element array silently reads or writes
+arbitrary memory. ~~The checker validates that subscripts parse but never
+compares them against the declared size.~~ The code generator emits address
+arithmetic with no guard.
 
 **Location:** `check.go:735-739`, `gen.go:1086-1143`
 **Impact:** Out-of-bounds accesses corrupt memory silently. No diagnostic
 is produced at any stage.
+**Status:** ~ Partially fixed. Compile-time bounds checking for constant
+subscripts is done. Runtime bounds checking is opt-in via `PRAGMA BOUNDCHECK`.
 
-### CALL Argument Count Not Validated
+### CALL Argument Count Not Validated (open)
 
 Calling a procedure with the wrong number of arguments causes a Go
 index-out-of-bounds panic in the compiler itself. The checker passes all
@@ -42,7 +51,7 @@ parameter list. The code generator then indexes past the slice boundary.
 **Impact:** Compiler crash on invalid input. A malicious or erroneous source
 file can crash the toolchain.
 
-### Task Stack Overflow
+### Task Stack Overflow (open)
 
 Each task gets a 128-byte stack. Neither the compiler nor the runtime
 inserts a stack-limit check. A deep call chain, recursion, or many local
@@ -52,7 +61,7 @@ TCB or another task's stack, corrupting scheduler state.
 **Location:** `gen.go:462` (`ds 128` per task), scheduler code at `gen.go:2326-2430`
 **Impact:** Silent memory corruption. Unpredictable program behavior.
 
-### HALT in Task-Called Procedure Freezes CPU
+### HALT in Task-Called Procedure Freezes CPU (open)
 
 When a task calls a procedure that executes `HALT`, the entire CPU freezes
 instead of marking that task as DEAD. This is because procedure bodies are
@@ -69,17 +78,19 @@ entire system.
 
 ## Design Problems
 
-### Priority Scheduler Is Dead Code
+### Priority Scheduler Is Dead Code ✓
 
 The TCB layout reserves a priority byte (offset 4, 0=highest, 15=lowest),
-the value is stored during task initialization, but the scheduler code never
+the value is stored during task initialization, ~~but the scheduler code never
 reads it. The scheduler uses pure round-robin starting from the current
-task, picking the first READY task found regardless of priority.
+task, picking the first READY task found regardless of priority.~~
 
 **Location:** `gen.go:2367-2399` (scheduler scan), `gen.go:360-361` (priority stored)
 **Impact:** Priority field is cosmetic. All tasks are treated equally.
+**Status:** ✓ Fixed. Scheduler uses `best_pri`/`best_idx` to select the
+READY task with lowest priority value, round-robin within priority level.
 
-### Non-REENTRANT Recursion
+### Non-REENTRANT Recursion (open)
 
 Procedures default to static RAM frame allocation. Parameters and locals are
 stored in global labels like `_plz_procName_varName`. If such a procedure
@@ -92,7 +103,7 @@ checker performs no call-graph analysis to detect this.
 state. Only `REENTRANT` procedures are safe for recursion, but nothing
 enforces or warns about this.
 
-### RETURN/GOTO Inside FOR Loop Corrupts Stack
+### RETURN/GOTO Inside FOR Loop Corrupts Stack (open)
 
 The FOR loop pushes the loop's step and end values onto the Z80 stack.
 If a `RETURN` or `GOTO` inside the loop body exits early, the pushed values
@@ -103,7 +114,7 @@ not prohibit early exits from FOR loops.
 **Impact:** Early exit from a FOR loop crashes the program when the
 procedure tries to return.
 
-### Nested Procedures Emit Inline
+### Nested Procedures Emit Inline (open)
 
 A `PROCEDURE` declared inside another procedure is parsed as a statement in
 the outer body. During code generation, the inner procedure's `Gen` is called
@@ -116,7 +127,7 @@ invocations and stack corruption.
 **Impact:** Nested procedures are emitted as inline code reachable by
 fall-through. They execute unexpectedly.
 
-### Recursive INCLUDE
+### Recursive INCLUDE (open)
 
 The PL/Z parser recurses on `INCLUDE` with no cycle detection. If
 `a.plz` includes `b.plz` which includes `a.plz`, the Go call stack
@@ -128,7 +139,7 @@ showing this was considered but not implemented in the compiler frontend.
 
 ---
 
-## Memory Safety Gaps
+## Memory Safety Gaps (all open)
 
 ### No Definite-Assignment Analysis
 
@@ -184,7 +195,7 @@ small destination overflows the target buffer.
 
 ---
 
-## Undefined Behavior
+## Undefined Behavior (all open)
 
 ### Division by Zero
 
@@ -254,7 +265,7 @@ never emitted. The assembler fails with an undefined symbol error.
 
 ---
 
-## Type System Gaps
+## Type System Gaps (all open)
 
 ### No Type Compatibility Checking
 
@@ -282,7 +293,7 @@ negative total, and the emit loop never executes, allocating zero bytes.
 
 ---
 
-## Additional Issues
+## Additional Issues (all open)
 
 ### Constants Exceed Z80 Range
 
@@ -326,31 +337,33 @@ not user names.
 
 ## Summary
 
-| Severity | Issue | File |
-|----------|-------|------|
-| CRITICAL | Initializer values silently discarded | gen.go:1923-1966 |
-| CRITICAL | No array bounds checking | check.go:735-739, gen.go:1086-1143 |
-| CRITICAL | CALL argument count not validated (Go panic) | check.go:628-635, gen.go:1181 |
-| CRITICAL | Task stack overflow (128 bytes, no guard) | gen.go:462 |
-| CRITICAL | HALT in task-called procedure freezes CPU | gen.go:1988-1995, 418-422 |
-| HIGH | Priority scheduler is dead code (pure round-robin) | gen.go:2367-2399 |
-| HIGH | Non-REENTRANT recursion corrupts state | gen.go:1663-1679 |
-| HIGH | RETURN/GOTO in FOR loop corrupts stack | gen.go:1505-1559 |
-| HIGH | Nested procedures emit inline (fall-through bug) | parser.go:286-294 |
-| HIGH | Recursive INCLUDE crashes compiler | parser.go:170-214 |
-| HIGH | Scheduler not re-entrant (global `_plz_sch_sp`) | gen.go:2341-2345 |
-| HIGH | TEXT type allocates 1 byte | parser.go:52-73 |
-| HIGH | AT overlap not detected | gen.go:1883-1895 |
-| HIGH | No 17+ task limit | gen.go:356-368 |
-| MEDIUM | Division by zero at runtime (garbage result) | gen.go:247-267 |
-| MEDIUM | BYTE/WORD overflow wraps silently | gen.go:834-838 |
-| MEDIUM | GOTO scope not validated | gen.go:1872-1877 |
-| MEDIUM | SLEEP/YIELD at top level crashes | gen.go:2282-2313 |
-| MEDIUM | HALT with interrupts disabled freezes CPU | gen.go:2397-2399 |
-| MEDIUM | SAVE/LOAD size mismatch | gen.go:2043-2140 |
-| LOW | No type compatibility checking | check.go throughout |
-| LOW | Implicit WORD→BYTE narrowing | gen.go:1290-1313 |
-| LOW | Negative array size accepted | check.go:310-318 |
-| LOW | Constants >65535 not warned | check.go:89-221 |
-| LOW | FOR loop stack values never popped | gen.go:1505-1559 |
-| LOW | Global variable name collision | gen.go:116-125 |
+| Severity | Issue | Status |
+|----------|-------|--------|
+| CRITICAL | Initializer values silently discarded | ✓ Fixed |
+| CRITICAL | No array bounds checking | ~ Partial (compile-time only, runtime opt-in) |
+| CRITICAL | CALL argument count not validated (Go panic) | open |
+| CRITICAL | Task stack overflow (128 bytes, no guard) | open |
+| CRITICAL | HALT in task-called procedure freezes CPU | open |
+| HIGH | Priority scheduler is dead code (pure round-robin) | ✓ Fixed |
+| HIGH | Non-REENTRANT recursion corrupts state | open |
+| HIGH | RETURN/GOTO in FOR loop corrupts stack | open |
+| HIGH | Nested procedures emit inline (fall-through bug) | open |
+| HIGH | Recursive INCLUDE crashes compiler | open |
+| HIGH | Scheduler not re-entrant (global `_plz_sch_sp`) | open |
+| HIGH | TEXT type allocates 1 byte | open |
+| HIGH | AT overlap not detected | open |
+| HIGH | No 17+ task limit | open |
+| MEDIUM | Division by zero at runtime (garbage result) | open |
+| MEDIUM | BYTE/WORD overflow wraps silently | open |
+| MEDIUM | GOTO scope not validated | open |
+| MEDIUM | SLEEP/YIELD at top level crashes | open |
+| MEDIUM | HALT with interrupts disabled freezes CPU | open |
+| MEDIUM | SAVE/LOAD size mismatch | open |
+| LOW | No type compatibility checking | open |
+| LOW | Implicit WORD→BYTE narrowing | open |
+| LOW | Negative array size accepted | open |
+| LOW | Constants >65535 not warned | open |
+| LOW | FOR loop stack values never popped | open |
+| LOW | Global variable name collision | open |
+
+See `doc/plz-todo.md` for the full consolidated TODO list.

@@ -346,3 +346,7 @@ func TestCheckEvalConstExprSuffixField(t *testing.T) {
 func TestCheckEvalConstExprUndeclaredRef(t *testing.T) {
 	checkErr(t, "CONSTANT V = FOO", "undefined identifier")
 }
+
+func TestCheckMultiLet(t *testing.T) {
+	checkOK(t, "PROCEDURE foo() WORD\nRETURN 1, 2\nEND\nDECLARE x WORD\nDECLARE y WORD\nLET x, y = foo()")
+}

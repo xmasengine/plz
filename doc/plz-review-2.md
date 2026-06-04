@@ -1,72 +1,58 @@
 # PLZ Compiler Suite — Design Review
 
-## Priority 1 — Bugs
+## Priority 1 — Bugs (✓ All Done)
 
 ### 1.1 Scheduler ignores PRIORITY
 
-**Location:** `pkg/plz/gen.go` lines 351-374, SchedulerCode lines 2428-2530
-
-The scheduler does pure round-robin — starts from `current_task+1` and selects the first READY task. It never reads or compares the PRIORITY field at TCB offset +4.
-
-**Impact:** Tasks with higher priority are not preferred.
+**Fixed.** The scheduler uses `best_pri`/`best_idx` to pick the READY task with the lowest priority value. When priorities match, the first encountered in scan order wins (round-robin within priority level). SchedulerCode lines 2708-2755.
 
 ### 1.2 Scheduler wakes SUSPENDED tasks
 
-**Location:** SchedulerCode (`gen.go` lines 2448-2458)
-
-The sleep-counter decrement loop sets state to READY when counter reaches 0, regardless of current state. A SUSPENDED task (state=1) with a stale sleep counter gets incorrectly woken.
-
-**Fix:** Only wake tasks whose state is SLEEPING (2), not SUSPENDED (1) or DEAD (3).
+**Fixed.** The sleep-decrement loop at line 2699 checks `cp 2` (SLEEPING) and only wakes tasks whose state is 2. SUSPENDED (1) and DEAD (3) tasks are skipped.
 
 ### 1.3 GOTO label not emitted
 
-**Location:** `pkg/plz/gen.go` line 404 (already fixed)
-
-The default case in `Program.Gen` called `cmd.(interface{ Gen }).Gen(g)` directly, bypassing `Statement.Gen` which emits the label. GOTO targets at top level were silently dropped.
-
-**Status:** Fixed in this session.
+**Fixed.** `Program.Gen` calls `statement.Gen(g)` for all top-level statements, which emits the label before the instruction.
 
 ### 1.4 Task-local DECLARE emitted inline
 
-**Location:** `pkg/plz/gen.go` lines 428-440 (already fixed)
+**Fixed.** `Declare.Gen` emits `org 0xC000` only when `g.procName == ""` and there is no current procedure scope (`!g.InTask`).
 
-`DECLARE` inside a task body called `Declare.Gen(g)` with `g.procName=""`, emitting `org 0xC000` inline — splitting the task code in half.
-
-**Status:** Fixed in this session.
-
-## Priority 2 — Missing Semantic Checks
+## Priority 2 — Missing Semantic Checks (✓ Done)
 
 ### 2.1 RETURN at global scope
 
-`RETURN` has no `Check` method. A `RETURN` at global scope passes semantic analysis and emits a `ret` in the middle of the main body. Should be rejected.
+**Fixed.** `Return.Check` (line 733) calls `c.inProcedure()` and rejects RETURN at global scope. Test: `TestCheckReturn`.
 
 ### 2.2 GOTO target not validated
 
-`GOTO` has no `Check` method. A jump to a non-existent label compiles but fails at assembly time. The checker should validate that the target label exists.
+**Fixed.** `GoTo.Check` (line 749) validates that the target label exists in `c.Labels`.
 
 ### 2.3 Duplicate INTERRUPT installs
 
-Installing the same interrupt vector twice (`INTERRUPT foo` followed by `INTERRUPT foo`) is not diagnosed.
+**Fixed.** `InterruptStmt.Check` (line 390) tracks `c.usedVectors` and rejects duplicate installs.
 
 ### 2.4 Array bounds not checked on LHS of LET
 
-Subscript bounds checking in `check.go` only applies to RHS references. `LET arr[out_of_bounds] = x` is not caught at compile time.
+**Fixed.** `checkTarget` (line 631) calls `c.checkArrayBounds(r)` for LET assignment targets. Test: `TestCheckArrayBoundsWriteOutOfRange`.
 
-## Priority 3 — Spec vs Implementation Discrepancies
+## Priority 3 — Spec vs Implementation Discrepancies (✓ Done)
 
 ### 3.1 Priority scheduling not implemented
 
-Spec says scheduler picks "the first READY task with the highest priority." Implementation is pure round-robin.
+**Already implemented.** The scheduler (`SchedulerCode`) uses `best_pri`/`best_idx` to pick the READY task with the lowest priority value. Fixed in commit `67bfaf8`.
 
 ### 3.2 RETURN multi-value
 
-Spec shows `RETURN [expr [, ...]]` but the code generator only handles single return values. Multi-value return is syntactically parsed but silently drops extra values.
+**Already implemented.** The code generator emits `ld hl, <val1>` and `ld de, <val2>` for two-value return, and `Let.Gen` stores both into `Target` and `Target2`. Fixed in commit `67bfaf8`.
 
 ### 3.3 PRAGMA BOUNDCHECK undocumented
 
-`PRAGMA BOUNDCHECK` works in code but is not mentioned in AGENTS.md. Also there's no way to disable it (`PRAGMA NOBOUNDCHECK`).
+**Already documented.** `PRAGMA BOUNDCHECK` / `PRAGMA NOBOUNDCHECK` is listed in AGENTS.md and supported in parser, checker, and code generator. `NOBOUNDCHECK` toggle exists.
 
-## Priority 4 — Spec Design Issues
+## Priority 4 — Spec Design Issues (all open)
+
+See `doc/plz-todo.md` items 7.1–7.6.
 
 ### 4.1 FOR loop only works for increasing ranges
 
@@ -92,7 +78,7 @@ Deeply nested IF/ELSE is verbose. No `ELSEIF` or `ELSIF` keyword.
 
 `DEFINE foo BYTE` followed by `DEFINE foo WORD` silently overwrites without warning.
 
-## Priority 5 — Minor
+## Priority 5 — Minor (open except 5.3)
 
 ### 5.1 TokenFloat defined but unused
 
@@ -102,6 +88,7 @@ Deeply nested IF/ELSE is verbose. No `ELSEIF` or `ELSIF` keyword.
 
 `saveSize` in `gen.go:2251` adds 1 for numeric values and `len(t.Value)` for text. Works but fragile with mixed data layouts.
 
-### 5.3 No bounds check toggle
+### 5.3 No bounds check toggle ✓
 
-`PRAGMA BOUNDCHECK` is permanent once set. No `PRAGMA NOBOUNDCHECK`.
+`PRAGMA BOUNDCHECK` ~~is permanent once set. No `PRAGMA NOBOUNDCHECK`.~~
+**Status:** ✓ Fixed. `PRAGMA NOBOUNDCHECK` is supported.

@@ -439,8 +439,8 @@ func (s Constant) Check(c *Checker) error {
 // that references to the data name can be resolved during code generation.
 func (d Data) Check(c *Checker) error {
 	c.Datas[Identifier(d.Name)] = d
-	if (d.Tile == nil) && len(d.Values) < 1 {
-		return c.Errorf("", "%s: DATA statement has no values and no TILEs", d.Name)
+	if d.Tile == nil && d.Text == nil && len(d.Values) < 1 {
+		return c.Errorf("", "%s: DATA statement has no values, TILEs, or TEXT", d.Name)
 	}
 	return nil
 }
@@ -595,48 +595,71 @@ func (s Load) Check(c *Checker) error {
 
 // Check validates a LET assignment by checking the right-hand side expression
 // and validating any subscripts or field accesses on the left-hand side.
-// The left-hand side variable is implicitly declared if it does not exist.
-// TODO: decide if implicit declaration this is correct and desirable.
-// Constants cannot be assigned to.
+// The left-hand side variable is implicitly declared as WORD if it does not
+// exist (for simple variable targets without subscripts or field access).
+// Constants cannot be assigned to. When Target2 is set (multi-return from
+// a CALL), it is validated and implicitly declared the same way.
 func (s Let) Check(c *Checker) error {
-	// Reject assignment to constants.
-	if _, ok := c.Constants[s.Reference.Identifier]; ok {
-		return c.Errorf("", "cannot assign to constant %q", s.Reference.Identifier)
+	// Validate first target.
+	if err := checkTarget(c, s.Reference); err != nil {
+		return err
 	}
-	// Validate subscript expressions and field access always.
-	if r := s.Reference; r.Identifier != "" {
-		for _, sub := range r.Subscripts {
-			if err := sub.Check(c); err != nil {
-				return err
-			}
-		}
-		if d, ok := c.lookup(r.Identifier); ok {
-			if err := c.checkArrayBounds(r); err != nil {
-				return err
-			}
-			elemType := d.Type
-			if arr := elemType.Array(); arr != nil && len(r.Subscripts) > 0 {
-				elemType = arr.ElemType
-			}
-			for _, fname := range r.Fields {
-				rec := elemType.Record()
-				if rec == nil {
-					return c.Errorf("", "%q is not a record, cannot access field %q", r.Identifier, fname)
-				}
-				found := false
-				for _, f := range rec.Fields {
-					if f.Identifier == fname {
-						found = true
-						break
-					}
-				}
-				if !found {
-					return c.Errorf("", "struct %q has no field %q", r.Identifier, fname)
-				}
-			}
+	// Validate optional second target.
+	if s.Target2 != nil {
+		if err := checkTarget(c, *s.Target2); err != nil {
+			return err
 		}
 	}
 	return s.Expression.Check(c)
+}
+
+// checkTarget validates and implicitly declares a single LET assignment
+// target (variable, subscript, or field reference).
+func checkTarget(c *Checker, r Reference) error {
+	if r.Identifier == "" {
+		return nil
+	}
+	if _, ok := c.Constants[r.Identifier]; ok {
+		return c.Errorf("", "cannot assign to constant %q", r.Identifier)
+	}
+	for _, sub := range r.Subscripts {
+		if err := sub.Check(c); err != nil {
+			return err
+		}
+	}
+	if d, ok := c.lookup(r.Identifier); ok {
+		if err := c.checkArrayBounds(r); err != nil {
+			return err
+		}
+		elemType := d.Type
+		if arr := elemType.Array(); arr != nil && len(r.Subscripts) > 0 {
+			elemType = arr.ElemType
+		}
+		for _, fname := range r.Fields {
+			rec := elemType.Record()
+			if rec == nil {
+				return c.Errorf("", "%q is not a record, cannot access field %q", r.Identifier, fname)
+			}
+			found := false
+			for _, f := range rec.Fields {
+				if f.Identifier == fname {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return c.Errorf("", "struct %q has no field %q", r.Identifier, fname)
+			}
+		}
+	} else if len(r.Subscripts) == 0 && len(r.Fields) == 0 {
+		// Implicitly declare the variable as WORD when assigning to a
+		// simple identifier that does not yet exist in any scope.
+		c.current.Symbols[r.Identifier] = Declare{
+			Identifier: r.Identifier,
+			Type:       Type{Typ: &PredeclaredType{Kind: PredeclaredWord}},
+		}
+	}
+	return nil
 }
 
 // Check validates a procedure definition. It pushes a new scope named after
@@ -816,6 +839,9 @@ func (c *Checker) evalLength(l *Length) (int, error) {
 		if data.Tile != nil {
 			return len(data.Tile.Tiles), nil
 		}
+		if data.Text != nil {
+			return len(data.Text.Value), nil
+		}
 		return len(data.Values), nil
 	}
 	return 0, c.Errorf("", "LENGTH: undeclared variable or data %s", l.Identifier)
@@ -850,15 +876,10 @@ func (s Suffix) Check(c *Checker) error {
 		}
 	}
 	// Compile-time bounds check for array subscript expressions (e.g., x = arr[7]).
-	// The subscript is in the suffix, not the base reference, so we construct
-	// a synthetic Reference with the subscript to reuse checkArrayBounds.
-	// TODO: this should be factored better.
 	if s.Operator == OperatorINDEX && len(s.Operands) == 2 {
 		if ref := s.Operands[0].Ref(); ref != nil {
 			if idxExpr := s.Operands[1].Expr(); idxExpr != nil {
-				synthetic := *ref
-				synthetic.Subscripts = []Expression{*idxExpr}
-				if err := c.checkArrayBounds(synthetic); err != nil {
+				if err := c.checkArraySubscript(ref.Identifier, *idxExpr); err != nil {
 					return err
 				}
 			}
@@ -928,49 +949,56 @@ func (r *Reference) Check(c *Checker) error {
 	return nil
 }
 
-// checkArrayBounds checks if all constant subscript expressions in a reference
-// are within the declared array or DATA bounds. Non-constant subscripts are
-// silently skipped since they can only be checked at runtime.
-func (c *Checker) checkArrayBounds(ref Reference) error {
-	if len(ref.Subscripts) == 0 {
-		return nil
-	}
+// checkArraySubscript checks if a constant subscript expression is within the
+// declared bounds of an array or DATA item. Non-constant subscripts are silently
+// skipped since they can only be checked at runtime.
+func (c *Checker) checkArraySubscript(id Identifier, expr Expression) error {
 	// Check declared variables.
-	if d, ok := c.lookup(ref.Identifier); ok {
+	if d, ok := c.lookup(id); ok {
 		arr := d.Type.Array()
 		if arr == nil || arr.Size == 0 {
 			return nil // not an array or unbounded
 		}
-		for _, sub := range ref.Subscripts {
-			v, err := c.EvalConstExpr(sub)
-			if err != nil {
-				continue
-			}
-			if v < 0 || v >= arr.Size {
-				return c.Errorf("", "index %d out of bounds for array %q (size %d)", v, ref.Identifier, arr.Size)
-			}
+		v, err := c.EvalConstExpr(expr)
+		if err != nil {
+			return nil // non-constant subscript, skip
+		}
+		if v < 0 || v >= arr.Size {
+			return c.Errorf("", "index %d out of bounds for array %q (size %d)", v, id, arr.Size)
 		}
 		return nil
 	}
 	// Check DATA items.
-	if data, ok := c.Datas[ref.Identifier]; ok {
+	if data, ok := c.Datas[id]; ok {
 		size := 0
 		if data.Tile != nil {
 			size = len(data.Tile.Tiles)
+		} else if data.Text != nil {
+			size = len(data.Text.Value)
 		} else {
 			size = len(data.Values)
 		}
 		if size == 0 {
 			return nil
 		}
-		for _, sub := range ref.Subscripts {
-			v, err := c.EvalConstExpr(sub)
-			if err != nil {
-				continue
-			}
-			if v < 0 || v >= size {
-				return c.Errorf("", "index %d out of bounds for data %q (size %d)", v, ref.Identifier, size)
-			}
+		v, err := c.EvalConstExpr(expr)
+		if err != nil {
+			return nil
+		}
+		if v < 0 || v >= size {
+			return c.Errorf("", "index %d out of bounds for data %q (size %d)", v, id, size)
+		}
+	}
+	return nil
+}
+
+// checkArrayBounds checks if all constant subscript expressions in a reference
+// are within the declared array or DATA bounds. Non-constant subscripts are
+// silently skipped since they can only be checked at runtime.
+func (c *Checker) checkArrayBounds(ref Reference) error {
+	for _, sub := range ref.Subscripts {
+		if err := c.checkArraySubscript(ref.Identifier, sub); err != nil {
+			return err
 		}
 	}
 	return nil

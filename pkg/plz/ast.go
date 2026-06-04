@@ -428,12 +428,13 @@ type Length struct {
 func (l Length) operand() Operander { return l }
 
 // Data represents a DATA directive that embeds literal bytes or
-// words directly into the output. This if usefup for program data like
-// image and sound.
+// words directly into the output. This is useful for program data
+// like image and sound.
 type Data struct {
 	Name   string
 	Values []Expression
-	Tile   *Tile // Optional graphical data
+	Tile   *Tile    // Optional graphical data
+	Text   *TextLit // Optional TEXT string literal
 }
 
 // Tile represents a DATA directive that embeds a SMS 8x8 Tile in a

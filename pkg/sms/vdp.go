@@ -340,12 +340,13 @@ func (v *VDP) renderScanline(y uint16) {
 	}
 
 	scrollY := v.scrollY
+	fh := int16(v.frameHeight)
 	for scrollY < 0 {
-		scrollY += 224
+		scrollY += fh
 	}
-	effectiveY := (int16(y) + scrollY) % 224
+	effectiveY := (int16(y) + scrollY) % fh
 	if effectiveY < 0 {
-		effectiveY += 224
+		effectiveY += fh
 	}
 	row := uint16(effectiveY) / 8
 	py := uint16(effectiveY) % 8
@@ -405,12 +406,12 @@ func (v *VDP) getTileRow(pat uint16, py uint16, vFlip bool) [4]byte {
 	if vFlip {
 		py = 7 - py
 	}
-	base := pat * 32
+	base := (pat * 32) & (VRAMSize - 1)
 	return [4]byte{
-		v.VRAM[base+py],
-		v.VRAM[base+py+8],
-		v.VRAM[base+py+16],
-		v.VRAM[base+py+24],
+		v.VRAM[(base+py)&(VRAMSize-1)],
+		v.VRAM[(base+py+8)&(VRAMSize-1)],
+		v.VRAM[(base+py+16)&(VRAMSize-1)],
+		v.VRAM[(base+py+24)&(VRAMSize-1)],
 	}
 }
 
