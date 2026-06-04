@@ -346,3 +346,32 @@ func TestCheckEvalConstExprSuffixField(t *testing.T) {
 func TestCheckEvalConstExprUndeclaredRef(t *testing.T) {
 	checkErr(t, "CONSTANT V = FOO", "undefined identifier")
 }
+
+func TestCheckMultiLet(t *testing.T) {
+	checkOK(t, "PROCEDURE foo() WORD\nRETURN 1, 2\nEND\nDECLARE x WORD\nDECLARE y WORD\nLET x, y = foo()")
+}
+
+func TestCheckCall(t *testing.T) {
+	const procFoo = `
+PROCEDURE foo(pa BYTE, pb WORD)
+END
+`
+	checkOK(t, procFoo+`CALL foo(1, 2)`)
+	checkErr(t, procFoo+`CALL foo(1)`, "CALL: argument count is")
+	checkErr(t, procFoo+`CALL foo(1, 2, 3)`, "CALL: argument count is")
+	checkErr(t, procFoo+`CALL bar(1, 2, 3)`, "CALL: bar unknown procedure")
+}
+
+func TestCheckSuffixCall(t *testing.T) {
+	const procFoo = `
+PROCEDURE foo(pa BYTE, pb WORD) BYTE
+	RETURN 42
+END
+
+DECLARE rs BYTE
+`
+	checkOK(t, procFoo+`LET rs= foo(1, 2)`)
+	checkErr(t, procFoo+`LET rs = foo(1)`, "CALL: argument count is")
+	checkErr(t, procFoo+`LET rs = foo(1, 2, 3)`, "CALL: argument count is")
+	checkErr(t, procFoo+`LET rs = bar(1, 2, 3)`, "undeclared variable")
+}
