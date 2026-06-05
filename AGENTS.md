@@ -110,6 +110,7 @@ on three events:
 
 | Feature | Syntax |
 |---------|--------|
+| Cast | `BYTE(expr)` / `WORD(expr)` (explicit type cast, suppresses overflow errors) |
 | Declare | `DECLARE name type` |
 | Assign | `LET ref = expr` |
 | If | `IF expr THEN stmt [ELSE stmt]` |

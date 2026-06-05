@@ -672,8 +672,8 @@ The compiler generates runtime helpers for arithmetic and comparison:
 | Helper          | Operation                        |
 |-----------------|----------------------------------|
 | `_plz_mul`      | HL = HL × DE (unsigned)          |
-| `_plz_div`      | HL = HL ÷ DE (unsigned)          |
-| `_plz_mod`      | HL = HL % DE (unsigned)          |
+| `_plz_div`      | HL = HL ÷ DE (unsigned); DE=0 → returns 1  |
+| `_plz_mod`      | HL = HL % DE (unsigned); DE=0 → returns 0  |
 | `_plz_eq`–`_plz_lte` | HL = HL Compare DE          |
 | `_plz_scheduler` | Cooperative task scheduler      |
 

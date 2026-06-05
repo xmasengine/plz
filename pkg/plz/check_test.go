@@ -107,7 +107,7 @@ func TestCheckConstant(t *testing.T) {
 }
 
 func TestCheckConstantNoExpr(t *testing.T) {
-	checkOK(t, "CONSTANT FOO")
+	checkErr(t, "CONSTANT FOO", "requires a value")
 }
 
 func TestCheckOutput(t *testing.T) {
@@ -155,7 +155,7 @@ func TestCheckResumeUndeclared(t *testing.T) {
 }
 
 func TestCheckSleep(t *testing.T) {
-	checkOK(t, "SLEEP 10")
+	checkOK(t, "TASK t PRIORITY 0\nSLEEP 10\nEND")
 }
 
 func TestCheckReturn(t *testing.T) {
@@ -374,4 +374,31 @@ DECLARE rs BYTE
 	checkErr(t, procFoo+`LET rs = foo(1)`, "CALL: argument count is")
 	checkErr(t, procFoo+`LET rs = foo(1, 2, 3)`, "CALL: argument count is")
 	checkErr(t, procFoo+`LET rs = bar(1, 2, 3)`, "undeclared variable")
+}
+
+func TestCheckOverflowByteLiteral(t *testing.T) {
+	checkErr(t, "DECLARE b BYTE\nLET b = 300", "does not fit in BYTE")
+	checkErr(t, "DECLARE b BYTE = 300", "does not fit in BYTE")
+	checkErr(t, "DECLARE b BYTE\nLET b = 256", "does not fit in BYTE")
+}
+
+func TestCheckOverflowByteExpression(t *testing.T) {
+	checkErr(t, "DECLARE b BYTE\nDECLARE w WORD\nLET b = w", "cannot assign WORD value to BYTE")
+}
+
+func TestCheckOverflowByteCastSuppresses(t *testing.T) {
+	checkOK(t, "DECLARE b BYTE\nLET b = BYTE(300)")
+	checkOK(t, "DECLARE b BYTE = BYTE(300)")
+	checkOK(t, "DECLARE b BYTE\nLET b = BYTE(256)")
+	checkOK(t, "DECLARE b BYTE\nDECLARE w WORD\nLET b = BYTE(w)")
+}
+
+func TestCheckOverflowWordLiteral(t *testing.T) {
+	// Values > 65535 cannot be written as literals (scanner rejects them).
+	// Verify no false positive for in-range value.
+	checkOK(t, "DECLARE w WORD = 65535")
+}
+
+func TestCheckOverflowWordCast(t *testing.T) {
+	checkOK(t, "DECLARE b BYTE\nLET w = WORD(b)") // widening is always safe
 }

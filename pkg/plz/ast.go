@@ -4,7 +4,8 @@ package plz
 // in a PL/Z source file. It implements Parselet, Checklet, and Genlet
 // to drive the compiler pipeline.
 type Program struct {
-	Statements []Statement
+	Statements    []Statement
+	IncludedFiles map[string]bool // visited files, used to detect recursive INCLUDE
 }
 
 // Parselet is the interface for AST nodes that can be parsed.

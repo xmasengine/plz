@@ -2,6 +2,7 @@ package plz
 
 import (
 	"fmt"
+	"path/filepath"
 
 	asm "github.com/xmasengine/plz/pkg/z80asm"
 )
@@ -21,7 +22,9 @@ func Compile(out, format, src string) error {
 	}
 
 	parser := NewParser(tokens)
-	program := Program{}
+	program := Program{IncludedFiles: make(map[string]bool)}
+	absSrc, _ := filepath.Abs(src)
+	program.IncludedFiles[absSrc] = true
 	err = program.Parse(parser)
 	if err != nil {
 		return err

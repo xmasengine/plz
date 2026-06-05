@@ -48,7 +48,7 @@ func NewParser(tokens []Token) *Parser {
 
 // builtinTypeAliases returns the map of pre-defined type aliases. Currently
 // only "TEXT" is provided, which is a record with a length byte and a
-// byte-array text field.
+// 255-byte text buffer (the maximum addressable by a BYTE length).
 func builtinTypeAliases() map[string]Type {
 	return map[string]Type{
 		"TEXT": {
@@ -62,6 +62,7 @@ func builtinTypeAliases() map[string]Type {
 						Identifier: "text",
 						Type: Type{
 							Typ: &Array{
+								Size:     255,
 								ElemType: Type{Typ: &PredeclaredType{Kind: PredeclaredByte}},
 							},
 						},
@@ -186,6 +187,19 @@ func (p *Program) Parse(parser *Parser) error {
 				}
 			}
 
+			// Normalise to absolute path for cycle detection.
+			absPath, err := filepath.Abs(incPath)
+			if err != nil {
+				return filenameTok.Errorf("include: %v", err)
+			}
+			if p.IncludedFiles[absPath] {
+				return filenameTok.Errorf("include: recursive include of %q", incPath)
+			}
+			if p.IncludedFiles == nil {
+				p.IncludedFiles = make(map[string]bool)
+			}
+			p.IncludedFiles[absPath] = true
+
 			incTokens, err := ScanFile(incPath)
 			if err != nil {
 				return filenameTok.Errorf("include: %v", err)
@@ -194,7 +208,7 @@ func (p *Program) Parse(parser *Parser) error {
 				Tokens:      incTokens,
 				TypeAliases: parser.TypeAliases,
 			}
-			incProg := Program{}
+			incProg := Program{IncludedFiles: p.IncludedFiles}
 			if err := incProg.Parse(incParser); err != nil {
 				return err
 			}
@@ -822,6 +836,9 @@ func (t *Type) Parse(parser *Parser) error {
 			tok := parser.Peek()
 			if tok.TokenKind == TokenInt {
 				parser.Next()
+				if tok.Number < 0 {
+					return fmt.Errorf("negative array size %d", tok.Number)
+				}
 				arr.Size = tok.Number
 			}
 			if _, err := parser.Accept(TokenKind(']')); err != nil {
@@ -864,6 +881,9 @@ func (d *Define) Parse(parser *Parser) error {
 		return err
 	}
 	d.Name = Identifier(nameTok.Text)
+	if _, ok := parser.TypeAliases[nameTok.Text]; ok {
+		return nameTok.Errorf("duplicate DEFINE %q", nameTok.Text)
+	}
 	if err := d.Type.Parse(parser); err != nil {
 		return err
 	}
@@ -901,6 +921,9 @@ func (g *Declare) Parse(parser *Parser) error {
 			tok := parser.Peek()
 			if tok.TokenKind == TokenInt {
 				parser.Next()
+				if tok.Number < 0 {
+					return fmt.Errorf("negative array size %d", tok.Number)
+				}
 				arr.Size = tok.Number
 			}
 			if _, err := parser.Accept(TokenKind(']')); err != nil {
@@ -1092,6 +1115,23 @@ func (left *Expression) parsePrefix(p *Parser, minBp int) error {
 			return err
 		}
 		left.Expr = &Operand{Op: &Length{Identifier: Identifier(tok.Text)}}
+
+	case KeywordByte, KeywordWord:
+		p.Next()
+		if _, err := p.Accept(TokenKind('(')); err != nil {
+			return err
+		}
+		var sub Expression
+		if err := sub.Parse(p); err != nil {
+			return err
+		}
+		if _, err := p.Accept(TokenKind(')')); err != nil {
+			return err
+		}
+		left.Expr = &Prefix{
+			Operator: Operator(tok.TokenKind),
+			Operand:  Operand{Op: &sub},
+		}
 
 	case '(':
 		p.Next()

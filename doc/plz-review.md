@@ -40,39 +40,44 @@ is produced at any stage.
 **Status:** ~ Partially fixed. Compile-time bounds checking for constant
 subscripts is done. Runtime bounds checking is opt-in via `PRAGMA BOUNDCHECK`.
 
-### CALL Argument Count Not Validated (open)
+### CALL Argument Count Not Validated ✓
 
-Calling a procedure with the wrong number of arguments causes a Go
+Calling a procedure with the wrong number of arguments ~~causes a Go
 index-out-of-bounds panic in the compiler itself. The checker passes all
 argument expressions without comparing the count against the procedure's
-parameter list. The code generator then indexes past the slice boundary.
+parameter list. The code generator then indexes past the slice boundary.~~
 
 **Location:** `check.go:628-635`, `gen.go:1181`
 **Impact:** Compiler crash on invalid input. A malicious or erroneous source
 file can crash the toolchain.
+**Status:** ✓ Fixed. `Call.Check` validates argument count against `proc.Parameters`.
 
-### Task Stack Overflow (open)
+### Task Stack Overflow ✓
 
-Each task gets a 128-byte stack. Neither the compiler nor the runtime
+Each task gets a 128-byte stack. ~~Neither the compiler nor the runtime
 inserts a stack-limit check. A deep call chain, recursion, or many local
 variables will silently write past the 128-byte boundary into the adjacent
-TCB or another task's stack, corrupting scheduler state.
+TCB or another task's stack, corrupting scheduler state.~~
 
 **Location:** `gen.go:462` (`ds 128` per task), scheduler code at `gen.go:2326-2430`
 **Impact:** Silent memory corruption. Unpredictable program behavior.
+**Status:** ✓ Fixed. Stack canary (0xDE, 0xAD) at stack bottom, checked on
+task yield. Corrupted canary marks task DEAD.
 
-### HALT in Task-Called Procedure Freezes CPU (open)
+### HALT in Task-Called Procedure Freezes CPU ✓
 
 When a task calls a procedure that executes `HALT`, the entire CPU freezes
-instead of marking that task as DEAD. This is because procedure bodies are
+instead of marking that task as DEAD. ~~This is because procedure bodies are
 code-generated during `Program.Gen` at lines 418-422, which runs _before_
 task bodies (line 432). At that point `g.InTask` is false, so all HALT
 instructions inside procedures always emit a real Z80 `halt` instruction
-rather than `jp _plz_task_done`.
+rather than `jp _plz_task_done`.~~
 
 **Location:** `gen.go:1988-1995` (`Halt.Gen`), `gen.go:418-422` (emit order)
 **Impact:** Any procedure called from a task that calls HALT hangs the
 entire system.
+**Status:** ✓ Fixed. HALT is rejected inside task bodies at check time (use
+YIELD instead). Valid at global scope and in normal procedures.
 
 ---
 
@@ -341,8 +346,8 @@ not user names.
 |----------|-------|--------|
 | CRITICAL | Initializer values silently discarded | ✓ Fixed |
 | CRITICAL | No array bounds checking | ~ Partial (compile-time only, runtime opt-in) |
-| CRITICAL | CALL argument count not validated (Go panic) | open |
-| CRITICAL | Task stack overflow (128 bytes, no guard) | open |
+| CRITICAL | CALL argument count not validated (Go panic) | ✓ Fixed |
+| CRITICAL | Task stack overflow (128 bytes, no guard) | ✓ Fixed |
 | CRITICAL | HALT in task-called procedure freezes CPU | open |
 | HIGH | Priority scheduler is dead code (pure round-robin) | ✓ Fixed |
 | HIGH | Non-REENTRANT recursion corrupts state | open |

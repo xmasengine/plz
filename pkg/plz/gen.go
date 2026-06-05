@@ -32,6 +32,7 @@ type Gen struct {
 	BoundCheck         bool                      // when true, emit runtime bounds checks before array accesses
 	boundsErrorEmitted bool                      // tracks whether _plz_bounds_error label has been emitted
 	strings            []strEntry                // string literal labels and content for ROM emission
+	forTemps           []string                  // FOR loop temp variable labels (step/end), emitted in data section
 }
 
 // strEntry records a string literal that needs to be emitted as ROM data.
@@ -254,7 +255,16 @@ _plz_mod:
 
 // Internal: divide HL by DE
 // Output: BC = quotient, HL = remainder
+// If DE == 0, returns quotient=1, remainder=0 (safe fallback on systems
+// without runtime exception handling).
 _plz_divmod:
+	ld a, d
+	or e
+	jr nz, _plz_divmod_do
+	ld bc, 1
+	ld hl, 0
+	ret
+_plz_divmod_do:
 	xor a
 	push hl
 	pop bc          // bc = dividend
@@ -403,6 +413,7 @@ func (p Program) Gen(g *Gen) error {
 		g.genSchedulerRuntime(c.TaskDefs)
 	}
 	g.genProcStorage(p.Statements)
+	g.genForTemps()
 
 	for _, item := range dataItems {
 		if item.at != nil {
@@ -444,6 +455,12 @@ func (g *Gen) genTaskInit(tasks []Task) {
 		g.Emitf("\tld (_plz_tcbs+%d), sp\n", i*8)
 		g.Emitf("\tld a, %d\n", task.Priority)
 		g.Emitf("\tld (_plz_tcbs+%d), a\n", i*8+4)
+		// Store stack base address (stack bottom) in TCB reserved bytes.
+		g.Emitf("\tld hl, _plz_task%d_stack\n", i)
+		g.Emitf("\tld (_plz_tcbs+%d), hl\n", i*8+5)
+		// Write canary bytes at bottom of stack.
+		g.Emitf("\tld a, 0xDE\n\tld (_plz_task%d_stack), a\n", i)
+		g.Emitf("\tld a, 0xAD\n\tld (_plz_task%d_stack+1), a\n", i)
 	}
 	for i := len(tasks); i < 16; i++ {
 		g.Emitf("\tld a, 3\n")
@@ -831,6 +848,17 @@ func (p Prefix) Gen(g *Gen) error {
 			g.Emitln("\tinc l")
 			g.Emitf("_lbl_%d:\n", n)
 		}
+
+	case Operator(KeywordByte):
+		if err := p.Operand.Gen(g); err != nil {
+			return err
+		}
+		g.Emitln("\tld h, 0")
+
+	case Operator(KeywordWord):
+		if err := p.Operand.Gen(g); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -861,7 +889,8 @@ func isSimpleOperand(op Operand) bool {
 	case op.Literal() != nil:
 		return true
 	case op.Reference() != nil:
-		return true
+		r := op.Reference()
+		return len(r.Subscripts) == 0 && len(r.Fields) == 0
 	case op.Expr() != nil:
 		return isSimpleExpr(*op.Expr())
 	case op.Input() != nil:
@@ -918,23 +947,49 @@ func (i Infix) Gen(g *Gen) error {
 	if !useDE {
 		g.Emitln("\tpop hl")
 	}
-	isByte := isByteInfix(g, i)
-
 	switch i.Operator {
 	case OperatorADD:
-		g.genInfixAdd(isByte)
+		if isByteInfix(g, i) {
+			g.genInfixAdd8()
+		} else {
+			g.genInfixAdd()
+		}
 	case OperatorSUB:
-		g.genInfixSub(isByte)
+		if isByteInfix(g, i) {
+			g.genInfixSub8()
+		} else {
+			g.genInfixSub()
+		}
 	case OperatorShiftLeft:
-		g.genInfixShiftLeft(isByte, i.Operands[1])
+		if isByteInfix(g, i) {
+			g.genInfixShiftLeft8(i.Operands[1])
+		} else {
+			g.genInfixShiftLeft(i.Operands[1])
+		}
 	case OperatorShiftRight:
-		g.genInfixShiftRight(isByte, i.Operands[1])
+		if isByteInfix(g, i) {
+			g.genInfixShiftRight8(i.Operands[1])
+		} else {
+			g.genInfixShiftRight(i.Operands[1])
+		}
 	case OperatorAND:
-		g.genInfixBitwise(isByte, "\tand e", "\tand d")
+		if isByteInfix(g, i) {
+			g.genInfixBitwise8("\tand e")
+		} else {
+			g.genInfixBitwise("\tand e", "\tand d")
+		}
 	case OperatorOR:
-		g.genInfixBitwise(isByte, "\tor e", "\tor d")
+		if isByteInfix(g, i) {
+			g.genInfixBitwise8("\tor e")
+		} else {
+			g.genInfixBitwise("\tor e", "\tor d")
+		}
 	case OperatorXOR:
-		g.genInfixBitwise(isByte, "\txor e", "\txor d")
+		if isByteInfix(g, i) {
+			g.genInfixBitwise8("\txor e")
+		} else {
+			g.genInfixBitwise("\txor e", "\txor d")
+		}
 	case OperatorMUL:
 		g.Emitln("\tcall _plz_mul")
 	case OperatorDIV:
@@ -942,17 +997,41 @@ func (i Infix) Gen(g *Gen) error {
 	case OperatorMOD:
 		g.Emitln("\tcall _plz_mod")
 	case OperatorEQU:
-		g.genInfixCmp(isByte, cmpEQ)
+		if isByteInfix(g, i) {
+			g.genInfixCmp8(cmpEQ)
+		} else {
+			g.genInfixCmp(cmpEQ)
+		}
 	case OperatorNEQ:
-		g.genInfixCmp(isByte, cmpNEQ)
+		if isByteInfix(g, i) {
+			g.genInfixCmp8(cmpNEQ)
+		} else {
+			g.genInfixCmp(cmpNEQ)
+		}
 	case OperatorGT:
-		g.genInfixCmp(isByte, cmpGT)
+		if isByteInfix(g, i) {
+			g.genInfixCmp8(cmpGT)
+		} else {
+			g.genInfixCmp(cmpGT)
+		}
 	case OperatorLT:
-		g.genInfixCmp(isByte, cmpLT)
+		if isByteInfix(g, i) {
+			g.genInfixCmp8(cmpLT)
+		} else {
+			g.genInfixCmp(cmpLT)
+		}
 	case OperatorGTE:
-		g.genInfixCmp(isByte, cmpGTE)
+		if isByteInfix(g, i) {
+			g.genInfixCmp8(cmpGTE)
+		} else {
+			g.genInfixCmp(cmpGTE)
+		}
 	case OperatorLTE:
-		g.genInfixCmp(isByte, cmpLTE)
+		if isByteInfix(g, i) {
+			g.genInfixCmp8(cmpLTE)
+		} else {
+			g.genInfixCmp(cmpLTE)
+		}
 	}
 	return nil
 }
@@ -968,52 +1047,56 @@ const (
 	cmpLTE
 )
 
-func (g *Gen) genInfixAdd(isByte bool) {
-	if isByte {
-		g.Emitln("\tld a, l")
-		g.Emitln("\tadd a, e")
-		g.Emitln("\tld l, a")
-		g.Emitln("\tld h, 0")
-	} else {
-		g.Emitln("\tadd hl, de")
-	}
+func (g *Gen) genInfixAdd() {
+	g.Emitln("\tadd hl, de")
 }
 
-func (g *Gen) genInfixSub(isByte bool) {
-	if isByte {
-		g.Emitln("\tld a, l")
-		g.Emitln("\tsub e")
-		g.Emitln("\tld l, a")
-		g.Emitln("\tld h, 0")
-	} else {
-		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")
-	}
+func (g *Gen) genInfixAdd8() {
+	g.Emitln("\tld a, l")
+	g.Emitln("\tadd a, e")
+	g.Emitln("\tld l, a")
+	g.Emitln("\tld h, 0")
 }
 
-func (g *Gen) genInfixShiftLeft(isByte bool, rhs Operand) {
-	if isByte {
-		g.genShiftLeftByte(rhs)
-	} else if n := constShift(rhs); n >= 0 {
+func (g *Gen) genInfixSub() {
+	g.Emitln("\tor a")
+	g.Emitln("\tsbc hl, de")
+}
+
+func (g *Gen) genInfixSub8() {
+	g.Emitln("\tld a, l")
+	g.Emitln("\tsub e")
+	g.Emitln("\tld l, a")
+	g.Emitln("\tld h, 0")
+}
+
+func (g *Gen) genInfixShiftLeft(rhs Operand) {
+	if n := constShift(rhs); n >= 0 {
 		for j := 0; j < n; j++ {
 			g.Emitln("\tadd hl, hl")
 		}
 	} else {
-		g.genVarShift("add hl, hl", rhs, false)
+		g.genVarShift("add hl, hl", rhs)
 	}
 }
 
-func (g *Gen) genInfixShiftRight(isByte bool, rhs Operand) {
-	if isByte {
-		g.genShiftRightByte(rhs)
-	} else if n := constShift(rhs); n >= 0 {
+func (g *Gen) genInfixShiftLeft8(rhs Operand) {
+	g.genShiftLeftByte(rhs)
+}
+
+func (g *Gen) genInfixShiftRight(rhs Operand) {
+	if n := constShift(rhs); n >= 0 {
 		for j := 0; j < n; j++ {
 			g.Emitln("\tsrl h")
 			g.Emitln("\trr l")
 		}
 	} else {
-		g.genVarShift("srl h\n\trr l", rhs, false)
+		g.genVarShift("srl h\n\trr l", rhs)
 	}
+}
+
+func (g *Gen) genInfixShiftRight8(rhs Operand) {
+	g.genShiftRightByte(rhs)
 }
 
 func (g *Gen) genShiftLeftByte(rhs Operand) {
@@ -1064,7 +1147,7 @@ func (g *Gen) genShiftRightByte(rhs Operand) {
 	}
 }
 
-func (g *Gen) genVarShift(shiftOp string, rhs Operand, _ bool) {
+func (g *Gen) genVarShift(shiftOp string, rhs Operand) {
 	loop := g.nextLabel()
 	end := g.nextLabel()
 	g.Emitln("\tld a, e")
@@ -1078,32 +1161,33 @@ func (g *Gen) genVarShift(shiftOp string, rhs Operand, _ bool) {
 	g.Emitf("_lbl_%d:\n", end)
 }
 
-func (g *Gen) genInfixBitwise(isByte bool, byteOp, wordHighOp string) {
-	if isByte {
-		g.Emitln("\tld a, l")
-		g.Emit(byteOp)
-		g.Emit("\n")
-		g.Emitln("\tld l, a")
-		g.Emitln("\tld h, 0")
-	} else {
-		g.Emitln("\tld a, h")
-		g.Emit(wordHighOp)
-		g.Emit("\n")
-		g.Emitln("\tld h, a")
-		g.Emitln("\tld a, l")
-		g.Emit(byteOp)
-		g.Emit("\n")
-		g.Emitln("\tld l, a")
-	}
+func (g *Gen) genInfixBitwise(byteOp, wordHighOp string) {
+	g.Emitln("\tld a, h")
+	g.Emit(wordHighOp)
+	g.Emit("\n")
+	g.Emitln("\tld h, a")
+	g.Emitln("\tld a, l")
+	g.Emit(byteOp)
+	g.Emit("\n")
+	g.Emitln("\tld l, a")
 }
 
-func (g *Gen) genInfixCmp(isByte bool, kind cmpKind) {
+func (g *Gen) genInfixBitwise8(byteOp string) {
+	g.Emitln("\tld a, l")
+	g.Emit(byteOp)
+	g.Emit("\n")
+	g.Emitln("\tld l, a")
+	g.Emitln("\tld h, 0")
+}
+
+func (g *Gen) genInfixCmp(kind cmpKind) {
 	n := g.nextLabel()
-	if isByte {
-		g.genByteCmp(kind, n)
-	} else {
-		g.genWordCmp(kind, n)
-	}
+	g.genWordCmp(kind, n)
+}
+
+func (g *Gen) genInfixCmp8(kind cmpKind) {
+	n := g.nextLabel()
+	g.genByteCmp(kind, n)
 }
 
 func (g *Gen) genByteCmp(kind cmpKind, n int) {
@@ -1614,7 +1698,11 @@ func (g *Gen) genLetArrOfRecField(s Let, t Type) error {
 		g.Emitln("\tadd hl, de")
 	}
 	g.Emitln("\tpop de")
-	g.emitStoreDE(ft.Predeclared() == PredeclaredByte)
+	if ft.Predeclared() == PredeclaredByte {
+		g.emitStoreDE8()
+	} else {
+		g.emitStoreDE()
+	}
 	return nil
 }
 
@@ -1653,9 +1741,12 @@ func (g *Gen) genLetField(s Let, t Type) error {
 		}
 	}
 	g.Emitln("\tpop de")
-	isByte := ft.Predeclared() == PredeclaredByte ||
-		(ft.Array() != nil && ft.Array().ElemType.Predeclared() == PredeclaredByte)
-	g.emitStoreDE(isByte)
+	if ft.Predeclared() == PredeclaredByte ||
+		(ft.Array() != nil && ft.Array().ElemType.Predeclared() == PredeclaredByte) {
+		g.emitStoreDE8()
+	} else {
+		g.emitStoreDE()
+	}
 	return nil
 }
 
@@ -1668,7 +1759,11 @@ func (g *Gen) genLetArray(s Let) error {
 		}
 	}
 	g.Emitln("\tpop de")
-	g.emitStoreDE(elem == 1)
+	if elem == 1 {
+		g.emitStoreDE8()
+	} else {
+		g.emitStoreDE()
+	}
 	if s.Target2 != nil && s.Target2.Identifier != "" {
 		g.Emitln("\tpop de")
 		g.emitTarget2Store(s.Target2)
@@ -1699,14 +1794,14 @@ func (g *Gen) emitScaledIndex(expr Expression, scale int) error {
 	return nil
 }
 
-func (g *Gen) emitStoreDE(isByte bool) {
-	if isByte {
-		g.Emitln("\tld (hl), e")
-	} else {
-		g.Emitln("\tld (hl), e")
-		g.Emitln("\tinc hl")
-		g.Emitln("\tld (hl), d")
-	}
+func (g *Gen) emitStoreDE() {
+	g.Emitln("\tld (hl), e")
+	g.Emitln("\tinc hl")
+	g.Emitln("\tld (hl), d")
+}
+
+func (g *Gen) emitStoreDE8() {
+	g.Emitln("\tld (hl), e")
 }
 
 func findField(rec *Record, name Identifier) int {
@@ -1751,7 +1846,13 @@ func (s Group) Gen(g *Gen) error {
 		g.Emitf("_end_%d:\n", n)
 
 	case s.For != nil:
-		// Evaluate step (default 1), push on stack
+		n := g.nextLabel()
+		stepLabel := fmt.Sprintf("_for_step_%d", n)
+		endLabel := fmt.Sprintf("_for_end_%d", n)
+		g.addForTemp(stepLabel)
+		g.addForTemp(endLabel)
+
+		// Evaluate step (default 1), store in temp variable
 		if s.For.By != nil {
 			if err := s.For.By.Gen(g); err != nil {
 				return err
@@ -1759,13 +1860,13 @@ func (s Group) Gen(g *Gen) error {
 		} else {
 			g.Emitln("\tld hl, 1")
 		}
-		g.Emitln("\tpush hl")
+		g.Emitf("\tld (%s), hl\n", stepLabel)
 
-		// Evaluate end, push on stack
+		// Evaluate end, store in temp variable
 		if err := s.For.To.Gen(g); err != nil {
 			return err
 		}
-		g.Emitln("\tpush hl")
+		g.Emitf("\tld (%s), hl\n", endLabel)
 
 		// Initialize var = start
 		if err := s.For.Start.Gen(g); err != nil {
@@ -1773,13 +1874,10 @@ func (s Group) Gen(g *Gen) error {
 		}
 		g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
 
-		n := g.nextLabel()
 		g.Emitf("_for_%d:\n", n)
 		// Compare var with end (hl = end - var)
-		g.Emitln("\tpop de")                                               // de = end, stack: [step]
-		g.Emitln("\tpush de")                                              // push back, stack: [step, end]
-		g.Emitf("\tld hl, (%s)\n", g.localSym(s.For.Reference.Identifier)) // hl = var
-		g.Emitln("\tex de, hl")                                            // hl = end, de = var
+		g.Emitf("\tld hl, (%s)\n", endLabel)
+		g.Emitf("\tld de, (%s)\n", g.localSym(s.For.Reference.Identifier))
 		g.Emitln("\tor a")
 		g.Emitln("\tsbc hl, de")         // hl = end - var
 		g.Emitf("\tjmp c, _end_%d\n", n) // end < var → exit
@@ -1794,17 +1892,12 @@ func (s Group) Gen(g *Gen) error {
 		}
 
 		// var += step
-		g.Emitln("\tpop de")  // de = end, stack: [step]
-		g.Emitln("\tpop hl")  // hl = step, stack: []
-		g.Emitln("\tpush hl") // push step back, stack: [step]
-		g.Emitln("\tpush de") // push end back, stack: [step, end]
+		g.Emitf("\tld hl, (%s)\n", stepLabel)
 		g.Emitf("\tld de, (%s)\n", g.localSym(s.For.Reference.Identifier))
-		g.Emitln("\tadd hl, de") // hl = step + var
+		g.Emitln("\tadd hl, de")
 		g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
 		g.Emitf("\tjmp _for_%d\n", n)
 		g.Emitf("_end_%d:\n", n)
-		g.Emitln("\tpop hl") // discard end
-		g.Emitln("\tpop hl") // discard step
 
 	case s.Case != nil:
 		// CASE: evaluate selector, compare against each branch value, jump
@@ -2470,12 +2563,17 @@ func (s Load) Gen(g *Gen) error {
 func (g *Gen) saveSize(id Identifier) (int, error) {
 	// Check for a DATA block first.
 	if data, ok := g.Checker.Datas[id]; ok {
+		if data.Tile != nil {
+			size := 0
+			for _, tile := range data.Tile.Tiles {
+				size += len(tile.Bytes())
+			}
+			return size, nil
+		}
 		if data.Text != nil {
 			return len(data.Text.Value) + 1, nil // length byte + string
 		}
 		size := 0
-		// XXX this is not correct , certainly not for tile data. Although it is
-		// unlikely we will save a tile to SRAM, except for an image editor or such.
 		for _, val := range data.Values {
 			if op := val.Operand(); op != nil {
 				if lit := op.Literal(); lit != nil {
@@ -2511,6 +2609,19 @@ func (g *Gen) emitStorageRaw(label string, size int) {
 // arguments for constructing the label.
 func (g *Gen) emitStorage(format string, size int, args ...any) {
 	g.emitStorageRaw(fmt.Sprintf(format, args...), size)
+}
+
+// addForTemp registers a FOR loop temp variable label to be emitted in the
+// data section. Each temp is 2 bytes (one word).
+func (g *Gen) addForTemp(label string) {
+	g.forTemps = append(g.forTemps, label)
+}
+
+// genForTemps emits all registered FOR loop temp variables in the data section.
+func (g *Gen) genForTemps() {
+	for _, label := range g.forTemps {
+		g.emitStorageRaw(label, 2)
+	}
 }
 
 // Gen generates assembly for a DATA declaration, emitting DB directives for
@@ -2681,6 +2792,24 @@ _plz_scheduler:
 	inc hl
 	ld (hl), d
 
+	// Check stack canary for the current task (2 bytes at stack_base).
+	// If overwritten, the task's stack overflowed — mark it DEAD.
+	// HL = TCB_entry + 1; compute TCB_entry + 5 for the stack base.
+	inc hl
+	inc hl
+	inc hl
+	inc hl		// HL = TCB_entry + 5 (stack base address)
+	ld c, (hl)
+	inc hl
+	ld b, (hl)	// BC = stack base address
+	ld a, (bc)	// canary byte 0
+	cp 0xDE
+	jp nz, _sch_stack_dead
+	inc bc
+	ld a, (bc)	// canary byte 1
+	cp 0xAD
+	jp nz, _sch_stack_dead
+
 	// Decrement all sleeping tasks' sleep counters.
 	// When a counter reaches 0, if the task is SLEEPING (state=2),
 	// set its state to READY. SUSPENDED tasks are not woken.
@@ -2758,7 +2887,8 @@ _sch_wrap:
 	ld a, e
 	cp 0xFF
 	jr nz, _sch_found
-	// No ready task — halt and wait for interrupt
+	// No ready task — enable interrupts and halt, wait for interrupt
+	ei
 	halt
 	jp _plz_scheduler
 _sch_found:
@@ -2780,6 +2910,19 @@ _sch_found:
 
 _plz_task_done:
 	// Mark current task as dead
+	ld a, (_plz_current_task)
+	ld l, a
+	ld h, 0
+	add hl, hl
+	add hl, hl
+	add hl, hl
+	ld de, _plz_tcbs+2
+	add hl, de
+	ld (hl), 3
+	jp _plz_scheduler
+
+_sch_stack_dead:
+	// Stack canary corrupted — mark current task as DEAD
 	ld a, (_plz_current_task)
 	ld l, a
 	ld h, 0

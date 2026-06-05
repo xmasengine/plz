@@ -22,7 +22,7 @@ const (
 	TokenEOF       TokenKind = -(iota + 1) // End of input.
 	TokenIdent                             // An identifier.
 	TokenInt                               // An integer literal.
-	TokenFloat                             // A floating-point literal (matching Scanner token kinds).
+	TokenFloat                             // Placeholder: matches text/scanner Float token kind.
 	TokenChar                              // A character literal.
 	TokenString                            // A string literal.
 	TokenRawString                         // A raw string literal (matching Scanner token kinds).
@@ -207,7 +207,7 @@ func scan(rd io.Reader, name string) ([]Token, error) {
 		}
 		tok := Token{TokenKind: kind, Text: s.TokenText(), Position: s.Pos()}
 		if kind == TokenInt {
-			num, err := strconv.ParseInt(tok.Text, 0, 0)
+			num, err := strconv.ParseUint(tok.Text, 0, 16)
 			if err != nil {
 				return nil, tok.Errorf("int %s %s", tok.Text, err.Error())
 			}

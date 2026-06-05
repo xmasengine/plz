@@ -10,6 +10,7 @@ type Scope struct {
 	Name    string                 // Name of the scope (e.g. "global", procedure name)
 	Parent  *Scope                 // Parent scope
 	IsProc  bool                   // IsProc is true when this scope is a procedure body
+	IsTask  bool                   // IsTask is true when this scope is a task body
 	Symbols map[Identifier]Declare // Symbols in this scope
 }
 
@@ -24,8 +25,29 @@ type Checker struct {
 	TaskDefs    []Task                 // TaskDefs are the task definitions in order
 	Constants   map[Identifier]Literal // Constants are named constant values
 	Datas       map[Identifier]Data    // Datas are named data values
-	Labels      map[string]bool        // Labels are named labels (GOTO targets)
+	Labels      map[string]int         // Labels are named labels → loop nesting depth
 	usedVectors map[int]bool           // interrupt vectors already installed
+	usedRanges  map[int]int            // usedRanges tracks AT-placed address ranges (start addr → size)
+}
+
+// z80RegNames lists Z80 register names that conflict with the assembler
+// when used as user identifiers. Single-letter names (a,b,c,d,e,h,l,i,r)
+// are unambiguous in label/operand context and are permitted.
+var z80RegNames = map[string]bool{
+	"sp": true, "pc": true,
+	"af": true, "bc": true, "de": true, "hl": true,
+	"ix": true, "iy": true,
+}
+
+func isZ80Register(name string) bool { return z80RegNames[name] }
+
+func (c *Checker) inTask() bool {
+	for s := c.current; s != nil; s = s.Parent {
+		if s.IsTask {
+			return true
+		}
+	}
+	return false
 }
 
 // NewChecker returns a new Checker with an initialized global scope.
@@ -35,8 +57,9 @@ func NewChecker() *Checker {
 		Tasks:       make(map[string]int),
 		Constants:   make(map[Identifier]Literal),
 		Datas:       make(map[Identifier]Data),
-		Labels:      make(map[string]bool),
+		Labels:      make(map[string]int),
 		usedVectors: make(map[int]bool),
+		usedRanges:  make(map[int]int),
 	}
 	c.root = &Scope{Name: "global", Symbols: make(map[Identifier]Declare)}
 	c.current = c.root
@@ -47,6 +70,11 @@ func NewChecker() *Checker {
 // makes it the new current scope.
 func (c *Checker) pushBlockScope(name string) {
 	c.current = &Scope{Name: name, Parent: c.current, IsProc: false, Symbols: make(map[Identifier]Declare)}
+}
+
+// pushTaskScope creates a new task body scope with the given name.
+func (c *Checker) pushTaskScope(name string) {
+	c.current = &Scope{Name: name, Parent: c.current, IsTask: true, Symbols: make(map[Identifier]Declare)}
 }
 
 // pushProcedureScope creates a new procedure scope with the given name and
@@ -63,6 +91,17 @@ func (c *Checker) inProcedure() bool {
 		}
 	}
 	return false
+}
+
+// currentProcName returns the name of the innermost enclosing procedure, or
+// empty string if not inside a procedure.
+func (c *Checker) currentProcName() string {
+	for s := c.current; s != nil; s = s.Parent {
+		if s.IsProc {
+			return s.Name
+		}
+	}
+	return ""
 }
 
 // popScope restores the parent scope as the current innermost scope.
@@ -267,6 +306,9 @@ func (p Program) Check(c *Checker) error {
 			if _, ok := c.Tasks[name]; ok {
 				return c.Errorf("", "duplicate task %q", name)
 			}
+			if len(c.TaskDefs) >= 16 {
+				return c.Errorf("", "too many tasks (max 16)")
+			}
 			idx := len(c.TaskDefs)
 			c.Tasks[name] = idx
 			c.TaskDefs = append(c.TaskDefs, cmd)
@@ -287,7 +329,30 @@ func (p Program) Check(c *Checker) error {
 		}
 	}
 
-	// Second pass: walk statements to collect labels.
+	// Second pass: build call graph and detect recursion in non-REENTRANT
+	// procedures.
+	callGraph := make(map[string]map[string]bool)
+	for _, stmt := range p.Statements {
+		if proc, ok := stmt.Command.(Procedure); ok {
+			name := proc.Name.Name
+			if _, ok := callGraph[name]; !ok {
+				callGraph[name] = make(map[string]bool)
+			}
+			for callee := range c.collectCalls(stmt) {
+				callGraph[name][callee] = true
+			}
+		}
+	}
+	// DFS cycle detection for each non-REENTRANT procedure.
+	for _, stmt := range p.Statements {
+		if proc, ok := stmt.Command.(Procedure); ok && !proc.Reentrant {
+			if cycle := c.findRecursion(proc.Name.Name, callGraph); cycle != "" {
+				return c.Errorf("", "non-REENTRANT procedure %q: recursive call chain detected (%s)", proc.Name.Name, cycle)
+			}
+		}
+	}
+
+	// Third pass: walk statements to collect labels.
 	for _, stmt := range p.Statements {
 		c.collectLabels(stmt)
 	}
@@ -302,38 +367,137 @@ func (p Program) Check(c *Checker) error {
 }
 
 // collectLabels recursively walks statements and their nested bodies to
-// register all named labels in the checker's Labels map.
+// register all named labels in the checker's Labels map. Labels inside
+// loops are recorded with their nesting depth to validate GOTO targets.
 func (c *Checker) collectLabels(s Statement) {
+	c.collectLabelsAtDepth(s, 0)
+}
+
+func (c *Checker) collectLabelsAtDepth(s Statement, depth int) {
 	if s.Label != nil && s.Label.Name != "" {
-		c.Labels[s.Label.Name] = true
+		c.Labels[s.Label.Name] = depth
 	}
+	c.walkStmtsDepth(s, func(child Statement, childDepth int) {
+		c.collectLabelsAtDepth(child, childDepth)
+	}, depth)
+}
+
+// walkStmtsDepth visits nested statements within a compound statement,
+// incrementing depth for loop bodies (FOR/WHILE).
+func (c *Checker) walkStmtsDepth(s Statement, fn func(Statement, int), depth int) {
 	switch cmd := s.Command.(type) {
-	case Procedure:
-		for _, stmt := range cmd.Statements {
-			c.collectLabels(stmt)
-		}
-	case Task:
-		for _, stmt := range cmd.Body {
-			c.collectLabels(stmt)
-		}
 	case Group:
+		loopDepth := depth
+		if cmd.For != nil || cmd.While != nil {
+			loopDepth = depth + 1
+		}
 		for _, stmt := range cmd.Statements {
-			c.collectLabels(stmt)
+			fn(stmt, loopDepth)
 		}
 		if cmd.Case != nil {
 			for _, branch := range cmd.Case.Branches {
-				c.collectLabels(branch.Statement)
+				fn(branch.Statement, depth)
 			}
 			if cmd.Case.Default != nil {
-				c.collectLabels(*cmd.Case.Default)
+				fn(*cmd.Case.Default, depth)
+			}
+		}
+	case Procedure:
+		for _, stmt := range cmd.Statements {
+			fn(stmt, depth)
+		}
+	case Task:
+		for _, stmt := range cmd.Body {
+			fn(stmt, depth)
+		}
+	case If:
+		fn(cmd.Then, depth)
+		if cmd.Else != nil {
+			fn(*cmd.Else, depth)
+		}
+	}
+}
+
+// walkStmts visits nested statements within a compound statement.
+func (c *Checker) walkStmts(s Statement, fn func(Statement)) {
+	switch cmd := s.Command.(type) {
+	case Procedure:
+		for _, stmt := range cmd.Statements {
+			fn(stmt)
+		}
+	case Task:
+		for _, stmt := range cmd.Body {
+			fn(stmt)
+		}
+	case Group:
+		for _, stmt := range cmd.Statements {
+			fn(stmt)
+		}
+		if cmd.Case != nil {
+			for _, branch := range cmd.Case.Branches {
+				fn(branch.Statement)
+			}
+			if cmd.Case.Default != nil {
+				fn(*cmd.Case.Default)
 			}
 		}
 	case If:
-		c.collectLabels(cmd.Then)
+		fn(cmd.Then)
 		if cmd.Else != nil {
-			c.collectLabels(*cmd.Else)
+			fn(*cmd.Else)
 		}
 	}
+}
+
+// collectCalls recursively walks statements and returns the set of procedure
+// names that are called via CALL statements within s.
+func (c *Checker) collectCalls(s Statement) map[string]bool {
+	calls := make(map[string]bool)
+	var walk func(Statement)
+	walk = func(stmt Statement) {
+		if call, ok := stmt.Command.(Call); ok {
+			calls[string(call.Reference.Identifier)] = true
+		}
+		c.walkStmts(stmt, walk)
+	}
+	walk(s)
+	return calls
+}// findRecursion performs DFS cycle detection on the call graph starting from
+// proc. Returns a human-readable cycle description if one exists, or "".
+func (c *Checker) findRecursion(proc string, graph map[string]map[string]bool) string {
+	visited := make(map[string]bool)
+	stack := make(map[string]bool)
+	var path []string
+	var dfs func(node string) string
+	dfs = func(node string) string {
+		if stack[node] {
+			// Found a cycle — build path from first occurrence.
+			for i, p := range path {
+				if p == node {
+					return fmt.Sprintf("%s → %s", p, path[i+1:]) + " → " + p
+				}
+			}
+		}
+		if visited[node] {
+			return ""
+		}
+		visited[node] = true
+		stack[node] = true
+		path = append(path, node)
+		for callee := range graph[node] {
+			if _, ok := c.Procedures[callee]; ok {
+				if msg := dfs(callee); msg != "" {
+					path = path[:len(path)-1]
+					delete(stack, node)
+					return msg
+				}
+			}
+		}
+		path = path[:len(path)-1]
+		delete(stack, node)
+		return ""
+	}
+	return dfs(proc)
 }
 
 // Check delegates semantic analysis to the underlying command's Checklet
@@ -372,6 +536,21 @@ func (s Pragma) Check(c *Checker) error {
 // Check validates an AT directive. This is a no-op because AT only
 // sets the assembly address and has no semantic constraints.
 func (s At) Check(c *Checker) error {
+	if s.HasBank {
+		return nil
+	}
+	addr, err := c.EvalConstExpr(s.Address)
+	if err != nil {
+		return nil // non-constant, can't check
+	}
+	for start, sz := range c.usedRanges {
+		if addr >= start && addr < start+sz {
+			return c.Errorf("", "AT 0x%x falls within previously used range 0x%x-0x%x", addr, start, start+sz-1)
+		}
+	}
+	// Standalone AT has no fixed size — it's an origin for subsequent code/data.
+	// We register it as a 1-byte placeholder to prevent exact re-use.
+	c.usedRanges[addr] = 1
 	return nil
 }
 
@@ -408,7 +587,28 @@ func (s Declare) Check(c *Checker) error {
 	if s.At != nil && s.Initializer != nil {
 		return c.Errorf("", "%s: AT and initializer are mutually exclusive", s.Identifier)
 	}
+	if c.current == c.root && isZ80Register(string(s.Identifier)) {
+		return c.Errorf("", "%s: name conflicts with Z80 register", s.Identifier)
+	}
+	if s.At != nil {
+		addr, err := c.EvalConstExpr(*s.At)
+		if err == nil {
+			size := s.StorageSize()
+			for start, sz := range c.usedRanges {
+				if addr < start+sz && start < addr+size {
+					return c.Errorf("", "%s: address range 0x%x-0x%x overlaps with previously used range 0x%x-0x%x",
+						s.Identifier, addr, addr+size-1, start, start+sz-1)
+				}
+			}
+			c.usedRanges[addr] = size
+		}
+	}
 	c.current.Symbols[s.Identifier] = s
+	if s.Initializer != nil {
+		if err := c.checkDeclareOverflow(s); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -417,10 +617,13 @@ func (s Declare) Check(c *Checker) error {
 // by later constant and code generation passes.
 func (s Constant) Check(c *Checker) error {
 	if s.Expr.Expr == nil {
-		return nil
+		return c.Errorf("", "CONSTANT %s requires a value", s.Name)
 	}
 	if v, err := c.EvalConstExpr(s.Expr); err == nil {
-		c.Constants[Identifier(s.Name)] = Literal{Lit: &NumberLit{Value: v}}
+		if v < -32768 || v > 65535 {
+			return c.Errorf("", "CONSTANT %s = %d does not fit in 16 bits", s.Name, v)
+		}
+		c.Constants[Identifier(s.Name)] = Literal{Lit: &NumberLit{Value: v & 0xFFFF}}
 	} else if op := s.Expr.Operand(); op != nil {
 		if lit := op.Literal(); lit != nil {
 			if t := lit.Text(); t != nil {
@@ -559,8 +762,8 @@ func (s Save) Check(c *Checker) error {
 	if len(ref.Fields) > 0 {
 		return c.Errorf("", "SAVE does not support record field access")
 	}
-	if s.Location == nil {
-		// Save at SRAMBase
+	if d, ok := c.Lookup(ref.Identifier); ok && d.StorageSize() == 0 {
+		return c.Errorf("", "SAVE: %q has zero size", ref.Identifier)
 	}
 	return nil
 }
@@ -587,6 +790,9 @@ func (s Load) Check(c *Checker) error {
 	if len(ref.Fields) > 0 {
 		return c.Errorf("", "LOAD does not support record field access")
 	}
+	if d, ok := c.Lookup(ref.Identifier); ok && d.StorageSize() == 0 {
+		return c.Errorf("", "LOAD: %q has zero size", ref.Identifier)
+	}
 	if s.Location == nil {
 		// Load from SRAMBase
 	}
@@ -610,7 +816,10 @@ func (s Let) Check(c *Checker) error {
 			return err
 		}
 	}
-	return s.Expression.Check(c)
+	if err := s.Expression.Check(c); err != nil {
+		return err
+	}
+	return c.checkLetOverflow(s.Reference, s.Expression)
 }
 
 // checkTarget validates and implicitly declares a single LET assignment
@@ -667,6 +876,9 @@ func checkTarget(c *Checker, r Reference) error {
 // DATA parameters as pass-by-reference), and then validates each statement in
 // the procedure body.
 func (s Procedure) Check(c *Checker) error {
+	if c.inProcedure() {
+		return c.Errorf("", "nested procedure %q (procedures cannot be defined inside other procedures)", s.Name.Name)
+	}
 	c.pushProcedureScope(s.Name.Name)
 	defer c.popScope()
 	// Register parameters in the procedure scope.
@@ -694,7 +906,7 @@ func (s Procedure) Check(c *Checker) error {
 // Check validates a task definition. It pushes a new scope for the task body
 // and validates each statement within it.
 func (t Task) Check(c *Checker) error {
-	c.pushBlockScope(t.Name.Name)
+	c.pushTaskScope(t.Name.Name)
 	defer c.popScope()
 	for i := range t.Body {
 		if err := t.Body[i].Check(c); err != nil {
@@ -724,7 +936,17 @@ func (r Resume) Check(c *Checker) error {
 
 // Check validates a SLEEP statement by checking its duration expression.
 func (s Sleep) Check(c *Checker) error {
+	if len(c.Tasks) == 0 {
+		return c.Errorf("", "SLEEP requires at least one task")
+	}
 	return s.Duration.Check(c)
+}
+
+func (s Yield) Check(c *Checker) error {
+	if len(c.Tasks) == 0 {
+		return c.Errorf("", "YIELD requires at least one task")
+	}
+	return nil
 }
 
 // Check validates a RETURN statement. It rejects RETURN at global scope,
@@ -747,8 +969,16 @@ func (s Return) Check(c *Checker) error {
 
 // Check validates a GOTO statement by verifying that the target label exists.
 func (s GoTo) Check(c *Checker) error {
-	if !c.Labels[s.Name] {
+	labelDepth, ok := c.Labels[s.Name]
+	if !ok {
 		return c.Errorf("", "GOTO: undefined label %q", s.Name)
+	}
+	// Reject GOTO into a deeper loop nesting level (would skip stack cleanup).
+	if labelDepth > 0 {
+		// GOTO at global/procedure scope targeting a label inside a loop.
+		// For now we conservatively reject all such jumps; a full dataflow
+		// analysis would be needed to track which loops are on the stack.
+		return c.Errorf("", "GOTO %q: cannot jump into a loop body", s.Name)
 	}
 	return nil
 }
@@ -761,11 +991,15 @@ func (s Call) Check(c *Checker) error {
 		return c.Errorf("", "CALL: %s unknown procedure", id)
 	}
 
+	if cur := c.currentProcName(); cur == id && !proc.Reentrant {
+		return c.Errorf("", "CALL: %s is non-REENTRANT and calls itself directly", id)
+	}
+
 	obs := len(s.Arguments)
 	ex := len(proc.Parameters)
 
 	if ex != obs {
-		return c.Errorf("", "CALL: argument count is %d, expected %d", ex, obs)
+		return c.Errorf("", "CALL: argument count is %d, expected %d", obs, ex)
 	}
 
 	for i := range s.Arguments {
@@ -779,6 +1013,14 @@ func (s Call) Check(c *Checker) error {
 // Check validates an INPUT expression by checking its port expression.
 func (i Input) Check(c *Checker) error {
 	return i.Port.Check(c)
+}
+
+// Check rejects HALT inside a task body (use YIELD instead).
+func (s Halt) Check(c *Checker) error {
+	if c.inTask() {
+		return c.Errorf("", "HALT not allowed inside a task body (use YIELD instead)")
+	}
+	return nil
 }
 
 // Check validates an expression by dispatching to the appropriate sub-check
@@ -1028,6 +1270,115 @@ func (c *Checker) checkArrayBounds(ref Reference) error {
 	for _, sub := range ref.Subscripts {
 		if err := c.checkArraySubscript(ref.Identifier, sub); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// literalValue extracts a compile-time integer value from an expression,
+// or returns ok=false if the expression is not a simple numeric literal.
+func literalValue(e Expression) (int, bool) {
+	if op := e.Operand(); op != nil {
+		if lit := op.Literal(); lit != nil {
+			if n := lit.Number(); n != nil {
+				return n.Value, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// isCastPrefix reports whether the expression is a BYTE() or WORD() cast.
+func isCastPrefix(e Expression) bool {
+	if p := e.Prefix(); p != nil {
+		return p.Operator == Operator(KeywordByte) || p.Operator == Operator(KeywordWord)
+	}
+	return false
+}
+
+// targetType returns the declared Predeclared type of a LET assignment target,
+// following array subscripts and record fields to reach the leaf type.
+func (c *Checker) targetType(r Reference) (Predeclared, bool) {
+	d, ok := c.lookup(r.Identifier)
+	if !ok {
+		return PredeclaredNone, false
+	}
+	t := d.Type
+	if arr := t.Array(); arr != nil && len(r.Subscripts) > 0 {
+		t = arr.ElemType
+	}
+	for _, fname := range r.Fields {
+		rec := t.Record()
+		if rec == nil {
+			return PredeclaredNone, false
+		}
+		found := false
+		for _, f := range rec.Fields {
+			if f.Identifier == fname {
+				t = f.Type
+				found = true
+				break
+			}
+		}
+		if !found {
+			return PredeclaredNone, false
+		}
+	}
+	return t.Predeclared(), true
+}
+
+// checkLetOverflow reports an error if the RHS expression produces a value
+// that cannot fit in the LHS variable's type without explicit cast.
+func (c *Checker) checkLetOverflow(ref Reference, expr Expression) error {
+	pre, ok := c.targetType(ref)
+	if !ok {
+		return nil
+	}
+	if isCastPrefix(expr) {
+		return nil // explicit cast suppresses overflow errors
+	}
+	if v, ok := literalValue(expr); ok {
+		if pre == PredeclaredByte && (v < 0 || v > 255) {
+			return c.Errorf("", "value %d does not fit in BYTE; use BYTE(%d) to truncate explicitly", v, v)
+		}
+		if pre == PredeclaredWord && (v < 0 || v > 65535) {
+			return c.Errorf("", "value %d does not fit in WORD", v)
+		}
+	}
+	// Check reference-to-reference assignment without cast.
+	if pre == PredeclaredByte {
+		if op := expr.Operand(); op != nil {
+			if ref2 := op.Reference(); ref2 != nil && ref2.Identifier != "" {
+				srct, ok := c.lookup(ref2.Identifier)
+				if ok && srct.Type.Predeclared() == PredeclaredWord {
+					return c.Errorf("", "cannot assign WORD value to BYTE variable without cast; use BYTE(...) to truncate explicitly")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// checkDeclareOverflow reports an error if a DECLARE initializer value does not
+// fit in the declared variable's type without an explicit cast.
+func (c *Checker) checkDeclareOverflow(d Declare) error {
+	if d.Initializer == nil {
+		return nil
+	}
+	pre := d.Type.Predeclared()
+	if pre != PredeclaredByte && pre != PredeclaredWord {
+		return nil
+	}
+	expr := d.Initializer.Expr
+	if isCastPrefix(expr) {
+		return nil
+	}
+	if v, ok := literalValue(expr); ok {
+		if pre == PredeclaredByte && (v < 0 || v > 255) {
+			return c.Errorf("", "value %d does not fit in BYTE for %s; use BYTE(%d) to truncate explicitly", v, d.Identifier, v)
+		}
+		if pre == PredeclaredWord && (v < 0 || v > 65535) {
+			return c.Errorf("", "value %d does not fit in WORD for %s", v, d.Identifier)
 		}
 	}
 	return nil

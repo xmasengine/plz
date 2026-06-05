@@ -634,14 +634,14 @@ func TestGenOutputWord(t *testing.T) {
 }
 
 func TestGenSleep(t *testing.T) {
-	asm := genTest(t, "SLEEP 10")
+	asm := genTest(t, "TASK t PRIORITY 0\nSLEEP 10\nEND")
 	if !strings.Contains(asm, "_plz_scheduler") {
 		t.Errorf("expected scheduler call, got:\n%s", asm)
 	}
 }
 
 func TestGenYield(t *testing.T) {
-	asm := genTest(t, "YIELD")
+	asm := genTest(t, "TASK t PRIORITY 0\nYIELD\nEND")
 	if !strings.Contains(asm, "_plz_scheduler") {
 		t.Errorf("expected scheduler call, got:\n%s", asm)
 	}

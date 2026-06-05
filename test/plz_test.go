@@ -901,7 +901,7 @@ TASK music_test PRIORITY 4
   CALL psg_vol(0, 8)
   SLEEP 1
   CALL psg_vol(0, 15)
-  HALT
+  YIELD
 END
 `)
 	expected := []byte{159, 191, 223, 255, 128, 16, 152, 159}
@@ -952,7 +952,7 @@ DATA my_song 0x80, 0x00, 1, 0, 8, 0x40, 0x01, 1, 0, 8, 0, 0, 0, 0, 0xFF
 TASK music_test PRIORITY 4
   CALL psg_silence()
   CALL play_song(my_song)
-  HALT
+  YIELD
 END
 `)
 	if len(io.OutBytes[0x7F]) < 2 {
@@ -1413,7 +1413,7 @@ TASK demo PRIORITY 4
   YIELD
   LET x = x + 1
   OUTPUT 0 x
-  HALT
+  YIELD
 END`)
 	if len(io.OutBytes[0]) < 1 {
 		t.Fatal("expected output")

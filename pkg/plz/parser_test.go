@@ -127,6 +127,53 @@ func TestParseUnaryNot(t *testing.T) {
 	}
 }
 
+func TestParseByteCast(t *testing.T) {
+	expr := parseExpr(t, "LET x = BYTE(300)")
+	if expr.Prefix() == nil || expr.Prefix().Operator != Operator(KeywordByte) {
+		t.Errorf("expected BYTE cast, got %v", expr.Prefix().Operator)
+	}
+	innerExpr := expr.Prefix().Operand.Expr()
+	if innerExpr == nil {
+		t.Fatalf("expected inner expression")
+	}
+	innerOp := innerExpr.Operand()
+	if innerOp == nil {
+		t.Fatalf("expected inner operand")
+	}
+	if lit := innerOp.Literal(); lit == nil || lit.Number() == nil || lit.Number().Value != 300 {
+		t.Errorf("expected literal 300, got %v", lit)
+	}
+}
+
+func TestParseWordCast(t *testing.T) {
+	expr := parseExpr(t, "LET x = WORD(b)")
+	if expr.Prefix() == nil || expr.Prefix().Operator != Operator(KeywordWord) {
+		t.Errorf("expected WORD cast, got %v", expr.Prefix().Operator)
+	}
+	innerExpr := expr.Prefix().Operand.Expr()
+	if innerExpr == nil {
+		t.Fatalf("expected inner expression")
+	}
+	innerOp := innerExpr.Operand()
+	if innerOp == nil {
+		t.Fatalf("expected inner operand")
+	}
+	if ref := innerOp.Reference(); ref == nil || ref.Identifier != "b" {
+		t.Errorf("expected reference 'b', got %v", ref)
+	}
+}
+
+func TestParseByteCastExpression(t *testing.T) {
+	expr := parseExpr(t, "LET x = BYTE(a + b)")
+	if expr.Prefix() == nil || expr.Prefix().Operator != Operator(KeywordByte) {
+		t.Errorf("expected BYTE cast, got %v", expr.Prefix().Operator)
+	}
+	inner := expr.Prefix().Operand.Expr()
+	if inner == nil || inner.Infix() == nil {
+		t.Errorf("expected infix expression inside BYTE()")
+	}
+}
+
 func TestParseComparison(t *testing.T) {
 	expr := parseExpr(t, "LET x = a > b")
 	if expr.Infix() == nil || expr.Infix().Operator != OperatorGT {
