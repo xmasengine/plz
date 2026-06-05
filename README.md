@@ -185,7 +185,10 @@ expression   = comparison { ("==" | ">" | "<" | ">=" | "<=" | "!=") comparison }
              | primary { "." identifier | "[" expression "]" | "(" [ expression { "," expression } ] ")" } .
 
 primary      = numeric | string | char | identifier | "(" expression ")"
-             | "INPUT" "(" expression ")" .
+             | "INPUT" "(" expression ")"
+             | "LENGTH" "(" expression ")"
+             | "WORD" "(" expression ")"
+             | "BYTE" "(" expression ")" .
 
 (* -- Literals -- *)
 
