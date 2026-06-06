@@ -501,6 +501,19 @@ HALT`)
 	}
 }
 
+func TestIntegrationForLoopLetters(t *testing.T) {
+	io := compileAndRun(t, `DECLARE cnt WORD
+FOR cnt = 'A' TO 'E' DO OUTPUT 0 cnt END
+HALT`)
+	if len(io.OutBytes[0]) != 5 {
+		t.Fatalf("expected 5 outputs, got %d: %v", len(io.OutBytes[0]), io.OutBytes[0])
+	}
+	outs := string(io.OutBytes[0][0:5])
+	if outs != "ABCDE" {
+		t.Errorf("expected ABCDE, got %s", outs)
+	}
+}
+
 func TestIntegrationCompareEq(t *testing.T) {
 	io := compileAndRun(t, `DECLARE va WORD
 DECLARE vb WORD

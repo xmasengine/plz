@@ -12,6 +12,8 @@ CONSTANT BBRAM_SIZE = 0x2000 // 8KB battery-backed RAM in standard SMS mapper
 // Ports: 0xBE = data, 0xBF = control/status
 // ============================================================
 
+CONSTANT VDP_TILE_MAP = 0x3800
+
 // Write a VDP register.
 PROCEDURE write_vdp_reg(reg BYTE, value BYTE)
   OUTPUT WORD 0xBF value | ((reg | 0x80) << 8)
@@ -382,3 +384,7 @@ END
 PROCEDURE set_cursor(col BYTE, row BYTE)
   LET cursor = 0x3800 + (row * 32 + col) * 2
 END
+
+// MODE(x) is a shortcut to sceen_mode_x
+TEMPLATE MODE `CALL screen_mode_${1}`
+

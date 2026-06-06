@@ -1,0 +1,408 @@
+// Lord Of Xmas
+
+INCLUDE "libplz.plz"
+
+INTERRUPT int_vsync // install the interrupt handler.
+
+
+TEMPLATE PRINT_XY `
+	set_cursor($1, $2)
+	print_char($3)
+`
+
+
+// Tile/Char memory layout:
+// Tile 0 -> 32: HUD tiles.
+// For now, loads  default font in the tiles from 32 to 127
+// I will likely use a few less useful characters as icons or for translations.
+// Tile 128 -> 191: Map tiles.
+// Tile 192 -> 255: TBD.
+CONSTANT TILE_FONT_MIN = 32
+CONSTANT TILE_FONT_MAX = 127
+CONSTANT TILE_MAP_MIN  = 128
+CONSTANT TILE_MAP_LEN  = 64
+CONSTANT TILE_MAP_MAX  = 128 + TILE_MAP_LEN
+
+// 8 frames per player, foe, or character, 2 per direction for animation.
+// Sprite layout on normal screen: 128 sprites available.
+// 0 -   7: Player 1.
+//  8 -  15: Player 1 special action.
+// 16 -  19: Player 1 weapon.
+// 20 -  23: Player 1 projectile.
+// 24 -  31: Player 2.
+// 32 -  39: Player 2 special action.
+// 40 -  43: Player 2 weapon.
+// 44 -  47: Player 2 projectile.
+// 48 -  64: HUD Icons (16).
+// 64 - 128: Presences loaded by the map. Includes foe weapons and projectiles.
+//
+// Sprite layout on menu screen is different and only has icons.
+// Icon 0 is the cursor.
+//
+
+CONSTANT SPRITE_PLAYER = 0
+CONSTANT SPRITE_WEAPON = 16
+CONSTANT SPRITE_MAP    = 64
+
+CONSTANT MAIN_BANK = 0
+
+CONSTANT SPRITE_BANK_1 = 4
+CONSTANT SPRITE_BANK_2 = 5
+CONSTANT SPRITE_BANK_3 = 6
+CONSTANT SPRITE_BANK_4 = 7
+
+CONSTANT TILE_BANK_1 = 8
+CONSTANT TILE_BANK_2 = 9
+CONSTANT TILE_BANK_3 = 10
+CONSTANT TILE_BANK_4 = 11
+
+CONSTANT BACK_BANK_1 = 12
+CONSTANT BACK_BANK_2 = 13
+CONSTANT BACK_BANK_3 = 14
+CONSTANT BACK_BANK_4 = 15
+
+CONSTANT MAP_BANK_1 = 16
+CONSTANT MAP_BANK_2 = 17
+CONSTANT MAP_BANK_3 = 18
+CONSTANT MAP_BANK_4 = 19
+
+CONSTANT FPS = 60
+
+CONSTANT FRAME_S = 0
+CONSTANT FRAME_S_1 = 0
+CONSTANT FRAME_S_2 = 2
+
+CONSTANT FRAME_E = 4
+CONSTANT FRAME_E_1 = 4
+CONSTANT FRAME_E_2 = 6
+
+CONSTANT FRAME_N = 8
+CONSTANT FRAME_N_1 = 8
+CONSTANT FRAME_N_2 = 10
+
+CONSTANT FRAME_W = 12
+CONSTANT FRAME_W_1 = 12
+CONSTANT FRAME_W_2 = 14
+
+DEFINE Player RECORD
+	x BYTE, // sprite x position
+	y BYTE, // sprite y position
+	f BYTE, // sprite frame
+	m BYTE, // sprite movement
+	tx BYTE, // sprite facing towards x
+	ty BYTE // sprite facing towards y
+END
+
+DEFINE Map RECORD
+	peek BYTE,
+	peek_1 BYTE,
+	peek_2 BYTE,
+END
+
+DECLARE player TYPE Player
+DECLARE map TYPE Map
+
+
+CONSTANT BORDER_LEFT_ON = 1
+CONSTANT BORDER_NO_SCROLL_LEFT = 2
+CONSTANT BORDER_NO_SCROLL_BOTTOM = 2
+
+CONSTANT FLAG_SOLID = 32
+CONSTANT FLAG_HARM  = 64
+CONSTANT FLAG_BLESS = 128
+
+
+// Reads the map flag from video memory.
+// There are 3 extra bits available which Lox uses for collision detection.
+// For a sprite X and Y should be adjusted depending on its size.
+PROCEDURE map_flag_at(x BYTE, y BYTE, var BYTE) BYTE
+	RETURN read_vram(WORD(x>>3)+WORD(y<<3)+VDP_TILE_MAP)
+END
+
+INCLUDE "nun.plz"
+INCLUDE "font.plz"
+
+PROCEDURE print_abc()
+	DECLARE letter BYTE
+	FOR letter = 'A' TO 'H' DO
+		CALL print_char(letter)
+	END
+END
+
+CONSTANT NUN_TILE_COUNT = 32
+CONSTANT NUN_LINE_WITH  = 4
+PROCEDURE draw_nun()
+	DECLARE nun_pattern BYTE
+	DECLARE row BYTE = 1
+	FOR nun_pattern = 128 TO 128 + NUN_TILE_COUNT DO
+		IF (WORD(row) % NUN_LINE_WITH) == 0 THEN DO
+			LET row = row + 1
+			CALL set_cursor(BYTE(row),1)
+		END
+		CALL print_char(nun_pattern)
+	END
+END
+
+start:
+	DISABLE
+// Set up screen
+	MODE(4)
+	CALL halt_vsync // To avoid flashing and tearing
+	CALL load_palette_default
+	CALL border_color(7)
+	CALL cls
+//	BANK 1
+
+	CALL load_tiles('A', font, 13)
+    CALL load_tiles(128, nun_tiles, NUN_TILE_COUNT)
+//	BANK 0
+	DECLARE nun_pattern BYTE
+	CALL set_cursor(1,15)
+	CALL print_char('A')
+	CALL print_char('B')
+	CALL print_char('C')
+	CALL print_char('D')
+	CALL print_char('E')
+
+	CALL set_cursor(1,16)
+	CALL print_abc
+	CALL set_cursor(1,1)
+	CALL draw_nun
+
+/*
+	CALL print_char(128)
+	CALL print_char(129)
+	CALL print_char(130)
+	CALL print_char(131)
+	CALL print_char(132)
+	CALL print_char(133)
+	CALL print_char(134)
+	CALL print_char(135)
+	FOR nun_pattern = 128 TO 128 + NUN_TILE_COUNT DO
+	 	CALL print_char(nun_pattern)
+	END
+*/
+    CALL enable_screen // Show the screen contents.
+	CALL halt_vsync // To avoid flashing and tearing
+
+
+
+/*
+
+' Display opening image
+	BANK SELECT BACK_BANK_1
+	DEFINE CHAR 128,64,nun_bitmap
+	SCREEN nun_pattern,0,300,8,8,8
+    ' GOSUB nun_palette
+' Show opening message
+	BANK SELECT 0
+	PRINT_XY(10, 3,"Lord Of Xmas")
+	PRINT_XY(6, 4,"By xmasengine, 2025")
+	PRINT_XY(6, 5,"Press a button")
+	PRINT_XY(0, 6," ")
+	PLAY SIMPLE
+	PLAY music_grabe
+
+' Wait for button press
+	WHILE CONT.BUTTON = 0 AND CONT.BUTTON2 = 0
+		if CONT.UP = 1 then
+			PLAY music_gloria
+		end if
+
+		if CONT.DOWN = 1 then
+			PLAY music_nocturne
+		end if
+
+		if CONT.LEFT = 1 then
+			PLAY music_kirie
+		end if
+	WAIT
+	WEND
+
+' Load tile map: select bank, load CHAR bitmaps, load map as screen
+	BANK SELECT MAP_BANK_3
+	DEFINE CHAR 128,32,m0003church_bitmap
+' Should not need parameters as a single map is a single screen for now
+	SCREEN m0003church_map
+' Palette is loaded though a gosub
+	GOSUB m0003church_palette
+' Debug
+	PRINT_XY(1, 23, "Map Loaded")
+' Display player sprite
+	player_sprite_x = 120
+	player_sprite_y = 120
+	player_sprite_f = 0
+	player_sprite_d = FRAME_S
+	BANK SELECT SPRITE_BANK_1
+	GOSUB sprite_palette
+	DEFINE SPRITE SPRITE_PLAYER,64,sprite_bitmap
+	SPRITE SPRITE_PLAYER,player_sprite_y,player_sprite_x,player_sprite_f
+	WAIT
+
+	BANK SELECT MAIN_BANK
+	WHILE 1
+		player_sprite_m = 0
+		map_flag_peek = 0
+
+		IF CONT1.UP THEN
+			player_sprite_d = FRAME_N
+			MAP_FLAG_AT(player_sprite_x+4, player_sprite_y+7, map_flag_peek)
+			MAP_FLAG_AT(player_sprite_x+1, player_sprite_y+7, map_flag_peek_1)
+			MAP_FLAG_AT(player_sprite_x+7, player_sprite_y+7, map_flag_peek_2)
+			IF map_flag_peek AND FLAG_SOLID THEN
+			ELSEIF map_flag_peek_1 AND FLAG_SOLID THEN
+			ELSEIF map_flag_peek_2 AND FLAG_SOLID THEN
+			ELSE
+				player_sprite_y = player_sprite_y - 1
+				player_sprite_m = 1
+			END IF
+		ELSEIF CONT1.DOWN THEN
+			player_sprite_d = FRAME_S
+			MAP_FLAG_AT(player_sprite_x+4, player_sprite_y+17, map_flag_peek)
+			MAP_FLAG_AT(player_sprite_x+1, player_sprite_y+17, map_flag_peek_1)
+			MAP_FLAG_AT(player_sprite_x+7, player_sprite_y+17, map_flag_peek_2)
+			IF map_flag_peek AND FLAG_SOLID THEN
+			ELSEIF map_flag_peek_1 AND FLAG_SOLID THEN
+			ELSEIF map_flag_peek_2 AND FLAG_SOLID THEN
+			ELSE
+				player_sprite_y = player_sprite_y + 1
+				player_sprite_m = 1
+			END IF
+		END IF
+
+		IF CONT1.LEFT THEN
+			player_sprite_d = FRAME_W
+			MAP_FLAG_AT(player_sprite_x-1, player_sprite_y+12, map_flag_peek)
+			MAP_FLAG_AT(player_sprite_x-1, player_sprite_y+9, map_flag_peek_1)
+			MAP_FLAG_AT(player_sprite_x-1, player_sprite_y+14, map_flag_peek_2)
+			IF map_flag_peek AND FLAG_SOLID THEN
+			ELSEIF map_flag_peek_1 AND FLAG_SOLID THEN
+			ELSEIF map_flag_peek_2 AND FLAG_SOLID THEN
+			ELSE
+				player_sprite_x = player_sprite_x - 1
+				player_sprite_m = 1
+			END IF
+		ELSEIF CONT1.RIGHT THEN
+			player_sprite_d = FRAME_E
+			MAP_FLAG_AT(player_sprite_x+9, player_sprite_y+12, map_flag_peek)
+			MAP_FLAG_AT(player_sprite_x+9, player_sprite_y+9, map_flag_peek_1)
+			MAP_FLAG_AT(player_sprite_x+9, player_sprite_y+14, map_flag_peek_2)
+			IF map_flag_peek AND FLAG_SOLID THEN
+			ELSEIF map_flag_peek_1 AND FLAG_SOLID THEN
+			ELSEIF map_flag_peek_2 AND FLAG_SOLID THEN
+			ELSE
+				player_sprite_x = player_sprite_x + 1
+				player_sprite_m = 1
+			END IF
+		END IF
+
+		IF CONT1.BUTTON > 0 THEN
+			player_sprite_m = 1
+		ELSEIF CONT1.BUTTON2 > 0 THEN
+			player_sprite_m = 1
+		END IF
+		IF player_sprite_m > 0 THEN
+			IF (FRAME % 15) = 0 THEN player_sprite_f = player_sprite_f + 2
+			IF player_sprite_f > 3 THEN player_sprite_f = 0
+		END IF
+		SPRITE SPRITE_PLAYER, player_sprite_y,player_sprite_x,player_sprite_f+player_sprite_d
+' DEFINE VRAM READ #VRAM_TILE_MAP + ((player_sprite_x) / 8 + ((player_sprite_y+8) / 8) * 32)*2 + 1, 1, map_flag_peek
+		PRINT_XY(12, 23, map_flag_peek)
+		PRINT_XY(16, 23, "   ")
+		IF map_flag_peek AND FLAG_SOLID THEN PRINT_XY(16, 23, "S")
+		IF map_flag_peek AND FLAG_HARM THEN PRINT_XY(17, 23, "H")
+		IF map_flag_peek AND FLAG_BLESS THEN PRINT_XY(18, 23, "B")
+		WAIT
+	WEND
+	SCREEN DISABLE
+	WAIT
+' halt
+done: GOTO done
+	music_0: DATA BYTE 32
+	MUSIC D4F
+	MUSIC S
+	MUSIC C4
+	MUSIC D4
+	MUSIC S
+	MUSIC -
+	MUSIC D4F,D4Z
+	MUSIC S,C4
+	MUSIC C4,C4
+	MUSIC D4,D4
+	MUSIC S,S
+	MUSIC -,S
+	MUSIC D4
+	MUSIC S
+	MUSIC E4
+	MUSIC F4
+	MUSIC S
+	MUSIC -
+	MUSIC D4,D4
+	MUSIC S,E4
+	MUSIC E4,G4
+	MUSIC F4,F4
+	MUSIC S,S
+	MUSIC -,S
+	MUSIC F4
+	MUSIC S
+	MUSIC G4
+	MUSIC S
+	MUSIC D4
+	MUSIC S
+	MUSIC F4,-
+	MUSIC S,F4
+	MUSIC G4,S
+	MUSIC S,G4
+	MUSIC D4,S
+	MUSIC S,D4
+	MUSIC C4
+	MUSIC D4
+	MUSIC A4
+	MUSIC A4
+	MUSIC G4
+	MUSIC -
+	MUSIC F4
+	MUSIC S
+	MUSIC G4
+	MUSIC S
+	MUSIC D4
+	MUSIC S
+	MUSIC F4
+	MUSIC E4
+	MUSIC F4
+	MUSIC E4
+	MUSIC D4
+	MUSIC -
+	MUSIC A4
+	MUSIC S
+	MUSIC G4
+	MUSIC S
+	MUSIC F4
+	MUSIC S
+	MUSIC E4
+	MUSIC S
+	MUSIC F4
+	MUSIC S
+	MUSIC -
+	MUSIC -
+	MUSIC REPEAT
+    MUSIC STOP
+	include "./music/kirie.bas"
+	include "./music/gloria.bas"
+	include "./music/nocturne.bas"
+
+' Sprite bank
+	BANK 4
+	INCLUDE "sprite1.bas"
+' Tile bank 2
+	BANK TILE_BANK_1
+	INCLUDE "tile2.bas"
+' Intro image bank
+	BANK BACK_BANK_1
+	INCLUDE "./img/nun.bas"
+	BANK MAP_BANK_1
+	INCLUDE "map1.bas"
+    BANK MAP_BANK_3
+    INCLUDE "./map/m0003-church.xml.bas"
+
+*/

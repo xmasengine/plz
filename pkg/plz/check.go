@@ -1123,7 +1123,6 @@ func (s Suffix) Check(c *Checker) error {
 	}
 	// Check function call
 	if s.Operator == OperatorCALL {
-		println(len(s.Operands))
 		if called := s.Operands[0].Ref(); called != nil {
 			id := string(called.Identifier)
 			proc, ok := c.Procedures[id]

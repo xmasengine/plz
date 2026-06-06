@@ -41,6 +41,5 @@ func (t Template) ExpandTokens(args ...Token) (string, error) {
 	if len(expander.errors) > 0 {
 		return "", fmt.Errorf("template %s error: %s", string(t), errors.Join(expander.errors...))
 	}
-	println("template", expanded)
 	return expanded, nil
 }
