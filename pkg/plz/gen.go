@@ -596,19 +596,13 @@ func (g *Gen) genCondBranch(e Expression, falseLabel string) error {
 			if err := inf.Operands[0].Gen(g); err != nil {
 				return err
 			}
-			useDE := isSimpleOperand(inf.Operands[1])
-			if useDE {
-				g.Emitln("\tex de, hl")
-			} else {
-				g.Emitln("\tpush hl")
-			}
+			g.Emitln("\tpush hl")
 			if err := inf.Operands[1].Gen(g); err != nil {
 				return err
 			}
 			g.Emitln("\tex de, hl")
-			if !useDE {
-				g.Emitln("\tpop hl")
-			}
+			g.Emitln("\tpop hl")
+
 			g.Emitln("\tor a")
 			g.Emitln("\tsbc hl, de")
 
@@ -949,20 +943,13 @@ func (i Infix) Gen(g *Gen) error {
 	if err := i.Operands[0].Gen(g); err != nil {
 		return err
 	}
-	useDE := isSimpleOperand(i.Operands[1])
-	if useDE {
-		g.Emitln("\tex de, hl")
-	} else {
-		g.Emitln("\tpush hl")
-	}
+	g.Emitln("\tpush hl")
 	// Right operand
 	if err := i.Operands[1].Gen(g); err != nil {
 		return err
 	}
 	g.Emitln("\tex de, hl")
-	if !useDE {
-		g.Emitln("\tpop hl")
-	}
+	g.Emitln("\tpop hl")
 	switch i.Operator {
 	case OperatorADD:
 		g.genInfixAdd()
