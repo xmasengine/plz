@@ -776,14 +776,14 @@ func (r *Reference) isByteRef(g *Gen) bool {
 // Literals are treated conservatively (non-BYTE) since their type depends on
 // the expression context — only an explicit BYTE() cast or a BYTE-typed
 // reference guarantees a byte-wide result.
-func isByteOperand(g *Gen, op Operand) bool {
+func (op Operand) isByteOperand(g *Gen) bool {
 	switch {
 	case op.Literal() != nil:
 		return false // literal type depends on context; don't guess
 	case op.Reference() != nil:
 		return op.Reference().isByteRef(g)
 	case op.Expr() != nil:
-		return isByteExpression(g, *op.Expr())
+		return op.Expr().isByteExpression(g)
 	case op.Input() != nil:
 		return true // INPUT returns a byte
 	case op.Length() != nil:
@@ -793,10 +793,10 @@ func isByteOperand(g *Gen, op Operand) bool {
 }
 
 // isByteExpression reports whether the expression produces a BYTE value.
-func isByteExpression(g *Gen, e Expression) bool {
+func (e Expression) isByteExpression(g *Gen) bool {
 	switch {
 	case e.Operand() != nil:
-		return isByteOperand(g, *e.Operand())
+		return e.Operand().isByteOperand(g)
 	case e.Prefix() != nil:
 		p := e.Prefix()
 		if p.Operator == Operator(KeywordByte) {
@@ -808,14 +808,14 @@ func isByteExpression(g *Gen, e Expression) bool {
 		if p.Operator == OperatorNOT {
 			return true // !expr always produces 0 or 1
 		}
-		return isByteOperand(g, p.Operand)
+		return p.Operand.isByteOperand(g)
 	case e.Infix() != nil:
 		inf := e.Infix()
 		switch inf.Operator {
 		case OperatorShiftLeft, OperatorShiftRight:
 			return false
 		}
-		return isByteOperand(g, inf.Operands[0]) && isByteOperand(g, inf.Operands[1])
+		return inf.Operands[0].isByteOperand(g) && inf.Operands[1].isByteOperand(g)
 	case e.Suffix() != nil:
 		return false
 	}
@@ -824,8 +824,8 @@ func isByteExpression(g *Gen, e Expression) bool {
 
 // isByteInfix reports whether both operands of an infix expression are
 // BYTE-typed, enabling 8-bit arithmetic/logic code generation.
-func isByteInfix(g *Gen, i Infix) bool {
-	return isByteOperand(g, i.Operands[0]) && isByteOperand(g, i.Operands[1])
+func (i Infix) isByteInfix(g *Gen) bool {
+	return i.Operands[0].isByteOperand(g) && i.Operands[1].isByteOperand(g)
 }
 
 // Gen generates assembly for a prefix expression. OperatorNEG computes two's
@@ -847,7 +847,7 @@ func (p Prefix) Gen(g *Gen) error {
 		if err := p.Operand.Gen(g); err != nil {
 			return err
 		}
-		if isByteOperand(g, p.Operand) {
+		if p.Operand.isByteOperand(g) {
 			n := g.nextLabel()
 			g.Emitln("\tld a, l")
 			g.Emitf("\tld hl, 0\n")
@@ -973,19 +973,19 @@ func (i Infix) Gen(g *Gen) error {
 	case OperatorShiftRight:
 		g.genInfixShiftRight(i.Operands[1])
 	case OperatorAND:
-		if isByteInfix(g, i) {
+		if i.isByteInfix(g) {
 			g.genInfixBitwise8("\tand e")
 		} else {
 			g.genInfixBitwise("\tand e", "\tand d")
 		}
 	case OperatorOR:
-		if isByteInfix(g, i) {
+		if i.isByteInfix(g) {
 			g.genInfixBitwise8("\tor e")
 		} else {
 			g.genInfixBitwise("\tor e", "\tor d")
 		}
 	case OperatorXOR:
-		if isByteInfix(g, i) {
+		if i.isByteInfix(g) {
 			g.genInfixBitwise8("\txor e")
 		} else {
 			g.genInfixBitwise("\txor e", "\txor d")
@@ -997,37 +997,37 @@ func (i Infix) Gen(g *Gen) error {
 	case OperatorMOD:
 		g.Emitln("\tcall _plz_mod")
 	case OperatorEQU:
-		if isByteInfix(g, i) {
+		if i.isByteInfix(g) {
 			g.genInfixCmp8(cmpEQ)
 		} else {
 			g.genInfixCmp(cmpEQ)
 		}
 	case OperatorNEQ:
-		if isByteInfix(g, i) {
+		if i.isByteInfix(g) {
 			g.genInfixCmp8(cmpNEQ)
 		} else {
 			g.genInfixCmp(cmpNEQ)
 		}
 	case OperatorGT:
-		if isByteInfix(g, i) {
+		if i.isByteInfix(g) {
 			g.genInfixCmp8(cmpGT)
 		} else {
 			g.genInfixCmp(cmpGT)
 		}
 	case OperatorLT:
-		if isByteInfix(g, i) {
+		if i.isByteInfix(g) {
 			g.genInfixCmp8(cmpLT)
 		} else {
 			g.genInfixCmp(cmpLT)
 		}
 	case OperatorGTE:
-		if isByteInfix(g, i) {
+		if i.isByteInfix(g) {
 			g.genInfixCmp8(cmpGTE)
 		} else {
 			g.genInfixCmp(cmpGTE)
 		}
 	case OperatorLTE:
-		if isByteInfix(g, i) {
+		if i.isByteInfix(g) {
 			g.genInfixCmp8(cmpLTE)
 		} else {
 			g.genInfixCmp(cmpLTE)
