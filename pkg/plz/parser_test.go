@@ -978,3 +978,33 @@ func TestParseDataTile(t *testing.T) {
 		t.Errorf("pixel (1,3) = %d, want 15", got)
 	}
 }
+
+func TestParseTemplate(t *testing.T) {
+	prog := parseProg(t, `
+		TEMPLATE SPRITE "CALL define_sprite()"
+
+		SPRITE
+	`)
+
+	if len(prog.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(prog.Statements))
+	}
+	_, ok := prog.Statements[0].Command.(Call)
+	if !ok {
+		t.Fatalf("expected Call command, got %T", prog.Statements[0].Command)
+	}
+
+	prog2 := parseProg(t, `
+		TEMPLATE SPRITE "CALL define_sprite({{index . 0|.Number}}, {{index . 1 |.Text}})"
+
+		SPRITE(Foo, 2)
+	`)
+
+	if len(prog2.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(prog.Statements))
+	}
+	_, ok = prog2.Statements[0].Command.(Call)
+	if !ok {
+		t.Fatalf("expected Call command, got %T", prog.Statements[0].Command)
+	}
+}

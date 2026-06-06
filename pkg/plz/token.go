@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"text/scanner"
 )
 
@@ -84,6 +85,7 @@ const (
 	KeywordSave                                           // SAVE
 	KeywordLoad                                           // LOAD
 	KeywordPragma                                         // PRAGMA
+	KeywordTemplate                                       // TEMPLATE
 )
 
 // Keywords maps keyword strings to their corresponding TokenKind values.
@@ -136,6 +138,7 @@ var Keywords = map[string]TokenKind{
 	"LOAD":      KeywordLoad,
 	"SAVE":      KeywordSave,
 	"PRAGMA":    KeywordPragma,
+	"TEMPLATE":  KeywordTemplate,
 }
 
 // String returns the human-readable name for a TokenKind.
@@ -176,6 +179,13 @@ func ScanFile(name string) ([]Token, error) {
 	}
 	defer f.Close()
 	return scan(f, name)
+}
+
+// ScanString tokenizes a string of PL/Z source code read from s and returns the
+// resulting token slice. It delegates to scan with an empty filename.
+func ScanString(s string) ([]Token, error) {
+	rd := strings.NewReader(s)
+	return scan(rd, "")
 }
 
 // scan performs the actual scanning, converting a byte stream into a slice of

@@ -3,7 +3,11 @@ package plz
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
+	"text/template"
 )
+
+type Template = template.Template
 
 // Error represents a parse error with a source position and a descriptive
 // message. It implements the error interface.
@@ -34,6 +38,7 @@ type Parser struct {
 	Tokens      []Token
 	Current     int
 	TypeAliases map[string]Type
+	Templates   map[string]*Template
 }
 
 // NewParser creates a new Parser that reads from the given token slice. It
@@ -43,6 +48,7 @@ func NewParser(tokens []Token) *Parser {
 	return &Parser{
 		Tokens:      tokens,
 		TypeAliases: builtinTypeAliases(),
+		Templates:   builtinTemplates(),
 	}
 }
 
@@ -70,6 +76,13 @@ func builtinTypeAliases() map[string]Type {
 				},
 			},
 		},
+	}
+}
+
+// builtinTemplates returns the map of pre-defined templates.
+func builtinTemplates() map[string]*Template {
+	return map[string]*Template{
+		"TILES": template.Must(template.New("TILES").Parse(`DATA {{.0}} TILES LOAD {{.1}}`)),
 	}
 }
 
@@ -171,49 +184,34 @@ func ParseFile(name string) (*Program, error) {
 func (p *Program) Parse(parser *Parser) error {
 	for !parser.End() {
 		// Handle INCLUDE "filename"
-		if parser.Peek().TokenKind == KeywordInclude {
-			includeTok := parser.Next() // consume INCLUDE
-			filenameTok, err := parser.Accept(TokenString)
+		peek := parser.Peek()
+		if peek.TokenKind == KeywordInclude {
+			err := p.ParseInclude(parser)
 			if err != nil {
 				return err
 			}
-			parser.Skip(TokenKind(';')) // skip optional semicolon
-
-			// Resolve path relative to the including file's directory.
-			incPath := filenameTok.Text
-			if dir := filepath.Dir(includeTok.Position.Filename); dir != "." && dir != "" {
-				if !filepath.IsAbs(incPath) {
-					incPath = filepath.Join(dir, incPath)
+			continue // skip
+		}
+		// Handle TEMPLATE name, `definition`
+		if peek.TokenKind == KeywordTemplate {
+			err := p.ParseTemplate(parser)
+			if err != nil {
+				return err
+			}
+			continue // skip
+		}
+		// Idents can get template expanded if defined before.
+		if peek.TokenKind == TokenIdent {
+			if tpl, ok := parser.Templates[peek.Text]; ok {
+				err := p.ExpandTemplate(parser, tpl)
+				if err != nil {
+					return err
+				} else {
+					continue // skip
 				}
 			}
-
-			// Normalise to absolute path for cycle detection.
-			absPath, err := filepath.Abs(incPath)
-			if err != nil {
-				return filenameTok.Errorf("include: %v", err)
-			}
-			if p.IncludedFiles[absPath] {
-				return filenameTok.Errorf("include: recursive include of %q", incPath)
-			}
-			if p.IncludedFiles == nil {
-				p.IncludedFiles = make(map[string]bool)
-			}
-			p.IncludedFiles[absPath] = true
-
-			incTokens, err := ScanFile(incPath)
-			if err != nil {
-				return filenameTok.Errorf("include: %v", err)
-			}
-			incParser := &Parser{
-				Tokens:      incTokens,
-				TypeAliases: parser.TypeAliases,
-			}
-			incProg := Program{IncludedFiles: p.IncludedFiles}
-			if err := incProg.Parse(incParser); err != nil {
-				return err
-			}
-			p.Statements = append(p.Statements, incProg.Statements...)
-			continue
+			// Do not skip if it was not a named template
+			// This is not an error, continue parsing.
 		}
 
 		var s Statement
@@ -224,6 +222,112 @@ func (p *Program) Parse(parser *Parser) error {
 		p.Statements = append(p.Statements, s)
 		parser.Skip(TokenKind(';'))
 	}
+	return nil
+}
+
+func (p *Program) ParseInclude(parser *Parser) error {
+	includeTok := parser.Next() // consume INCLUDE
+	filenameTok, err := parser.Accept(TokenString)
+	if err != nil {
+		return err
+	}
+	parser.Skip(TokenKind(';')) // skip optional semicolon
+
+	// Resolve path relative to the including file's directory.
+	incPath := filenameTok.Text
+	if dir := filepath.Dir(includeTok.Position.Filename); dir != "." && dir != "" {
+		if !filepath.IsAbs(incPath) {
+			incPath = filepath.Join(dir, incPath)
+		}
+	}
+
+	// Normalise to absolute path for cycle detection.
+	absPath, err := filepath.Abs(incPath)
+	if err != nil {
+		return filenameTok.Errorf("include: %v", err)
+	}
+	if p.IncludedFiles[absPath] {
+		return filenameTok.Errorf("include: recursive include of %q", incPath)
+	}
+	if p.IncludedFiles == nil {
+		p.IncludedFiles = make(map[string]bool)
+	}
+	p.IncludedFiles[absPath] = true
+
+	incTokens, err := ScanFile(incPath)
+	if err != nil {
+		return filenameTok.Errorf("include: %v", err)
+	}
+	incParser := &Parser{
+		Tokens:      incTokens,
+		TypeAliases: parser.TypeAliases,
+	}
+	incProg := Program{IncludedFiles: p.IncludedFiles}
+	if err := incProg.Parse(incParser); err != nil {
+		return err
+	}
+	p.Statements = append(p.Statements, incProg.Statements...)
+	return nil
+}
+
+func (p *Program) ParseTemplate(parser *Parser) error {
+	_ = parser.Next() // consume TEMPLATE
+	nameTok, err := parser.Accept(TokenIdent)
+	if err != nil {
+		return err
+	}
+	parser.Skip(TokenKind(',')) // skip optional comma
+	bodyTok, err := parser.Accept(TokenString)
+	if err != nil {
+		return err
+	}
+	parser.Skip(TokenKind(';')) // skip optional semicolon
+	tpl := template.New(nameTok.Text)
+	tpl, err = tpl.Parse(bodyTok.Text)
+	if err != nil {
+		return bodyTok.Errorf("template parse error: %s", err)
+	}
+	if _, ok := parser.Templates[nameTok.Text]; ok {
+		return nameTok.Errorf("template redefined: %s", nameTok.Text)
+	}
+	parser.Templates[nameTok.Text] = tpl
+	return nil
+}
+
+func (p *Program) ExpandTemplate(parser *Parser, tpl *Template) error {
+	nameTok := parser.Next() // consume the token with the name of the template
+	wr := &strings.Builder{}
+	args := []Token{}
+
+	// Optional argument list: (expr1, expr2, ...)
+	if parser.Peek().TokenKind == '(' {
+		parser.Next()
+		for parser.Peek().TokenKind != ')' && !parser.End() {
+			tok := parser.Next()
+			args = append(args, tok) // Just insert the token
+			parser.Skip(',')
+		}
+
+		if _, err := parser.Accept(TokenKind(')')); err != nil {
+			return err
+		}
+	}
+
+	err := tpl.Execute(wr, args) // TODO: collect arguments
+	if err != nil {
+		return nameTok.Errorf("template %s error: %s", nameTok.Text, err)
+	}
+
+	tplTokens, err := ScanString(wr.String())
+	if err != nil {
+		return nameTok.Errorf("template %s expanded result scan error: %v\n%s", nameTok.Text, err, wr.String())
+	}
+	tplParser := NewParser(tplTokens)
+	tplProg := Program{}
+	if err := tplProg.Parse(tplParser); err != nil {
+		return nameTok.Errorf("template %s expanded result parse error: %v\n%s", nameTok.Text, err, wr.String())
+	}
+	p.Statements = append(p.Statements, tplProg.Statements...)
 	return nil
 }
 
