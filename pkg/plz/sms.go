@@ -58,7 +58,7 @@ func SMSTileFromString(s string) (SMSTile, error) {
 			}
 			continue
 		}
-		res.SetPaletteIdAt(x, y, SMSPaletteID(col))
+		res.SetPaletteIdAt(y, x, SMSPaletteID(col))
 		x++
 		if x >= tileWidth {
 			x = 0
@@ -88,7 +88,7 @@ func SMSLoadTileFromImage(img image.Image) (*SMSTile, error) {
 	for y := bounds.Min.Y; y < bounds.Max.Y && y-bounds.Min.Y < tileHeight; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X && x-bounds.Min.X < tileWidth; x++ {
 			col := pimg.ColorIndexAt(x, y)
-			tile.SetPaletteIdAt(x-bounds.Min.X, y-bounds.Min.Y, SMSPaletteID(col))
+			tile.SetPaletteIdAt(y-bounds.Min.Y, x-bounds.Min.X, SMSPaletteID(col))
 		}
 	}
 	return tile, nil

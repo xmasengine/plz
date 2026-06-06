@@ -860,28 +860,28 @@ func TestSMSTileFromString(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SMSTileFromString: %v", err)
 	}
-	check := func(x, y int, want byte) {
-		got, _ := tile.PaletteIdAt(x, y)
+	check := func(row, col int, want byte) {
+		got, _ := tile.PaletteIdAt(row, col)
 		if byte(got) != want {
-			t.Errorf("tile.PaletteIdAt(%d,%d) = %d, want %d", x, y, got, want)
+			t.Errorf("tile.PaletteIdAt(%d,%d) = %d, want %d", row, col, got, want)
 		}
 	}
 	check(0, 0, 0)
-	check(3, 1, 15)
-	check(4, 1, 15)
-	check(2, 2, 15)
-	check(5, 2, 15)
 	check(1, 3, 15)
-	check(6, 3, 15)
 	check(1, 4, 15)
-	check(2, 4, 15)
-	check(3, 4, 15)
+	check(2, 2, 15)
+	check(2, 5, 15)
+	check(3, 1, 15)
+	check(3, 6, 15)
+	check(4, 1, 15)
+	check(4, 2, 15)
+	check(4, 3, 15)
 	check(4, 4, 15)
-	check(5, 4, 15)
-	check(6, 4, 15)
-	check(1, 5, 15)
-	check(6, 5, 15)
-	check(1, 6, 15)
+	check(4, 5, 15)
+	check(4, 6, 15)
+	check(5, 1, 15)
+	check(5, 6, 15)
+	check(6, 1, 15)
 	check(6, 6, 15)
 	check(7, 7, 0)
 	buf := tile.Bytes()
@@ -896,16 +896,16 @@ func TestSMSTileFromStringSimple(t *testing.T) {
 		t.Fatalf("SMSTileFromString: %v", err)
 	}
 	for x := 0; x < 8; x++ {
-		got, _ := tile.PaletteIdAt(x, 0)
+		got, _ := tile.PaletteIdAt(0, x)
 		if byte(got) != 1 {
-			t.Errorf("tile.PaletteIdAt(%d,0) = %d, want 1", x, got)
+			t.Errorf("tile.PaletteIdAt(0,%d) = %d, want 1", x, got)
 		}
 	}
 	for y := 1; y < 8; y++ {
 		for x := 0; x < 8; x++ {
-			got, _ := tile.PaletteIdAt(x, y)
+			got, _ := tile.PaletteIdAt(y, x)
 			if byte(got) != 0 {
-				t.Errorf("tile.PaletteIdAt(%d,%d) = %d, want 0", x, y, got)
+				t.Errorf("tile.PaletteIdAt(%d,%d) = %d, want 0", y, x, got)
 			}
 		}
 	}
@@ -936,18 +936,18 @@ func TestSMSTileFromStringNewlines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SMSTileFromString: %v", err)
 	}
-	check := func(x, y int, want byte) {
-		got, _ := tile.PaletteIdAt(x, y)
+	check := func(row, col int, want byte) {
+		got, _ := tile.PaletteIdAt(row, col)
 		if byte(got) != want {
-			t.Errorf("tile.PaletteIdAt(%d,%d) = %d, want %d", x, y, got, want)
+			t.Errorf("tile.PaletteIdAt(%d,%d) = %d, want %d", row, col, got, want)
 		}
 	}
-	check(1, 0, 10)
-	check(3, 0, 11)
-	check(5, 0, 12)
+	check(0, 1, 10)
+	check(0, 3, 11)
+	check(0, 5, 12)
 	check(1, 1, 13)
-	check(3, 1, 14)
-	check(5, 1, 15)
+	check(1, 3, 14)
+	check(1, 5, 15)
 }
 
 func TestParseDataTile(t *testing.T) {
@@ -973,8 +973,8 @@ func TestParseDataTile(t *testing.T) {
 	if len(data.Tile.Tiles) != 1 {
 		t.Fatalf("expected 1 tile, got %d", len(data.Tile.Tiles))
 	}
-	got, _ := data.Tile.Tiles[0].PaletteIdAt(3, 1)
+	got, _ := data.Tile.Tiles[0].PaletteIdAt(1, 3)
 	if byte(got) != 15 {
-		t.Errorf("pixel (3,1) = %d, want 15", got)
+		t.Errorf("pixel (1,3) = %d, want 15", got)
 	}
 }

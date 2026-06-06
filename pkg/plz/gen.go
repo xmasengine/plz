@@ -2654,7 +2654,7 @@ func (b Tile) Gen(g *Gen) error {
 		for y := 0; y < tile.Size(); y++ {
 			g.Emitf("\t// ")
 			for x := 0; x < tile.Size(); x++ {
-				id, _ := tile.PaletteIdAt(x, y)
+				id, _ := tile.PaletteIdAt(y, x)
 				g.Emitf("%x", int(id))
 			}
 			g.Emitf("\n")
