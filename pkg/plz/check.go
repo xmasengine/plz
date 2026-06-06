@@ -2,18 +2,6 @@ package plz
 
 import "fmt"
 
-// Scope represents a lexical scope in the PL/Z program.
-// Each Scope holds a name, a pointer to its parent scope, and a mapping of
-// identifiers to their declarations. Scopes are chained together to form the
-// scope hierarchy used during semantic analysis.
-type Scope struct {
-	Name    string                 // Name of the scope (e.g. "global", procedure name)
-	Parent  *Scope                 // Parent scope
-	IsProc  bool                   // IsProc is true when this scope is a procedure body
-	IsTask  bool                   // IsTask is true when this scope is a task body
-	Symbols map[Identifier]Declare // Symbols in this scope
-}
-
 // Checker performs semantic analysis on a parsed PL/Z program.
 // It maintains the current scope chain, a registry of all declared procedures
 // and tasks, and provides helper methods for scope management and error reporting.
@@ -61,26 +49,36 @@ func NewChecker() *Checker {
 		usedVectors: make(map[int]bool),
 		usedRanges:  make(map[int]int),
 	}
-	c.root = &Scope{Name: "global", Symbols: make(map[Identifier]Declare)}
+	c.root = NewScope("global", nil)
 	c.current = c.root
 	return c
 }
 
-// pushBlockScope creates a new non-procedure scope with the given name and
-// makes it the new current scope.
+// pushBlockScope creates a new non-procedure scope with the given name,
+// registers it as a child of the current scope (building the persistent
+// scope tree), and makes it the new current scope.
 func (c *Checker) pushBlockScope(name string) {
-	c.current = &Scope{Name: name, Parent: c.current, IsProc: false, Symbols: make(map[Identifier]Declare)}
+	s := NewScope(name, c.current)
+	c.current.AddChild(s)
+	c.current = s
 }
 
-// pushTaskScope creates a new task body scope with the given name.
+// pushTaskScope creates a new task body scope with the given name,
+// registers it as a child of the current scope, and makes it the new
+// current scope.
 func (c *Checker) pushTaskScope(name string) {
-	c.current = &Scope{Name: name, Parent: c.current, IsTask: true, Symbols: make(map[Identifier]Declare)}
+	s := NewTaskScope(name, c.current)
+	c.current.AddChild(s)
+	c.current = s
 }
 
-// pushProcedureScope creates a new procedure scope with the given name and
-// makes it the new current scope.
+// pushProcedureScope creates a new procedure scope with the given name,
+// registers it as a child of the current scope, and makes it the new
+// current scope.
 func (c *Checker) pushProcedureScope(name string) {
-	c.current = &Scope{Name: name, Parent: c.current, IsProc: true, Symbols: make(map[Identifier]Declare)}
+	s := NewProcScope(name, c.current)
+	c.current.AddChild(s)
+	c.current = s
 }
 
 // inProcedure reports whether the current scope is inside a procedure body.
@@ -112,29 +110,12 @@ func (c *Checker) popScope() {
 	}
 }
 
-// lookup walks the scope chain from innermost to outermost when searching for a
-// given identifier. It returns the declaration and true if found, or the zero
-// value and false otherwise.
-func (c *Checker) lookup(id Identifier) (Declare, bool) {
-	for s := c.current; s != nil; s = s.Parent {
-		if d, ok := s.Symbols[id]; ok {
-			return d, true
-		}
-	}
-	return Declare{}, false
-}
-
-// Lookup searches for an identifier starting from the root (global) scope and
-// walking toward inner scopes. It is the public counterpart of lookup,
-// intended for use by the code generator after semantic analysis is complete.
-// Note that lookup works from the inside out, and Lookup from the outside in.
+// Lookup searches for an identifier by walking the scope chain from the
+// innermost (current) scope outward to the root (global) scope, returning
+// the first declaration found. This respects PL/Z block scoping — inner
+// declarations shadow outer ones.
 func (c *Checker) Lookup(id Identifier) (Declare, bool) {
-	for s := c.root; s != nil; s = s.Parent {
-		if d, ok := s.Symbols[id]; ok {
-			return d, true
-		}
-	}
-	return Declare{}, false
+	return c.current.Lookup(id)
 }
 
 // Errorf formats a semantic error message with the given position and format
@@ -836,7 +817,7 @@ func checkTarget(c *Checker, r Reference) error {
 			return err
 		}
 	}
-	if d, ok := c.lookup(r.Identifier); ok {
+	if d, ok := c.Lookup(r.Identifier); ok {
 		if err := c.checkArrayBounds(r); err != nil {
 			return err
 		}
@@ -1185,7 +1166,7 @@ func (r *Reference) Check(c *Checker) error {
 		return nil
 	}
 
-	d, ok := c.lookup(r.Identifier)
+	d, ok := c.Lookup(r.Identifier)
 	if !ok {
 		return c.Errorf("", "undeclared variable %q", r.Identifier)
 	}
@@ -1225,7 +1206,7 @@ func (r *Reference) Check(c *Checker) error {
 // skipped since they can only be checked at runtime.
 func (c *Checker) checkArraySubscript(id Identifier, expr Expression) error {
 	// Check declared variables.
-	if d, ok := c.lookup(id); ok {
+	if d, ok := c.Lookup(id); ok {
 		arr := d.Type.Array()
 		if arr == nil || arr.Size == 0 {
 			return nil // not an array or unbounded
@@ -1299,7 +1280,7 @@ func isCastPrefix(e Expression) bool {
 // targetType returns the declared Predeclared type of a LET assignment target,
 // following array subscripts and record fields to reach the leaf type.
 func (c *Checker) targetType(r Reference) (Predeclared, bool) {
-	d, ok := c.lookup(r.Identifier)
+	d, ok := 	c.Lookup(r.Identifier)
 	if !ok {
 		return PredeclaredNone, false
 	}
@@ -1349,7 +1330,7 @@ func (c *Checker) checkLetOverflow(ref Reference, expr Expression) error {
 	if pre == PredeclaredByte {
 		if op := expr.Operand(); op != nil {
 			if ref2 := op.Reference(); ref2 != nil && ref2.Identifier != "" {
-				srct, ok := c.lookup(ref2.Identifier)
+				srct, ok := c.Lookup(ref2.Identifier)
 				if ok && srct.Type.Predeclared() == PredeclaredWord {
 					return c.Errorf("", "cannot assign WORD value to BYTE variable without cast; use BYTE(...) to truncate explicitly")
 				}

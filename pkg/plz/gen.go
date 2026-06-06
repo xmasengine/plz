@@ -23,12 +23,15 @@ type Gen struct {
 	file               *os.File
 	Heap               int                       // Heap pointer to last allocated heap RAM memory.
 	label              int                       // counter for unique local labels
-	Checker            *Checker                  // Checker also used for holding semantic information of the source code.
+	Checker            *Checker                  // Checker for semantic information
 	InTask             bool                      // InTaks is set when generating inside a task body
 	procName           string                    // current procedure name (empty = global scope)
-	symStack           []map[Identifier]symEntry // scope stack: TODO is this redundant with the checker's scope stack?
-	ProcReturnType     Type                      // return type of current procedure (for BYTE zero-extend in Return.Gen)
-	ProcInterrupt      *Interrupt                // interrupt type of current procedure (for reti/retn in Return.Gen)
+	symStack           []map[Identifier]symEntry // scope stack for assembly label resolution
+	currentScope       *Scope                    // current position in checker's persistent scope tree
+	scopeStack         []*Scope                  // stack of checker scopes (parallel to symStack)
+	scopeChildIdx      map[*Scope]int            // number of children consumed per parent scope
+	ProcReturnType     Type                      // return type of current procedure
+	ProcInterrupt      *Interrupt                // interrupt type of current procedure
 	BoundCheck         bool                      // when true, emit runtime bounds checks before array accesses
 	boundsErrorEmitted bool                      // tracks whether _plz_bounds_error label has been emitted
 	strings            []strEntry                // string literal labels and content for ROM emission
@@ -41,13 +44,11 @@ type strEntry struct {
 	data  string
 }
 
-// symEntry records the assembly-level label, type, and whether the symbol is a
-// record or data parameter (passed by reference) for a single identifier on the
-// scope stack.
+// symEntry records the assembly-level label for a local identifier.
+// Type and paramRef are read from the checker's persistent scope tree
+// via the Gen.currentScope pointer — not duplicated here.
 type symEntry struct {
-	label    string
-	typ      Type
-	paramRef bool
+	label string
 }
 
 // NewGenFile creates a Gen that writes assembly output to a file with the given name.
@@ -92,48 +93,53 @@ func (g *Gen) localSym(id Identifier) Identifier {
 	return id
 }
 
-// localType resolves an identifier's type by walking the scope stack from
-// innermost to outermost, falling back to the checker's root scope.
+// localType resolves an identifier's type by walking the checker's
+// persistent scope tree from the current position outward. This replaces
+// the previous approach of storing type/paramRef copies on symEntry.
 func (g *Gen) localType(id Identifier) (Type, bool) {
-	// TODO is the sym stack redundant with the checker's scope stack?
-	for i := len(g.symStack) - 1; i >= 0; i-- {
-		if e, ok := g.symStack[i][id]; ok {
-			return e.typ, true
-		}
-	}
-	if g.Checker != nil {
-		if d, ok := g.Checker.Lookup(id); ok {
+	for s := g.currentScope; s != nil; s = s.Parent {
+		if d, ok := s.Symbols[id]; ok {
 			return d.Type, true
 		}
 	}
 	return Type{}, false
 }
 
-// isParamRef returns true when id is a record or data parameter passed by reference.
+// isParamRef returns true when id is a record or data parameter passed
+// by reference. It walks the checker's scope tree from current position
+// outward, reading paramRef from the persistent Declare stored there.
 func (g *Gen) isParamRef(id Identifier) bool {
-	// TODO is the sym stack redundant with the checker's scope stack?
-	for i := len(g.symStack) - 1; i >= 0; i-- {
-		if e, ok := g.symStack[i][id]; ok {
-			return e.paramRef
-		}
-	}
-	if g.Checker != nil {
-		if d, ok := g.Checker.Lookup(id); ok {
+	for s := g.currentScope; s != nil; s = s.Parent {
+		if d, ok := s.Symbols[id]; ok {
 			return d.ParamRef
 		}
 	}
 	return false
 }
 
-// pushScope pushes a new empty scope onto the symbol stack.
+// pushScope pushes a new empty scope onto the symbol stack and advances
+// the checker scope pointer to the next child of the current scope (if any).
 // Every call should be paired with a deferred popScope.
 func (g *Gen) pushScope() {
 	g.symStack = append(g.symStack, make(map[Identifier]symEntry))
+	if g.currentScope != nil {
+		idx := g.scopeChildIdx[g.currentScope]
+		if idx < len(g.currentScope.Children) {
+			g.scopeChildIdx[g.currentScope] = idx + 1
+			g.scopeStack = append(g.scopeStack, g.currentScope)
+			g.currentScope = g.currentScope.Children[idx]
+		}
+	}
 }
 
-// popScope removes the innermost scope from the symbol stack.
+// popScope removes the innermost scope from the symbol stack and restores
+// the checker scope pointer to the enclosing scope.
 func (g *Gen) popScope() {
 	g.symStack = g.symStack[:len(g.symStack)-1]
+	if len(g.scopeStack) > 0 {
+		g.currentScope = g.scopeStack[len(g.scopeStack)-1]
+		g.scopeStack = g.scopeStack[:len(g.scopeStack)-1]
+	}
 }
 
 // Close closes the output assembly file.
@@ -358,6 +364,8 @@ func (p Program) Gen(g *Gen) error {
 		return err
 	}
 	g.Checker = c
+	g.currentScope = c.root
+	g.scopeChildIdx = make(map[*Scope]int)
 
 	g.Emit(ProgramHeader)
 	g.Emitln("\tjp _plz_start")
@@ -1907,18 +1915,12 @@ func (s Procedure) Gen(g *Gen) error {
 	g.ProcReturnType = s.Type
 	g.ProcInterrupt = s.Interrupt
 
-	// Push scope and register parameters so localSym/localType can find them.
+	// Push scope and register parameters so localSym can find their labels.
 	g.pushScope()
 	defer g.popScope()
-	for i, param := range s.Parameters {
-		ptype := Type{Typ: &PredeclaredType{Kind: PredeclaredWord}}
-		if i < len(s.ParamTypes) {
-			ptype = s.ParamTypes[i]
-		}
+	for _, param := range s.Parameters {
 		g.symStack[len(g.symStack)-1][param] = symEntry{
-			label:    fmt.Sprintf("_plz_%s_%s", s.Name.Name, param),
-			typ:      ptype,
-			paramRef: ptype.Record() != nil || ptype.Predeclared() == PredeclaredData,
+			label: fmt.Sprintf("_plz_%s_%s", s.Name.Name, param),
 		}
 	}
 
@@ -2228,7 +2230,7 @@ func (g *Gen) evalConstExpr(e Expression) (int, error) {
 // zero-initialized storage (or the initializer value if one is provided).
 func (s Declare) Gen(g *Gen) error {
 	if g.procName != "" {
-		// Local variable: register in the current scope so localSym/localType can find it.
+		// Local variable: register in the current scope so localSym can find it.
 		var label string
 		if len(g.symStack) <= 1 {
 			label = fmt.Sprintf("_plz_%s_%s", g.procName, s.Identifier)
@@ -2237,7 +2239,6 @@ func (s Declare) Gen(g *Gen) error {
 		}
 		g.symStack[len(g.symStack)-1][s.Identifier] = symEntry{
 			label: label,
-			typ:   s.Type,
 		}
 		// Emit initialization code for the local variable.
 		if s.Initializer != nil {
