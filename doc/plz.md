@@ -649,6 +649,24 @@ GOTO start
 Branch labels in generated assembly use numeric identifiers
 (`_if_1`, `_while_2`, `_for_3`, etc.) and are managed by the compiler.
 
+
+### 7.5 TEMPLATE
+
+```
+TEMPLATE SCREEN `CALL vdp_set_screen_mode_${1}`
+SCREEN(4) // will be expanded to CALL vdp_set_screen_mode_4
+```
+
+Templates are identifier string substitutions.
+The template text may contain parameters like $1 $2 $3 which will be expanded
+from the parameters given when expanding the template.
+
+Templates are expanded and then compiled as if they were included with include.
+Templates are only expanded if they are the first identifier in a statement.
+
+This is useful to define some more user friendly wrappers around procedure
+calls.
+
 ---
 
 ## 8. The Compilation Pipeline

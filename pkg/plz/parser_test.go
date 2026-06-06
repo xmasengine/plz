@@ -995,9 +995,9 @@ func TestParseTemplate(t *testing.T) {
 	}
 
 	prog2 := parseProg(t, `
-		TEMPLATE SPRITE "CALL define_sprite({{index . 0|.Number}}, {{index . 1 |.Text}})"
+		TEMPLATE SPRITE "CALL define_sprite($1, $2)"
 
-		SPRITE(Foo, 2)
+		SPRITE("foo", 2)
 	`)
 
 	if len(prog2.Statements) != 1 {

@@ -1444,3 +1444,25 @@ HALT`)
 		t.Errorf("expected 30, got %d", io.OutBytes[0][2])
 	}
 }
+
+func TestIntegrationTemplateProcCall(t *testing.T) {
+	io := compileAndRun(t, `
+DECLARE result WORD
+DECLARE register WORD
+
+PROCEDURE set_register (x WORD, y WORD)
+	LET register = x + y
+END
+
+TEMPLATE REG "CALL set_register($1, $2)"
+
+REG(2, 3)
+OUTPUT 0 register
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 5 {
+		t.Errorf("expected 5, got %d", io.OutBytes[0][0])
+	}
+}

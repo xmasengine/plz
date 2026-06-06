@@ -155,7 +155,8 @@ func (t TokenKind) String() string {
 type Token struct {
 	TokenKind TokenKind // The kind of token.
 	Position  Position  // The source position of the token.
-	Text      string    // The literal text of the token.
+	Raw       string    // The orininal text of the token, may be qouted.
+	Text      string    // The text of the token, may be unquoted.
 	Number    int       // The numeric value, valid for TokenInt and TokenChar tokens.
 }
 
@@ -215,7 +216,10 @@ func scan(rd io.Reader, name string) ([]Token, error) {
 		if err != nil {
 			return nil, err
 		}
-		tok := Token{TokenKind: kind, Text: s.TokenText(), Position: s.Pos()}
+		raw := s.TokenText()
+		tok := Token{
+			TokenKind: kind, Raw: raw, Text: raw, Position: s.Pos(),
+		}
 		if kind == TokenInt {
 			num, err := strconv.ParseUint(tok.Text, 0, 16)
 			if err != nil {

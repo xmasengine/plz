@@ -5,7 +5,8 @@ package plz
 // to drive the compiler pipeline.
 type Program struct {
 	Statements    []Statement
-	IncludedFiles map[string]bool // visited files, used to detect recursive INCLUDE
+	IncludedFiles map[string]bool     // visited files, used to detect recursive INCLUDE
+	Templates     map[string]Template // Templates defined in this file
 }
 
 // Parselet is the interface for AST nodes that can be parsed.

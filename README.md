@@ -37,6 +37,8 @@ Although PLZ is inspired by PL/M, it differs in several ways:
 - **BANK**: Banked ROM handling
 - **SAVE**: Battery-backed RAM handling
 - **MUSIC/SCREEN/TILE/SPRITE**: Game-oriented library support via the TASK system
+- **INCLUDE**: Include other files.
+- **TEMPLATE**: Very simple templates to simplify procedure calls, etc.
 
 # Rationale And Credits
 
@@ -94,7 +96,7 @@ command      = let | if | while | for | do | case
              | declare | constant | data | define
              | task | suspend | resume | sleep | yield
              | enable | disable | halt | at
-             | bank .
+             | bank | include | template .
 
 label        = identifier , ":" .
 
@@ -161,6 +163,11 @@ enable       = "ENABLE" .
 disable      = "DISABLE" .
 
 halt         = "HALT" .
+
+include       = "include" string .
+
+template      = "template" idenifier string .
+
 
 (* -- Types -- *)
 
