@@ -765,13 +765,13 @@ func (r *Reference) isByteRef(g *Gen) bool {
 
 // isByteOperand reports whether evaluating the operand produces a BYTE value
 // (fits in 0–255). This is used to select 8-bit code generation paths.
+// Literals are treated conservatively (non-BYTE) since their type depends on
+// the expression context — only an explicit BYTE() cast or a BYTE-typed
+// reference guarantees a byte-wide result.
 func isByteOperand(g *Gen, op Operand) bool {
 	switch {
 	case op.Literal() != nil:
-		if n := op.Literal().Number(); n != nil {
-			return n.Value >= 0 && n.Value <= 255
-		}
-		return false
+		return false // literal type depends on context; don't guess
 	case op.Reference() != nil:
 		return op.Reference().isByteRef(g)
 	case op.Expr() != nil:
@@ -790,7 +790,17 @@ func isByteExpression(g *Gen, e Expression) bool {
 	case e.Operand() != nil:
 		return isByteOperand(g, *e.Operand())
 	case e.Prefix() != nil:
-		return isByteOperand(g, e.Prefix().Operand)
+		p := e.Prefix()
+		if p.Operator == Operator(KeywordByte) {
+			return true // BYTE(expr) always produces a byte
+		}
+		if p.Operator == Operator(KeywordWord) {
+			return false // WORD(expr) always produces a word
+		}
+		if p.Operator == OperatorNOT {
+			return true // !expr always produces 0 or 1
+		}
+		return isByteOperand(g, p.Operand)
 	case e.Infix() != nil:
 		inf := e.Infix()
 		switch inf.Operator {
@@ -820,17 +830,10 @@ func (p Prefix) Gen(g *Gen) error {
 		if err := p.Operand.Gen(g); err != nil {
 			return err
 		}
-		if isByteOperand(g, p.Operand) {
-			g.Emitln("\tld a, l")
-			g.Emitln("\tneg")
-			g.Emitln("\tld l, a")
-			g.Emitln("\tld h, 0")
-		} else {
-			g.Emitln("\tex de, hl")
-			g.Emitln("\tld hl, 0")
-			g.Emitln("\tor a")
-			g.Emitln("\tsbc hl, de")
-		}
+		g.Emitln("\tex de, hl")
+		g.Emitln("\tld hl, 0")
+		g.Emitln("\tor a")
+		g.Emitln("\tsbc hl, de")
 
 	case OperatorNOT:
 		if err := p.Operand.Gen(g); err != nil {
@@ -1040,23 +1043,9 @@ func (g *Gen) genInfixAdd() {
 	g.Emitln("\tadd hl, de")
 }
 
-func (g *Gen) genInfixAdd8() {
-	g.Emitln("\tld a, l")
-	g.Emitln("\tadd a, e")
-	g.Emitln("\tld l, a")
-	g.Emitln("\tld h, 0")
-}
-
 func (g *Gen) genInfixSub() {
 	g.Emitln("\tor a")
 	g.Emitln("\tsbc hl, de")
-}
-
-func (g *Gen) genInfixSub8() {
-	g.Emitln("\tld a, l")
-	g.Emitln("\tsub e")
-	g.Emitln("\tld l, a")
-	g.Emitln("\tld h, 0")
 }
 
 func (g *Gen) genInfixShiftLeft(rhs Operand) {
@@ -1069,10 +1058,6 @@ func (g *Gen) genInfixShiftLeft(rhs Operand) {
 	}
 }
 
-func (g *Gen) genInfixShiftLeft8(rhs Operand) {
-	g.genShiftLeftByte(rhs)
-}
-
 func (g *Gen) genInfixShiftRight(rhs Operand) {
 	if n := constShift(rhs); n >= 0 {
 		for j := 0; j < n; j++ {
@@ -1081,58 +1066,6 @@ func (g *Gen) genInfixShiftRight(rhs Operand) {
 		}
 	} else {
 		g.genVarShift("srl h\n\trr l", rhs)
-	}
-}
-
-func (g *Gen) genInfixShiftRight8(rhs Operand) {
-	g.genShiftRightByte(rhs)
-}
-
-func (g *Gen) genShiftLeftByte(rhs Operand) {
-	if n := constShift(rhs); n >= 0 {
-		g.Emitln("\tld a, l")
-		for j := 0; j < n; j++ {
-			g.Emitln("\tadd a, a")
-		}
-		g.Emitln("\tld l, a")
-		g.Emitln("\tld h, 0")
-	} else {
-		loop := g.nextLabel()
-		end := g.nextLabel()
-		g.Emitln("\tld a, e")
-		g.Emitf("_lbl_%d:\n", loop)
-		g.Emitln("\tor a")
-		g.Emitf("\tjr z, _lbl_%d\n", end)
-		g.Emitln("\tld a, l")
-		g.Emitln("\tadd a, a")
-		g.Emitln("\tld l, a")
-		g.Emitln("\tdec a")
-		g.Emitf("\tjr _lbl_%d\n", loop)
-		g.Emitf("_lbl_%d:\n", end)
-		g.Emitln("\tld h, 0")
-	}
-}
-
-func (g *Gen) genShiftRightByte(rhs Operand) {
-	if n := constShift(rhs); n >= 0 {
-		g.Emitln("\tld a, l")
-		for j := 0; j < n; j++ {
-			g.Emitln("\tsrl a")
-		}
-		g.Emitln("\tld l, a")
-		g.Emitln("\tld h, 0")
-	} else {
-		loop := g.nextLabel()
-		end := g.nextLabel()
-		g.Emitln("\tld a, e")
-		g.Emitf("_lbl_%d:\n", loop)
-		g.Emitln("\tor a")
-		g.Emitf("\tjr z, _lbl_%d\n", end)
-		g.Emitln("\tsrl l")
-		g.Emitln("\tdec a")
-		g.Emitf("\tjr _lbl_%d\n", loop)
-		g.Emitf("_lbl_%d:\n", end)
-		g.Emitln("\tld h, 0")
 	}
 }
 
