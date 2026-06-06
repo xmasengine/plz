@@ -1039,7 +1039,7 @@ func (i Infix) Gen(g *Gen) error {
 type cmpKind int
 
 const (
-	cmpEQ  cmpKind = iota
+	cmpEQ cmpKind = iota
 	cmpNEQ
 	cmpGT
 	cmpLT

@@ -443,7 +443,7 @@ func (c *Checker) collectCalls(s Statement) map[string]bool {
 	}
 	walk(s)
 	return calls
-}// findRecursion performs DFS cycle detection on the call graph starting from
+} // findRecursion performs DFS cycle detection on the call graph starting from
 // proc. Returns a human-readable cycle description if one exists, or "".
 func (c *Checker) findRecursion(proc string, graph map[string]map[string]bool) string {
 	visited := make(map[string]bool)
@@ -1280,7 +1280,7 @@ func isCastPrefix(e Expression) bool {
 // targetType returns the declared Predeclared type of a LET assignment target,
 // following array subscripts and record fields to reach the leaf type.
 func (c *Checker) targetType(r Reference) (Predeclared, bool) {
-	d, ok := 	c.Lookup(r.Identifier)
+	d, ok := c.Lookup(r.Identifier)
 	if !ok {
 		return PredeclaredNone, false
 	}
