@@ -205,6 +205,7 @@ const ProgramFooter = `
 _plz_all_done:
 	di
 	halt
+	jp _plz_all_done
 
 `
 
