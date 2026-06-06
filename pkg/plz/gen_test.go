@@ -670,15 +670,15 @@ func TestGenPrefixNot(t *testing.T) {
 
 func TestGenShiftLeftConst(t *testing.T) {
 	asm := genTest(t, "LET x = 1 << 3")
-	if !strings.Contains(asm, "add a, a") {
-		t.Errorf("expected shift left pattern (8-bit add a, a), got:\n%s", asm)
+	if !strings.Contains(asm, "add hl, hl") {
+		t.Errorf("expected shift left pattern (16-bit add hl, hl), got:\n%s", asm)
 	}
 }
 
 func TestGenShiftRightConst(t *testing.T) {
 	asm := genTest(t, "LET x = 16 >> 2")
-	if !strings.Contains(asm, "srl a") {
-		t.Errorf("expected shift right pattern (8-bit srl a), got:\n%s", asm)
+	if !strings.Contains(asm, "srl h") {
+		t.Errorf("expected shift right pattern (16-bit srl h), got:\n%s", asm)
 	}
 }
 

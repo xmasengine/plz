@@ -792,6 +792,10 @@ func isByteExpression(g *Gen, e Expression) bool {
 		return isByteOperand(g, e.Prefix().Operand)
 	case e.Infix() != nil:
 		inf := e.Infix()
+		switch inf.Operator {
+		case OperatorShiftLeft, OperatorShiftRight:
+			return false
+		}
 		return isByteOperand(g, inf.Operands[0]) && isByteOperand(g, inf.Operands[1])
 	case e.Suffix() != nil:
 		return false
@@ -949,29 +953,13 @@ func (i Infix) Gen(g *Gen) error {
 	}
 	switch i.Operator {
 	case OperatorADD:
-		if isByteInfix(g, i) {
-			g.genInfixAdd8()
-		} else {
-			g.genInfixAdd()
-		}
+		g.genInfixAdd()
 	case OperatorSUB:
-		if isByteInfix(g, i) {
-			g.genInfixSub8()
-		} else {
-			g.genInfixSub()
-		}
+		g.genInfixSub()
 	case OperatorShiftLeft:
-		if isByteInfix(g, i) {
-			g.genInfixShiftLeft8(i.Operands[1])
-		} else {
-			g.genInfixShiftLeft(i.Operands[1])
-		}
+		g.genInfixShiftLeft(i.Operands[1])
 	case OperatorShiftRight:
-		if isByteInfix(g, i) {
-			g.genInfixShiftRight8(i.Operands[1])
-		} else {
-			g.genInfixShiftRight(i.Operands[1])
-		}
+		g.genInfixShiftRight(i.Operands[1])
 	case OperatorAND:
 		if isByteInfix(g, i) {
 			g.genInfixBitwise8("\tand e")
