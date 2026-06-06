@@ -1,0 +1,26 @@
+
+// AT BANK 1
+
+// Load SMS palette of the image.
+PROCEDURE load_nun_palette()
+  CALL load_palette_entry(0,  0x00)
+  CALL load_palette_entry(1,  0x04)
+  CALL load_palette_entry(2,  0x0d)
+  CALL load_palette_entry(3,  0x3e)
+  CALL load_palette_entry(4,  0x34)
+  CALL load_palette_entry(5,  0x10)
+  CALL load_palette_entry(6,  0x31)
+  CALL load_palette_entry(7,  0x2b)
+  CALL load_palette_entry(8,  0x03)
+  CALL load_palette_entry(9,  0x02)
+  CALL load_palette_entry(10, 0x0b)
+  CALL load_palette_entry(11, 0x1f)
+  CALL load_palette_entry(12, 0x00)
+  CALL load_palette_entry(13, 0x15)
+  CALL load_palette_entry(14, 0x2a)
+  CALL load_palette_entry(15, 0x3f)
+END
+
+DATA nun_tiles TILE LOAD "nun.png"
+
+
