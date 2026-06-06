@@ -820,3 +820,74 @@ func TestGenConstantGen(t *testing.T) {
 		t.Errorf("expected const FOO = 42, got:\n%s", asm)
 	}
 }
+
+// TestGenOutputWordOr16 checks that OUTPUT WORD with a shifted value uses 16-bit
+// OR (preserving the high byte), not 8-bit OR which would zero H.
+func TestGenOutputWordOr16(t *testing.T) {
+	asm := genTest(t,
+		"PROCEDURE write_reg(reg BYTE, value BYTE)\n"+
+			"  OUTPUT WORD 0xBF value | ((reg | 0x80) << 8)\n"+
+			"END\n"+
+			"CALL write_reg(0, 0)")
+	if !strings.Contains(asm, "or d") {
+		t.Errorf("expected 16-bit OR (or d) for shifted value, got:\n%s", asm)
+	}
+	if !strings.Contains(asm, "or e") {
+		t.Errorf("expected 16-bit OR (or e) for shifted value, got:\n%s", asm)
+	}
+}
+
+// TestGenByteShift16 checks that shifting a BYTE left by 8 uses 16-bit add hl,hl.
+func TestGenByteShift16(t *testing.T) {
+	asm := genTest(t,
+		"PROCEDURE test(reg BYTE)\n"+
+			"  DECLARE x WORD\n"+
+			"  LET x = (reg | 0x80) << 8\n"+
+			"END\n"+
+			"CALL test(0)")
+	if !strings.Contains(asm, "add hl, hl") {
+		t.Errorf("expected 16-bit shift (add hl, hl) for byte shift by 8, got:\n%s", asm)
+	}
+}
+
+// TestGenByteCast checks that BYTE(expr) zero-extends the result (ld h, 0).
+func TestGenByteCast(t *testing.T) {
+	asm := genTest(t,
+		"PROCEDURE test(x WORD)\n"+
+			"  DECLARE y BYTE\n"+
+			"  LET y = BYTE(x)\n"+
+			"END\n"+
+			"CALL test(256)")
+	if !strings.Contains(asm, "ld h, 0") {
+		t.Errorf("expected BYTE cast to zero-extend (ld h, 0), got:\n%s", asm)
+	}
+}
+
+// TestGenProgramFooter checks that the program footer contains the correct
+// termination sequence: di, halt, jp _plz_all_done.
+func TestGenProgramFooter(t *testing.T) {
+	asm := genTest(t, "")
+	if !strings.Contains(asm, "di") {
+		t.Errorf("expected program footer to disable interrupts (di), got:\n%s", asm)
+	}
+	if !strings.Contains(asm, "halt") {
+		t.Errorf("expected program footer to halt, got:\n%s", asm)
+	}
+	if !strings.Contains(asm, "jp _plz_all_done") {
+		t.Errorf("expected program footer to loop back (jp _plz_all_done), got:\n%s", asm)
+	}
+}
+
+// TestGenSimpleByteOr checks that OR of two simple BYTEs uses 8-bit code
+// (zeroing H), which is a valid optimization.
+func TestGenSimpleByteOr(t *testing.T) {
+	asm := genTest(t,
+		"PROCEDURE test(a BYTE, b BYTE)\n"+
+			"  DECLARE x BYTE\n"+
+			"  LET x = a | b\n"+
+			"END\n"+
+			"CALL test(0, 0)")
+	if !strings.Contains(asm, "ld h, 0") {
+		t.Errorf("expected 8-bit OR to zero H (ld h, 0), got:\n%s", asm)
+	}
+}
