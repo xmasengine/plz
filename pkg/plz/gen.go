@@ -627,9 +627,10 @@ func (g *Gen) genCondBranch(e Expression, falseLabel string) error {
 			case OperatorGTE:
 				g.Emitf("\tjmp c, %s\n", falseLabel)
 			case OperatorLTE:
-				g.Emitf("\tjmp z, _lte_%d\n", g.nextLabel())
+				n := g.nextLabel()
+				g.Emitf("\tjmp z, _lte_%d\n", n)
 				g.Emitf("\tjmp nc, %s\n", falseLabel)
-				g.Emitf("_lte_%d:\n", g.nextLabel()-1)
+				g.Emitf("_lte_%d:\n", n)
 			}
 			return nil
 		}

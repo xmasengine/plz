@@ -614,7 +614,9 @@ func (s Constant) Check(c *Checker) error {
 	if _, ok := c.current.Symbols[Identifier(s.Name)]; ok {
 		return c.Errorf("", "duplicate declaration of %q", s.Name)
 	}
-	if v, err := c.EvalConstExpr(s.Expr); err == nil {
+	// Try to evaluate as a numeric constant expression.
+	v, err := c.EvalConstExpr(s.Expr)
+	if err == nil {
 		if v < -32768 || v > 65535 {
 			return c.Errorf("", "CONSTANT %s = %d does not fit in 16 bits", s.Name, v)
 		}
@@ -623,7 +625,10 @@ func (s Constant) Check(c *Checker) error {
 			Type:          Type{Typ: &PredeclaredType{Kind: PredeclaredWord}},
 			ConstantValue: &Literal{Lit: &NumberLit{Value: v & 0xFFFF}},
 		}
-	} else if op := s.Expr.Operand(); op != nil {
+		return nil
+	}
+	// Fall back to text literal.
+	if op := s.Expr.Operand(); op != nil {
 		if lit := op.Literal(); lit != nil {
 			if t := lit.Text(); t != nil {
 				c.current.Symbols[Identifier(s.Name)] = Declare{
@@ -634,11 +639,8 @@ func (s Constant) Check(c *Checker) error {
 				return nil
 			}
 		}
-		return err
-	} else {
-		return err
 	}
-	return nil
+	return err
 }
 
 // Check registers a named data value in the checker's Data map so
