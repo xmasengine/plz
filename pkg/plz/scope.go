@@ -13,6 +13,17 @@ type Scope struct {
 	IsTask   bool                   // IsTask is true when this scope is a task body
 	Symbols  map[Identifier]Declare // Symbols in this scope
 	Children []*Scope               // Child scopes forming the persistent scope tree
+	ProcData *ProcData              // Procedure metadata (set for procedure scopes)
+}
+
+// ProcData holds procedure metadata extracted from the AST for use by the
+// code generator. It is stored on the procedure's Scope so the generator
+// can find parameter types and the reentrant flag via scope tree navigation
+// instead of a flat map on Checker.
+type ProcData struct {
+	Params     []Identifier
+	ParamTypes []Type
+	Reentrant  bool
 }
 
 // NewScope creates a new Scope with the given name and parent.
@@ -28,6 +39,18 @@ func NewScope(name string, parent *Scope) *Scope {
 func NewProcScope(name string, parent *Scope) *Scope {
 	s := NewScope(name, parent)
 	s.IsProc = true
+	return s
+}
+
+// NewProcWithData creates a new procedure scope with parameter metadata
+// (parameter names, types, and reentrant flag) stored for the generator.
+func NewProcWithData(name string, parent *Scope, params []Identifier, paramTypes []Type, reentrant bool) *Scope {
+	s := NewProcScope(name, parent)
+	s.ProcData = &ProcData{
+		Params:     params,
+		ParamTypes: paramTypes,
+		Reentrant:  reentrant,
+	}
 	return s
 }
 
@@ -58,17 +81,23 @@ func (s *Scope) Lookup(id Identifier) (Declare, bool) {
 }
 
 // LookupInTree searches the entire subtree rooted at s (including s and
-// all descendants) for an identifier. It returns the first match found
-// in DFS (pre-order) order — useful for finding declarations within a
-// procedure's scope hierarchy regardless of nesting depth.
+// all descendants) for an identifier. It returns the match from the
+// deepest (innermost) scope first (post-order DFS) — useful for finding
+// declarations within a procedure's scope hierarchy where inner scopes
+// shadow outer ones.
 func (s *Scope) LookupInTree(id Identifier) (Declare, *Scope, bool) {
-	if d, ok := s.Symbols[id]; ok {
-		return d, s, true
-	}
+	var best Declare
+	var bestScope *Scope
 	for _, child := range s.Children {
 		if d, scope, ok := child.LookupInTree(id); ok {
-			return d, scope, ok
+			best, bestScope = d, scope
 		}
+	}
+	if bestScope != nil {
+		return best, bestScope, true
+	}
+	if d, ok := s.Symbols[id]; ok {
+		return d, s, true
 	}
 	return Declare{}, nil, false
 }

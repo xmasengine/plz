@@ -376,15 +376,24 @@ func (p Program) Gen(g *Gen) error {
 		g.genTaskInit(c.TaskDefs)
 	}
 
-	var dataItems []dataItem
-	var procedures []Procedure
-	var dataStmts []Data
-	for _, statement := range p.Statements {
+	procedures, dataStmts, dataItems := g.genClassifyStmts(p.Statements)
+	g.genEmitSections(c, procedures, dataStmts, dataItems)
+
+	if g.BoundCheck {
+		g.genOnceBoundsError()
+	}
+	return nil
+}
+
+// genClassifyStmts separates top-level statements into procedures, data
+// statements (DATA), and data items (AT, DECLARE) for ordered emission.
+func (g *Gen) genClassifyStmts(stmts []Statement) (procedures []Procedure, dataStmts []Data, dataItems []dataItem) {
+	for _, statement := range stmts {
 		switch cmd := statement.Command.(type) {
 		case At:
 			if cmd.HasBank {
 				if err := cmd.Gen(g); err != nil {
-					return err
+					panic(err)
 				}
 			} else {
 				dataItems = append(dataItems, dataItem{at: &cmd})
@@ -397,21 +406,26 @@ func (p Program) Gen(g *Gen) error {
 			procedures = append(procedures, cmd)
 		default:
 			if err := statement.Gen(g); err != nil {
-				return err
+				panic(err)
 			}
 		}
 	}
+	return
+}
 
+// genEmitSections emits all generated sections in link order: procedures,
+// data statements, task bodies, runtime data, and deferred data items.
+func (g *Gen) genEmitSections(c *Checker, procedures []Procedure, dataStmts []Data, dataItems []dataItem) {
 	g.Emit(ProgramFooter)
 
 	for _, proc := range procedures {
 		if err := proc.Gen(g); err != nil {
-			return err
+			panic(err)
 		}
 	}
 	for _, ds := range dataStmts {
 		if err := ds.Gen(g); err != nil {
-			return err
+			panic(err)
 		}
 	}
 
@@ -421,13 +435,13 @@ func (p Program) Gen(g *Gen) error {
 	if len(c.TaskDefs) > 0 {
 		g.genSchedulerRuntime(c.TaskDefs)
 	}
-	g.genProcStorage(p.Statements)
+	g.genProcStorage(procedures)
 	g.genForTemps()
 
 	for _, item := range dataItems {
 		if item.at != nil {
 			if err := item.at.Gen(g); err != nil {
-				return err
+				panic(err)
 			}
 		} else {
 			g.Emitln("")
@@ -436,14 +450,9 @@ func (p Program) Gen(g *Gen) error {
 	}
 	for _, s := range taskDeclares {
 		if err := s.Gen(g); err != nil {
-			return err
+			panic(err)
 		}
 	}
-
-	if g.BoundCheck {
-		g.genOnceBoundsError()
-	}
-	return nil
 }
 
 type dataItem struct {
@@ -525,10 +534,9 @@ func (g *Gen) genSchedulerRuntime(tasks []Task) {
 	g.Heap += 131
 }
 
-func (g *Gen) genProcStorage(stmts []Statement) {
-	for _, stmt := range stmts {
-		proc, ok := stmt.Command.(Procedure)
-		if !ok || proc.Reentrant {
+func (g *Gen) genProcStorage(procedures []Procedure) {
+	for _, proc := range procedures {
+		if proc.Reentrant {
 			continue
 		}
 		for i, param := range proc.Parameters {
@@ -710,7 +718,7 @@ func (o Operand) Gen(g *Gen) error {
 				}
 			}
 		}
-		if o.Reference().isByteRef(g) {
+		if g.isByteRef(o.Reference()) {
 			g.Emitf("\tld a, (%s)\n", g.localSym(o.Reference().Identifier))
 			g.Emitln("\tld l, a")
 			g.Emitln("\tld h, 0")
@@ -738,9 +746,8 @@ func (o Operand) Gen(g *Gen) error {
 }
 
 // isByteRef reports whether the reference's resolved type is BYTE (including
-// struct fields resolved to BYTE), so the generator knows to load a single byte
-// rather than a 16-bit word.
-func (r *Reference) isByteRef(g *Gen) bool {
+// following array subscripts to reach the leaf type).
+func (g *Gen) isByteRef(r *Reference) bool {
 	if g.Checker == nil || r == nil {
 		return false
 	}
@@ -770,14 +777,14 @@ func (r *Reference) isByteRef(g *Gen) bool {
 // Literals are treated conservatively (non-BYTE) since their type depends on
 // the expression context — only an explicit BYTE() cast or a BYTE-typed
 // reference guarantees a byte-wide result.
-func (op Operand) isByteOperand(g *Gen) bool {
+func (g *Gen) isByteOperand(op *Operand) bool {
 	switch {
 	case op.Literal() != nil:
 		return false // literal type depends on context; don't guess
 	case op.Reference() != nil:
-		return op.Reference().isByteRef(g)
+		return g.isByteRef(op.Reference())
 	case op.Expr() != nil:
-		return op.Expr().isByteExpression(g)
+		return g.isByteExpression(op.Expr())
 	case op.Input() != nil:
 		return true // INPUT returns a byte
 	case op.Length() != nil:
@@ -787,10 +794,10 @@ func (op Operand) isByteOperand(g *Gen) bool {
 }
 
 // isByteExpression reports whether the expression produces a BYTE value.
-func (e Expression) isByteExpression(g *Gen) bool {
+func (g *Gen) isByteExpression(e *Expression) bool {
 	switch {
 	case e.Operand() != nil:
-		return e.Operand().isByteOperand(g)
+		return g.isByteOperand(e.Operand())
 	case e.Prefix() != nil:
 		p := e.Prefix()
 		if p.Operator == Operator(KeywordByte) {
@@ -802,14 +809,14 @@ func (e Expression) isByteExpression(g *Gen) bool {
 		if p.Operator == OperatorNOT {
 			return true // !expr always produces 0 or 1
 		}
-		return p.Operand.isByteOperand(g)
+		return g.isByteOperand(&p.Operand)
 	case e.Infix() != nil:
 		inf := e.Infix()
 		switch inf.Operator {
 		case OperatorShiftLeft, OperatorShiftRight:
 			return false
 		}
-		return inf.Operands[0].isByteOperand(g) && inf.Operands[1].isByteOperand(g)
+		return g.isByteOperand(&inf.Operands[0]) && g.isByteOperand(&inf.Operands[1])
 	case e.Suffix() != nil:
 		return false
 	}
@@ -818,8 +825,8 @@ func (e Expression) isByteExpression(g *Gen) bool {
 
 // isByteInfix reports whether both operands of an infix expression are
 // BYTE-typed, enabling 8-bit arithmetic/logic code generation.
-func (i Infix) isByteInfix(g *Gen) bool {
-	return i.Operands[0].isByteOperand(g) && i.Operands[1].isByteOperand(g)
+func (g *Gen) isByteInfix(i *Infix) bool {
+	return g.isByteOperand(&i.Operands[0]) && g.isByteOperand(&i.Operands[1])
 }
 
 // Gen generates assembly for a prefix expression. OperatorNEG computes two's
@@ -841,7 +848,7 @@ func (p Prefix) Gen(g *Gen) error {
 		if err := p.Operand.Gen(g); err != nil {
 			return err
 		}
-		if p.Operand.isByteOperand(g) {
+		if g.isByteOperand(&p.Operand) {
 			n := g.nextLabel()
 			g.Emitln("\tld a, l")
 			g.Emitf("\tld hl, 0\n")
@@ -890,61 +897,17 @@ func constShift(op Operand) int {
 	return -1
 }
 
-// isSimpleOperand checks if evaluating the operand does not clobber DE.
-// Simple operands are: literals, variable references, parenthesized simple
-// expressions, and INPUT with a simple port expression.
-// TODO: this should be a method of Operand, not a function
-func isSimpleOperand(op Operand) bool {
-	switch {
-	case op.Literal() != nil:
-		return true
-	case op.Reference() != nil:
-		r := op.Reference()
-		return len(r.Subscripts) == 0 && len(r.Fields) == 0
-	case op.Expr() != nil:
-		return isSimpleExpr(*op.Expr())
-	case op.Input() != nil:
-		return isSimpleExpr(op.Input().Port)
-	case op.Length() != nil:
-		return true // constant, no register clobber
-	}
-	return false
-}
-
-// isSimpleExpr checks if evaluating the expression does not clobber DE.
-// Simple expressions are: simple operands and NOT-of-simple-operand.
-// Infix, suffix, and NEG expressions may clobber DE and are not simple.
-// TODO: this should be a method of Expression, not a function
-func isSimpleExpr(e Expression) bool {
-	switch {
-	case e.Operand() != nil:
-		return isSimpleOperand(*e.Operand())
-	case e.Prefix() != nil:
-		p := e.Prefix()
-		switch p.Operator {
-		case OperatorNOT:
-			return isSimpleOperand(p.Operand)
-		case OperatorNEG:
-			return false
-		}
-	}
-	return false
-}
-
 // Gen generates assembly for an infix expression. It evaluates the left operand
-// into HL, saves it, evaluates the right operand into HL, moves it to DE, then
-// restores the left operand into HL and emits the operation-specific code.
-//
-// When the right operand is simple (literal, variable, etc.) the left operand
-// is saved in DE via ex de,hl, avoiding a push/pop pair. When the right operand
-// is complex (infix, suffix, NEG) the left operand is saved on the stack.
+// into HL, saves it on the stack, evaluates the right operand into DE, then
+// restores the left operand into HL and dispatches to the operation-specific
+// code generator.
 func (i Infix) Gen(g *Gen) error {
-	// Left operand
+	// Left operand → HL
 	if err := i.Operands[0].Gen(g); err != nil {
 		return err
 	}
 	g.Emitln("\tpush hl")
-	// Right operand
+	// Right operand → HL, then move to DE
 	if err := i.Operands[1].Gen(g); err != nil {
 		return err
 	}
@@ -959,66 +922,16 @@ func (i Infix) Gen(g *Gen) error {
 		g.genInfixShiftLeft(i.Operands[1])
 	case OperatorShiftRight:
 		g.genInfixShiftRight(i.Operands[1])
-	case OperatorAND:
-		if i.isByteInfix(g) {
-			g.genInfixBitwise8("\tand e")
-		} else {
-			g.genInfixBitwise("\tand e", "\tand d")
-		}
-	case OperatorOR:
-		if i.isByteInfix(g) {
-			g.genInfixBitwise8("\tor e")
-		} else {
-			g.genInfixBitwise("\tor e", "\tor d")
-		}
-	case OperatorXOR:
-		if i.isByteInfix(g) {
-			g.genInfixBitwise8("\txor e")
-		} else {
-			g.genInfixBitwise("\txor e", "\txor d")
-		}
+	case OperatorAND, OperatorOR, OperatorXOR:
+		g.genInfixBitwiseOp(&i)
 	case OperatorMUL:
 		g.Emitln("\tcall _plz_mul")
 	case OperatorDIV:
 		g.Emitln("\tcall _plz_div")
 	case OperatorMOD:
 		g.Emitln("\tcall _plz_mod")
-	case OperatorEQU:
-		if i.isByteInfix(g) {
-			g.genInfixCmp8(cmpEQ)
-		} else {
-			g.genInfixCmp(cmpEQ)
-		}
-	case OperatorNEQ:
-		if i.isByteInfix(g) {
-			g.genInfixCmp8(cmpNEQ)
-		} else {
-			g.genInfixCmp(cmpNEQ)
-		}
-	case OperatorGT:
-		if i.isByteInfix(g) {
-			g.genInfixCmp8(cmpGT)
-		} else {
-			g.genInfixCmp(cmpGT)
-		}
-	case OperatorLT:
-		if i.isByteInfix(g) {
-			g.genInfixCmp8(cmpLT)
-		} else {
-			g.genInfixCmp(cmpLT)
-		}
-	case OperatorGTE:
-		if i.isByteInfix(g) {
-			g.genInfixCmp8(cmpGTE)
-		} else {
-			g.genInfixCmp(cmpGTE)
-		}
-	case OperatorLTE:
-		if i.isByteInfix(g) {
-			g.genInfixCmp8(cmpLTE)
-		} else {
-			g.genInfixCmp(cmpLTE)
-		}
+	case OperatorEQU, OperatorNEQ, OperatorGT, OperatorLT, OperatorGTE, OperatorLTE:
+		g.genInfixCmp(&i)
 	}
 	return nil
 }
@@ -1041,6 +954,64 @@ func (g *Gen) genInfixAdd() {
 func (g *Gen) genInfixSub() {
 	g.Emitln("\tor a")
 	g.Emitln("\tsbc hl, de")
+}
+
+// genInfixBitwiseOp emits AND, OR, or XOR for the current infix expression.
+// If both operands are BYTE-typed it uses 8-bit (single-byte) operations,
+// otherwise it uses 16-bit operations via genInfixBitwise.
+func (g *Gen) genInfixBitwiseOp(i *Infix) {
+	switch i.Operator {
+	case OperatorAND:
+		if g.isByteInfix(i) {
+			g.genInfixBitwise8("\tand e")
+		} else {
+			g.genInfixBitwise("\tand e", "\tand d")
+		}
+	case OperatorOR:
+		if g.isByteInfix(i) {
+			g.genInfixBitwise8("\tor e")
+		} else {
+			g.genInfixBitwise("\tor e", "\tor d")
+		}
+	case OperatorXOR:
+		if g.isByteInfix(i) {
+			g.genInfixBitwise8("\txor e")
+		} else {
+			g.genInfixBitwise("\txor e", "\txor d")
+		}
+	}
+}
+
+// genInfixCmp emits a single comparison operator (EQU/NEQ/GT/LT/GTE/LTE)
+// for the current infix expression. If both operands are BYTE-typed it uses
+// 8-bit comparisons, otherwise 16-bit comparisons.
+func (g *Gen) genInfixCmp(i *Infix) {
+	kind := cmpOpToKind(i.Operator)
+	if g.isByteInfix(i) {
+		g.genInfixCmp8(kind)
+	} else {
+		g.genInfixCmpWord(kind)
+	}
+}
+
+// cmpOpToKind maps an infix comparison operator to the cmpKind enum.
+func cmpOpToKind(op Operator) cmpKind {
+	switch op {
+	case OperatorEQU:
+		return cmpEQ
+	case OperatorNEQ:
+		return cmpNEQ
+	case OperatorGT:
+		return cmpGT
+	case OperatorLT:
+		return cmpLT
+	case OperatorGTE:
+		return cmpGTE
+	case OperatorLTE:
+		return cmpLTE
+	default:
+		return cmpEQ
+	}
 }
 
 func (g *Gen) genInfixShiftLeft(rhs Operand) {
@@ -1097,7 +1068,7 @@ func (g *Gen) genInfixBitwise8(byteOp string) {
 	g.Emitln("\tld h, 0")
 }
 
-func (g *Gen) genInfixCmp(kind cmpKind) {
+func (g *Gen) genInfixCmpWord(kind cmpKind) {
 	n := g.nextLabel()
 	g.genWordCmp(kind, n)
 }
@@ -1474,14 +1445,14 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 	}
 	name := string(ref.Identifier)
 	args := operands[1:]
-	proc, ok := g.Checker.Procedures[name]
+	pd := g.Checker.ProcData(name)
 
 	genCallArg := func(i int) error {
 		e := args[i].Expr()
 		if e == nil {
 			return fmt.Errorf("cannot evaluate argument %d", i)
 		}
-		return g.genCallArg(*e, proc, ok, i)
+		return g.genCallArg(*e, pd, i)
 	}
 
 	switch len(args) {
@@ -1500,7 +1471,7 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 		}
 		g.Emitln("\tpop de")
 	default:
-		totalExtra := g.emitExtraCallArgs(name, proc, ok, genCallArg, len(args))
+		totalExtra := g.emitExtraCallArgs(name, pd, genCallArg, len(args))
 		if err := genCallArg(1); err != nil {
 			return err
 		}
@@ -1509,7 +1480,7 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 			return err
 		}
 		g.Emitln("\tpop de")
-		isReentrant := !ok || proc.Reentrant
+		isReentrant := pd == nil || pd.Reentrant
 		g.Emitf("\tcall _plz_%s\n", name)
 		if isReentrant && totalExtra > 0 {
 			g.Emitf("\tld hl, %d\n", totalExtra)
@@ -1561,7 +1532,7 @@ func (s Let) Gen(g *Gen) error {
 }
 
 func (g *Gen) genLetSimple(s Let) error {
-	if s.isByteRef(g) {
+	if g.isByteRef(&s.Reference) {
 		g.Emitln("\tld a, l")
 		g.Emitf("\tld (%s), a\n", g.localSym(s.Identifier))
 	} else {
@@ -1733,7 +1704,7 @@ func findField(rec *Record, name Identifier) int {
 // emitTarget2Store emits code to store the second return value (in DE) into
 // the target reference. Only simple variable targets are supported.
 func (g *Gen) emitTarget2Store(t2 *Reference) {
-	if t2.isByteRef(g) {
+	if g.isByteRef(t2) {
 		g.Emitln("\tld a, e")
 		g.Emitf("\tld (%s), a\n", g.localSym(t2.Identifier))
 	} else {
@@ -1741,151 +1712,158 @@ func (g *Gen) emitTarget2Store(t2 *Reference) {
 	}
 }
 
-// Gen generates assembly for a group statement. It handles three forms:
-// WHILE loops (condition checked at top), FOR loops (with start, end, optional
-// step), and bare DO...END compound blocks (introducing a new scope).
+// Gen generates assembly for a group statement (WHILE, FOR, CASE, or DO...END).
 func (s Group) Gen(g *Gen) error {
 	switch {
 	case s.While != nil:
-		n := g.nextLabel()
-		g.Emitf("_while_%d:\n", n)
-		if err := g.genCondBranch(s.While.Expression, fmt.Sprintf("_end_%d", n)); err != nil {
-			return err
-		}
-		g.pushScope()
-		defer g.popScope()
-		for _, stmt := range s.Statements {
-			if err := stmt.Gen(g); err != nil {
-				return err
-			}
-		}
-		g.Emitf("\tjmp _while_%d\n", n)
-		g.Emitf("_end_%d:\n", n)
-
+		return g.genWhileGroup(s)
 	case s.For != nil:
-		n := g.nextLabel()
-		stepLabel := fmt.Sprintf("_for_step_%d", n)
-		endLabel := fmt.Sprintf("_for_end_%d", n)
-		g.addForTemp(stepLabel)
-		g.addForTemp(endLabel)
-
-		// Evaluate step (default 1), store in temp variable
-		if s.For.By != nil {
-			if err := s.For.By.Gen(g); err != nil {
-				return err
-			}
-		} else {
-			g.Emitln("\tld hl, 1")
-		}
-		g.Emitf("\tld (%s), hl\n", stepLabel)
-
-		// Evaluate end, store in temp variable
-		if err := s.For.To.Gen(g); err != nil {
-			return err
-		}
-		g.Emitf("\tld (%s), hl\n", endLabel)
-
-		// Initialize var = start
-		if err := s.For.Start.Gen(g); err != nil {
-			return err
-		}
-		g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
-
-		g.Emitf("_for_%d:\n", n)
-		// Compare var with end (hl = end - var)
-		g.Emitf("\tld hl, (%s)\n", endLabel)
-		g.Emitf("\tld de, (%s)\n", g.localSym(s.For.Reference.Identifier))
-		g.Emitln("\tor a")
-		g.Emitln("\tsbc hl, de")         // hl = end - var
-		g.Emitf("\tjmp c, _end_%d\n", n) // end < var → exit
-
-		// Body
-		g.pushScope()
-		defer g.popScope()
-		for _, stmt := range s.Statements {
-			if err := stmt.Gen(g); err != nil {
-				return err
-			}
-		}
-
-		// var += step
-		g.Emitf("\tld hl, (%s)\n", stepLabel)
-		g.Emitf("\tld de, (%s)\n", g.localSym(s.For.Reference.Identifier))
-		g.Emitln("\tadd hl, de")
-		g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
-		g.Emitf("\tjmp _for_%d\n", n)
-		g.Emitf("_end_%d:\n", n)
-
+		return g.genForGroup(s)
 	case s.Case != nil:
-		// CASE: evaluate selector, compare against each branch value, jump
-		// to the matching branch body, then to end. If no branch matches,
-		// execute the DEFAULT body (if present) or fall through to end.
+		return g.genCaseGroup(s)
+	default:
+		return g.genDoGroup(s)
+	}
+}
 
-		if err := s.Case.Expression.Gen(g); err != nil {
+func (g *Gen) genWhileGroup(s Group) error {
+	n := g.nextLabel()
+	g.Emitf("_while_%d:\n", n)
+	if err := g.genCondBranch(s.While.Expression, fmt.Sprintf("_end_%d", n)); err != nil {
+		return err
+	}
+	g.pushScope()
+	defer g.popScope()
+	for _, stmt := range s.Statements {
+		if err := stmt.Gen(g); err != nil {
 			return err
 		}
+	}
+	g.Emitf("\tjmp _while_%d\n", n)
+	g.Emitf("_end_%d:\n", n)
+	return nil
+}
 
-		n := g.nextLabel()
-		endLabel := fmt.Sprintf("_case_end_%d", n)
+func (g *Gen) genForGroup(s Group) error {
+	n := g.nextLabel()
+	stepLabel := fmt.Sprintf("_for_step_%d", n)
+	endLabel := fmt.Sprintf("_for_end_%d", n)
+	g.addForTemp(stepLabel)
+	g.addForTemp(endLabel)
 
-		// Save selector on stack for comparison against each value, then
-		// emit a comparison chain. Each branch may have multiple values.
-		g.Emitln("\tpush hl")
-		for i, branch := range s.Case.Branches {
-			branchLabel := fmt.Sprintf("_case_%d_%d", n, i)
-			for _, cv := range branch.Values {
-				v, err := g.resolveCaseVal(cv)
-				if err != nil {
-					return err
-				}
-				g.Emitln("\tpop hl")
-				g.Emitln("\tpush hl")
-				g.Emitf("\tld de, %d\n", v)
-				g.Emitln("\tor a")
-				g.Emitln("\tsbc hl, de")
-				g.Emitf("\tjmp z, %s\n", branchLabel)
+	// Evaluate step (default 1), store in temp variable
+	if s.For.By != nil {
+		if err := s.For.By.Gen(g); err != nil {
+			return err
+		}
+	} else {
+		g.Emitln("\tld hl, 1")
+	}
+	g.Emitf("\tld (%s), hl\n", stepLabel)
+
+	// Evaluate end, store in temp variable
+	if err := s.For.To.Gen(g); err != nil {
+		return err
+	}
+	g.Emitf("\tld (%s), hl\n", endLabel)
+
+	// Initialize var = start
+	if err := s.For.Start.Gen(g); err != nil {
+		return err
+	}
+	g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
+
+	g.Emitf("_for_%d:\n", n)
+	// Compare var with end (hl = end - var)
+	g.Emitf("\tld hl, (%s)\n", endLabel)
+	g.Emitf("\tld de, (%s)\n", g.localSym(s.For.Reference.Identifier))
+	g.Emitln("\tor a")
+	g.Emitln("\tsbc hl, de")
+	g.Emitf("\tjmp c, _end_%d\n", n)
+
+	// Body
+	g.pushScope()
+	defer g.popScope()
+	for _, stmt := range s.Statements {
+		if err := stmt.Gen(g); err != nil {
+			return err
+		}
+	}
+
+	// var += step
+	g.Emitf("\tld hl, (%s)\n", stepLabel)
+	g.Emitf("\tld de, (%s)\n", g.localSym(s.For.Reference.Identifier))
+	g.Emitln("\tadd hl, de")
+	g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
+	g.Emitf("\tjmp _for_%d\n", n)
+	g.Emitf("_end_%d:\n", n)
+	return nil
+}
+
+func (g *Gen) genCaseGroup(s Group) error {
+	if err := s.Case.Expression.Gen(g); err != nil {
+		return err
+	}
+
+	n := g.nextLabel()
+	endLabel := fmt.Sprintf("_case_end_%d", n)
+
+	// Save selector on stack for comparison against each value.
+	g.Emitln("\tpush hl")
+	for i, branch := range s.Case.Branches {
+		branchLabel := fmt.Sprintf("_case_%d_%d", n, i)
+		for _, cv := range branch.Values {
+			v, err := g.resolveCaseVal(cv)
+			if err != nil {
+				return err
 			}
-		}
-
-		// No match: clean stack.
-		g.Emitln("\tpop hl")
-
-		// Compute the default jump target (default label or end).
-		nomatchLabel := endLabel
-		if s.Case.Default != nil {
-			nomatchLabel = fmt.Sprintf("_case_dflt_%d", n)
-		}
-		g.Emitf("\tjmp %s\n", nomatchLabel)
-
-		// Emit branch bodies (all jump to end).
-		for i, branch := range s.Case.Branches {
-			label := fmt.Sprintf("_case_%d_%d", n, i)
-			g.Emitf("%s:\n", label)
 			g.Emitln("\tpop hl")
-			if err := branch.Statement.Gen(g); err != nil {
-				return err
-			}
-			g.Emitf("\tjmp %s\n", endLabel)
+			g.Emitln("\tpush hl")
+			g.Emitf("\tld de, %d\n", v)
+			g.Emitln("\tor a")
+			g.Emitln("\tsbc hl, de")
+			g.Emitf("\tjmp z, %s\n", branchLabel)
 		}
+	}
 
-		// Emit default body if present, falling through to end.
-		if s.Case.Default != nil {
-			g.Emitf("%s:\n", nomatchLabel)
-			if err := s.Case.Default.Gen(g); err != nil {
-				return err
-			}
+	// No match: clean stack.
+	g.Emitln("\tpop hl")
+
+	nomatchLabel := endLabel
+	if s.Case.Default != nil {
+		nomatchLabel = fmt.Sprintf("_case_dflt_%d", n)
+	}
+	g.Emitf("\tjmp %s\n", nomatchLabel)
+
+	// Emit branch bodies (all jump to end).
+	for i, branch := range s.Case.Branches {
+		label := fmt.Sprintf("_case_%d_%d", n, i)
+		g.Emitf("%s:\n", label)
+		g.Emitln("\tpop hl")
+		if err := branch.Statement.Gen(g); err != nil {
+			return err
 		}
+		g.Emitf("\tjmp %s\n", endLabel)
+	}
 
-		g.Emitf("%s:\n", endLabel)
+	// Emit default body if present.
+	if s.Case.Default != nil {
+		g.Emitf("%s:\n", nomatchLabel)
+		if err := s.Case.Default.Gen(g); err != nil {
+			return err
+		}
+	}
 
-	default:
-		// Bare DO...END: push scope and emit statements
-		g.pushScope()
-		defer g.popScope()
-		for _, stmt := range s.Statements {
-			if err := stmt.Gen(g); err != nil {
-				return err
-			}
+	g.Emitf("%s:\n", endLabel)
+	return nil
+}
+
+func (g *Gen) genDoGroup(s Group) error {
+	g.pushScope()
+	defer g.popScope()
+	for _, stmt := range s.Statements {
+		if err := stmt.Gen(g); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -2008,10 +1986,10 @@ func (s Return) Gen(g *Gen) error {
 func (s Call) Gen(g *Gen) error {
 	name := string(s.Identifier)
 	args := s.Arguments
-	proc, procOk := g.Checker.Procedures[name]
+	pd := g.Checker.ProcData(name)
 
 	genCallArg := func(i int) error {
-		return g.genCallArg(args[i], proc, procOk, i)
+		return g.genCallArg(args[i], pd, i)
 	}
 
 	switch len(args) {
@@ -2030,7 +2008,7 @@ func (s Call) Gen(g *Gen) error {
 		}
 		g.Emitln("\tpop de")
 	default:
-		totalExtra := g.emitExtraCallArgs(name, proc, procOk, genCallArg, len(args))
+		totalExtra := g.emitExtraCallArgs(name, pd, genCallArg, len(args))
 		if err := genCallArg(1); err != nil {
 			return err
 		}
@@ -2039,7 +2017,7 @@ func (s Call) Gen(g *Gen) error {
 			return err
 		}
 		g.Emitln("\tpop de")
-		isReentrant := !procOk || proc.Reentrant
+		isReentrant := pd == nil || pd.Reentrant
 		g.Emitf("\tcall _plz_%s\n", name)
 		if isReentrant && totalExtra > 0 {
 			g.Emitf("\tld hl, %d\n", totalExtra)
@@ -2054,12 +2032,13 @@ func (s Call) Gen(g *Gen) error {
 
 // genCallArg emits code to load the i-th argument into HL.
 // For RECORD or DATA params it loads the address rather than the value.
-// expr is the AST expression for the argument; proc/ok provide type info.
-func (g *Gen) genCallArg(expr Expression, proc Procedure, ok bool, i int) error {
-	if !ok || i >= len(proc.ParamTypes) {
+// expr is the AST expression for the argument; pd provides type info (nil if
+// the procedure is unknown, in which case the argument is generated normally).
+func (g *Gen) genCallArg(expr Expression, pd *ProcData, i int) error {
+	if pd == nil || i >= len(pd.ParamTypes) {
 		return expr.Gen(g)
 	}
-	pt := proc.ParamTypes[i]
+	pt := pd.ParamTypes[i]
 	if pt.Record() == nil && pt.Predeclared() != PredeclaredData {
 		return expr.Gen(g)
 	}
@@ -2103,16 +2082,16 @@ func (g *Gen) genCallArg(expr Expression, proc Procedure, ok bool, i int) error 
 // non-REENTRANT procedures it stores each extra arg into its dedicated RAM
 // label; for REENTRANT it pushes them right-to-left. Returns total extra bytes
 // pushed (for REENTRANT cleanup).
-func (g *Gen) emitExtraCallArgs(name string, proc Procedure, ok bool, genArg func(int) error, argc int) int {
-	isReentrant := !ok || proc.Reentrant
+func (g *Gen) emitExtraCallArgs(name string, pd *ProcData, genArg func(int) error, argc int) int {
+	isReentrant := pd == nil || pd.Reentrant
 	var totalExtra int
 	if !isReentrant {
 		for i := 2; i < argc; i++ {
 			if err := genArg(i); err != nil {
 				panic(err)
 			}
-			paramName := proc.Parameters[i]
-			if ok && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared() == PredeclaredByte {
+			paramName := pd.Params[i]
+			if i < len(pd.ParamTypes) && pd.ParamTypes[i].Predeclared() == PredeclaredByte {
 				g.Emitf("\tld a, l\n\tld (_plz_%s_%s), a\n", name, paramName)
 			} else {
 				g.Emitf("\tld (_plz_%s_%s), hl\n", name, paramName)
@@ -2124,7 +2103,7 @@ func (g *Gen) emitExtraCallArgs(name string, proc Procedure, ok bool, genArg fun
 				panic(err)
 			}
 			psize := 2
-			if ok && i < len(proc.ParamTypes) && proc.ParamTypes[i].Predeclared() == PredeclaredByte {
+			if i < len(pd.ParamTypes) && pd.ParamTypes[i].Predeclared() == PredeclaredByte {
 				psize = 1
 			}
 			totalExtra += psize

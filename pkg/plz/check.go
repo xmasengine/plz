@@ -8,7 +8,6 @@ import "fmt"
 type Checker struct {
 	current     *Scope                 // innermost scope during checking
 	root        *Scope                 // global scope
-	Procedures  map[string]Procedure   // Procedures is a map of procedure name to definition
 	Tasks       map[string]int         // Tasks is a map of task name to task index
 	TaskDefs    []Task                 // TaskDefs are the task definitions in order
 	Constants   map[Identifier]Literal // Constants are named constant values
@@ -41,7 +40,6 @@ func (c *Checker) inTask() bool {
 // NewChecker returns a new Checker with an initialized global scope.
 func NewChecker() *Checker {
 	c := &Checker{
-		Procedures:  make(map[string]Procedure),
 		Tasks:       make(map[string]int),
 		Constants:   make(map[Identifier]Literal),
 		Datas:       make(map[Identifier]Data),
@@ -74,9 +72,10 @@ func (c *Checker) pushTaskScope(name string) {
 
 // pushProcedureScope creates a new procedure scope with the given name,
 // registers it as a child of the current scope, and makes it the new
-// current scope.
-func (c *Checker) pushProcedureScope(name string) {
-	s := NewProcScope(name, c.current)
+// current scope. The procedure's parameter metadata (names, types,
+// reentrant flag) is stored on the scope for the generator.
+func (c *Checker) pushProcedureScope(name string, params []Identifier, paramTypes []Type, reentrant bool) {
+	s := NewProcWithData(name, c.current, params, paramTypes, reentrant)
 	c.current.AddChild(s)
 	c.current = s
 }
@@ -100,6 +99,27 @@ func (c *Checker) currentProcName() string {
 		}
 	}
 	return ""
+}
+
+// ProcScope finds a procedure scope by name in the scope tree, returning
+// nil if no matching procedure is found. It replaces flat-map lookups in
+// Checker.Procedures.
+func (c *Checker) ProcScope(name string) *Scope {
+	for _, child := range c.root.Children {
+		if child.IsProc && child.Name == name {
+			return child
+		}
+	}
+	return nil
+}
+
+// ProcData returns the procedure metadata (parameter types, reentrant flag)
+// for a named procedure, or nil if the procedure does not exist.
+func (c *Checker) ProcData(name string) *ProcData {
+	if s := c.ProcScope(name); s != nil {
+		return s.ProcData
+	}
+	return nil
 }
 
 // popScope restores the parent scope as the current innermost scope.
@@ -296,17 +316,17 @@ func (p Program) Check(c *Checker) error {
 
 		case Procedure:
 			name := cmd.Name.Name
-			if _, ok := c.Procedures[name]; ok {
+			if _, ok := c.current.Symbols[Identifier(name)]; ok {
 				return c.Errorf("", "duplicate procedure %q", name)
 			}
-			c.Procedures[name] = cmd
-			// Register procedure name in global scope so CALL expressions resolve it.
-			if _, ok := c.current.Symbols[Identifier(name)]; !ok {
-				c.current.Symbols[Identifier(name)] = Declare{
-					Identifier: Identifier(name),
-					Type:       Type{Typ: &PredeclaredType{Kind: PredeclaredWord}},
-				}
+			c.current.Symbols[Identifier(name)] = Declare{
+				Identifier: Identifier(name),
+				Type:       Type{Typ: &PredeclaredType{Kind: PredeclaredWord}},
 			}
+			// Create procedure scope now so the call graph pass and any
+			// forward references from later checks can find it via ProcScope.
+			c.pushProcedureScope(name, cmd.Parameters, cmd.ParamTypes, cmd.Reentrant)
+			c.popScope()
 		}
 	}
 
@@ -466,7 +486,7 @@ func (c *Checker) findRecursion(proc string, graph map[string]map[string]bool) s
 		stack[node] = true
 		path = append(path, node)
 		for callee := range graph[node] {
-			if _, ok := c.Procedures[callee]; ok {
+			if c.ProcScope(callee) != nil {
 				if msg := dfs(callee); msg != "" {
 					path = path[:len(path)-1]
 					delete(stack, node)
@@ -544,7 +564,7 @@ func (s BankStmt) Check(c *Checker) error {
 // that the target identifier names a declared procedure and that the
 // interrupt vector has not already been installed.
 func (s InterruptStmt) Check(c *Checker) error {
-	if _, ok := c.Procedures[string(s.Target)]; !ok {
+	if c.ProcData(string(s.Target)) == nil {
 		return fmt.Errorf("INTERRUPT/NMI: undefined procedure %q", s.Target)
 	}
 	addr := 0x0038
@@ -860,7 +880,12 @@ func (s Procedure) Check(c *Checker) error {
 	if c.inProcedure() {
 		return c.Errorf("", "nested procedure %q (procedures cannot be defined inside other procedures)", s.Name.Name)
 	}
-	c.pushProcedureScope(s.Name.Name)
+	// Scope was already created in pass 1; just navigate to it.
+	procScope := c.ProcScope(s.Name.Name)
+	if procScope == nil {
+		return c.Errorf("", "internal: procedure scope for %q not found", s.Name.Name)
+	}
+	c.current = procScope
 	defer c.popScope()
 	// Register parameters in the procedure scope.
 	for i, param := range s.Parameters {
@@ -967,17 +992,17 @@ func (s GoTo) Check(c *Checker) error {
 // Check validates a CALL statement by checking each argument expression.
 func (s Call) Check(c *Checker) error {
 	id := string(s.Reference.Identifier)
-	proc, ok := c.Procedures[id]
-	if !ok {
+	pd := c.ProcData(id)
+	if pd == nil {
 		return c.Errorf("", "CALL: %s unknown procedure", id)
 	}
 
-	if cur := c.currentProcName(); cur == id && !proc.Reentrant {
+	if cur := c.currentProcName(); cur == id && !pd.Reentrant {
 		return c.Errorf("", "CALL: %s is non-REENTRANT and calls itself directly", id)
 	}
 
 	obs := len(s.Arguments)
-	ex := len(proc.Parameters)
+	ex := len(pd.Params)
 
 	if ex != obs {
 		return c.Errorf("", "CALL: argument count is %d, expected %d", obs, ex)
@@ -1125,12 +1150,12 @@ func (s Suffix) Check(c *Checker) error {
 	if s.Operator == OperatorCALL {
 		if called := s.Operands[0].Ref(); called != nil {
 			id := string(called.Identifier)
-			proc, ok := c.Procedures[id]
-			if !ok {
+			pd := c.ProcData(id)
+			if pd == nil {
 				return c.Errorf("", "CALL: %s unknown procedure", id)
 			}
 			obs := len(s.Operands) - 1
-			ex := len(proc.Parameters)
+			ex := len(pd.Params)
 			if ex != obs {
 				return c.Errorf("", "CALL: argument count is %d, expected %d", ex, obs)
 			}
