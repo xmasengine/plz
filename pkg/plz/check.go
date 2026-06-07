@@ -8,8 +8,6 @@ import "fmt"
 type Checker struct {
 	current     *Scope                 // innermost scope during checking
 	root        *Scope                 // global scope
-	Tasks       map[string]int         // Tasks is a map of task name to task index
-	TaskDefs    []Task                 // TaskDefs are the task definitions in order
 	usedVectors map[int]bool           // interrupt vectors already installed
 	usedRanges  map[int]int            // usedRanges tracks AT-placed address ranges (start addr → size)
 }
@@ -37,7 +35,6 @@ func (c *Checker) inTask() bool {
 // NewChecker returns a new Checker with an initialized global scope.
 func NewChecker() *Checker {
 	c := &Checker{
-		Tasks:       make(map[string]int),
 		usedVectors: make(map[int]bool),
 		usedRanges:  make(map[int]int),
 	}
@@ -107,6 +104,16 @@ func (c *Checker) ProcScope(name string) *Scope {
 	return nil
 }
 
+// findTaskScope returns the task scope for a named task, or nil if not found.
+func (c *Checker) findTaskScope(name string) *Scope {
+	for _, child := range c.root.Children {
+		if child.IsTask && child.Name == name {
+			return child
+		}
+	}
+	return nil
+}
+
 // ProcData returns the procedure metadata (parameter types, reentrant flag)
 // for a named procedure, or nil if the procedure does not exist.
 func (c *Checker) ProcData(name string) *ProcData {
@@ -114,6 +121,42 @@ func (c *Checker) ProcData(name string) *ProcData {
 		return s.ProcData
 	}
 	return nil
+}
+
+// countTasks returns the number of task scopes registered in the root scope.
+func (c *Checker) countTasks() int {
+	n := 0
+	for _, child := range c.root.Children {
+		if child.IsTask {
+			n++
+		}
+	}
+	return n
+}
+
+// TaskIndex returns the index (0-based) of a named task, or -1 if not found.
+func (c *Checker) TaskIndex(name string) int {
+	idx := 0
+	for _, child := range c.root.Children {
+		if child.IsTask {
+			if child.Name == name {
+				return idx
+			}
+			idx++
+		}
+	}
+	return -1
+}
+
+// TaskDefs returns the ordered list of task definitions from the scope tree.
+func (c *Checker) TaskDefs() []Task {
+	var defs []Task
+	for _, child := range c.root.Children {
+		if child.IsTask && child.TaskData != nil {
+			defs = append(defs, *child.TaskData)
+		}
+	}
+	return defs
 }
 
 // popScope restores the parent scope as the current innermost scope.
@@ -298,15 +341,19 @@ func (p Program) Check(c *Checker) error {
 		switch cmd := stmt.Command.(type) {
 		case Task:
 			name := cmd.Name.Name
-			if _, ok := c.Tasks[name]; ok {
+			if _, ok := c.current.Symbols[Identifier(name)]; ok {
 				return c.Errorf("", "duplicate task %q", name)
 			}
-			if len(c.TaskDefs) >= 16 {
+			if c.countTasks() >= 16 {
 				return c.Errorf("", "too many tasks (max 16)")
 			}
-			idx := len(c.TaskDefs)
-			c.Tasks[name] = idx
-			c.TaskDefs = append(c.TaskDefs, cmd)
+			c.current.Symbols[Identifier(name)] = Declare{
+				Identifier: Identifier(name),
+				Type:       Type{Typ: &PredeclaredType{Kind: PredeclaredWord}},
+			}
+			c.pushTaskScope(name)
+			c.current.TaskData = &cmd
+			c.popScope()
 
 		case Procedure:
 			name := cmd.Name.Name
@@ -399,8 +446,12 @@ func (c *Checker) collectLabelsWithScope(s Statement, depth int) {
 			c.current = c.current.Parent
 		}
 	case Task:
-		for _, stmt := range cmd.Body {
-			c.collectLabelsWithScope(stmt, depth)
+		if taskScope := c.findTaskScope(cmd.Name.Name); taskScope != nil {
+			c.current = taskScope
+			for _, stmt := range cmd.Body {
+				c.collectLabelsWithScope(stmt, depth)
+			}
+			c.current = c.current.Parent
 		}
 	case If:
 		c.collectLabelsWithScope(cmd.Then, depth)
@@ -909,7 +960,12 @@ func (s Procedure) Check(c *Checker) error {
 // Check validates a task definition. It pushes a new scope for the task body
 // and validates each statement within it.
 func (t Task) Check(c *Checker) error {
-	c.pushTaskScope(t.Name.Name)
+	// Scope was already created in pass 1; navigate to it.
+	taskScope := c.findTaskScope(t.Name.Name)
+	if taskScope == nil {
+		return c.Errorf("", "internal: task scope for %q not found", t.Name.Name)
+	}
+	c.current = taskScope
 	defer c.popScope()
 	for i := range t.Body {
 		if err := t.Body[i].Check(c); err != nil {
@@ -922,7 +978,7 @@ func (t Task) Check(c *Checker) error {
 // Check validates a SUSPEND statement by verifying that the named task has
 // been declared.
 func (s Suspend) Check(c *Checker) error {
-	if _, ok := c.Tasks[string(s.Name)]; !ok {
+	if c.findTaskScope(string(s.Name)) == nil {
 		return c.Errorf("", "undeclared task %q", s.Name)
 	}
 	return nil
@@ -931,7 +987,7 @@ func (s Suspend) Check(c *Checker) error {
 // Check validates a RESUME statement by verifying that the named task has
 // been declared.
 func (s Resume) Check(c *Checker) error {
-	if _, ok := c.Tasks[string(s.Name)]; !ok {
+	if c.findTaskScope(string(s.Name)) == nil {
 		return c.Errorf("", "undeclared task %q", s.Name)
 	}
 	return nil
@@ -939,14 +995,14 @@ func (s Resume) Check(c *Checker) error {
 
 // Check validates a SLEEP statement by checking its duration expression.
 func (s Sleep) Check(c *Checker) error {
-	if len(c.Tasks) == 0 {
+	if c.countTasks() == 0 {
 		return c.Errorf("", "SLEEP requires at least one task")
 	}
 	return s.Duration.Check(c)
 }
 
 func (s Yield) Check(c *Checker) error {
-	if len(c.Tasks) == 0 {
+	if c.countTasks() == 0 {
 		return c.Errorf("", "YIELD requires at least one task")
 	}
 	return nil

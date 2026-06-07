@@ -372,8 +372,9 @@ func (p Program) Gen(g *Gen) error {
 	g.Emit(RuntimeHeader)
 	g.Emitln("_plz_start:")
 
-	if len(c.TaskDefs) > 0 {
-		g.genTaskInit(c.TaskDefs)
+	taskDefs := c.TaskDefs()
+	if len(taskDefs) > 0 {
+		g.genTaskInit(taskDefs)
 	}
 
 	procedures, dataStmts, dataItems := g.genClassifyStmts(p.Statements)
@@ -429,11 +430,12 @@ func (g *Gen) genEmitSections(c *Checker, procedures []Procedure, dataStmts []Da
 		}
 	}
 
-	taskDeclares := g.genTaskBodies(c.TaskDefs)
+	taskDefs := c.TaskDefs()
+	taskDeclares := g.genTaskBodies(taskDefs)
 
 	g.genStringData()
-	if len(c.TaskDefs) > 0 {
-		g.genSchedulerRuntime(c.TaskDefs)
+	if len(taskDefs) > 0 {
+		g.genSchedulerRuntime(taskDefs)
 	}
 	g.genProcStorage(procedures)
 	g.genForTemps()
@@ -2572,8 +2574,8 @@ func (s Constant) Gen(g *Gen) error {
 // Gen generates assembly for a SUSPEND statement, setting the target task's
 // state byte to 1 (SUSPENDED).
 func (s Suspend) Gen(g *Gen) error {
-	idx, ok := g.Checker.Tasks[string(s.Name)]
-	if !ok {
+	idx := g.Checker.TaskIndex(string(s.Name))
+	if idx < 0 {
 		return fmt.Errorf("undeclared task %q", s.Name)
 	}
 	g.Emitf("\tld a, 1\n")
@@ -2583,10 +2585,10 @@ func (s Suspend) Gen(g *Gen) error {
 
 // Gen generates assembly for a RESUME statement, clearing the target task's
 // state byte to 0 (READY).
-func (r Resume) Gen(g *Gen) error {
-	idx, ok := g.Checker.Tasks[string(r.Name)]
-	if !ok {
-		return fmt.Errorf("undeclared task %q", r.Name)
+func (s Resume) Gen(g *Gen) error {
+	idx := g.Checker.TaskIndex(string(s.Name))
+	if idx < 0 {
+		return fmt.Errorf("undeclared task %q", s.Name)
 	}
 	g.Emitf("\txor a\n")
 	g.Emitf("\tld (_plz_tcbs+%d), a\n", idx*8+2)

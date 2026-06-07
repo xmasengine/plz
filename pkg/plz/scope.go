@@ -14,6 +14,7 @@ type Scope struct {
 	Symbols  map[Identifier]Declare // Symbols in this scope
 	Children []*Scope               // Child scopes forming the persistent scope tree
 	ProcData *ProcData              // Procedure metadata (set for procedure scopes)
+	TaskData *Task                  // Task definition (set for task scopes)
 	Labels   map[string]int         // Named labels in this scope → loop nesting depth
 }
 
