@@ -467,6 +467,8 @@ type Declare struct {
 	Initializer *Initializer
 	At          *Expression // Absolute address (no initializer allowed)
 	ParamRef    bool        // True when this is a record/array parameter (passed by reference)
+	ConstantValue *Literal  // Set for CONSTANT declarations
+	DataValue     *Data     // Set for DATA declarations
 }
 
 // Initializer wraps an Expression to provide an initial value for a

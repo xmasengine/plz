@@ -710,9 +710,9 @@ func (o Operand) Gen(g *Gen) error {
 			g.Emitf("\tld hl, %s\n", label)
 		}
 	case o.Reference() != nil:
-		if g.Checker != nil {
-			if lit, ok := g.Checker.Constants[o.Reference().Identifier]; ok {
-				if n := lit.Number(); n != nil {
+		if g.currentScope != nil {
+			if d, ok := g.currentScope.Lookup(o.Reference().Identifier); ok && d.ConstantValue != nil {
+				if n := d.ConstantValue.Number(); n != nil {
 					g.Emitf("\tld hl, %d\n", n.Value)
 					break
 				}
@@ -1384,17 +1384,17 @@ func (g *Gen) indexElemAndBounds(ref *Reference, baseSuffix *Suffix) (elem int, 
 			if arr := t.Array(); arr != nil {
 				arrSize = arr.Size
 			}
-		} else if data, ok := g.Checker.Datas[ref.Identifier]; ok {
-			if data.Tile != nil {
-				arrSize = len(data.Tile.Tiles)
-			} else if data.Text != nil {
-				arrSize = len(data.Text.Value) + 1
+		} else if d, ok := g.currentScope.Lookup(ref.Identifier); ok && d.DataValue != nil {
+			if d.DataValue.Tile != nil {
+				arrSize = len(d.DataValue.Tile.Tiles)
+			} else if d.DataValue.Text != nil {
+				arrSize = len(d.DataValue.Text.Value) + 1
 			} else {
-				arrSize = len(data.Values)
+				arrSize = len(d.DataValue.Values)
 			}
 		}
 	}
-	if _, ok := g.Checker.Datas[ref.Identifier]; ok {
+	if d, ok := g.currentScope.Lookup(ref.Identifier); ok && d.DataValue != nil {
 		elem = 1
 	}
 	return elem, arrSize, nil
@@ -2173,11 +2173,11 @@ func (g *Gen) resolveCaseVal(cv CaseVal) (int, error) {
 	if cv.Name == "" {
 		return cv.Value, nil
 	}
-	lit, ok := g.Checker.Constants[Identifier(cv.Name)]
-	if !ok {
+	d, ok := g.currentScope.Lookup(Identifier(cv.Name))
+	if !ok || d.ConstantValue == nil {
 		return 0, fmt.Errorf("CASE: undefined constant %q", cv.Name)
 	}
-	if n := lit.Number(); n != nil {
+	if n := d.ConstantValue.Number(); n != nil {
 		return n.Value, nil
 	}
 	return 0, fmt.Errorf("CASE: constant %q is not a number", cv.Name)
@@ -2448,10 +2448,10 @@ func (s Load) Gen(g *Gen) error {
 }
 
 // saveSize returns the byte size of the data referenced by the given identifier.
-// It handles Declare entries (via Checker.Lookup) and Data blocks (via Checker.Datas).
 func (g *Gen) saveSize(id Identifier) (int, error) {
 	// Check for a DATA block first.
-	if data, ok := g.Checker.Datas[id]; ok {
+	if d, ok := g.currentScope.Lookup(id); ok && d.DataValue != nil {
+		data := d.DataValue
 		if data.Tile != nil {
 			size := 0
 			for _, tile := range data.Tile.Tiles {
@@ -2477,7 +2477,7 @@ func (g *Gen) saveSize(id Identifier) (int, error) {
 		return size, nil
 	}
 	// Fall back to a declared variable/array/record.
-	if d, ok := g.Checker.Lookup(id); ok {
+	if d, ok := g.currentScope.Lookup(id); ok {
 		return d.StorageSize(), nil
 	}
 	return 0, fmt.Errorf("%q not found", id)

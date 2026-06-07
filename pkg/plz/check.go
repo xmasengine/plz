@@ -10,8 +10,6 @@ type Checker struct {
 	root        *Scope                 // global scope
 	Tasks       map[string]int         // Tasks is a map of task name to task index
 	TaskDefs    []Task                 // TaskDefs are the task definitions in order
-	Constants   map[Identifier]Literal // Constants are named constant values
-	Datas       map[Identifier]Data    // Datas are named data values
 	Labels      map[string]int         // Labels are named labels → loop nesting depth
 	usedVectors map[int]bool           // interrupt vectors already installed
 	usedRanges  map[int]int            // usedRanges tracks AT-placed address ranges (start addr → size)
@@ -41,8 +39,6 @@ func (c *Checker) inTask() bool {
 func NewChecker() *Checker {
 	c := &Checker{
 		Tasks:       make(map[string]int),
-		Constants:   make(map[Identifier]Literal),
-		Datas:       make(map[Identifier]Data),
 		Labels:      make(map[string]int),
 		usedVectors: make(map[int]bool),
 		usedRanges:  make(map[int]int),
@@ -160,9 +156,9 @@ func (c *Checker) EvalConstExpr(e Expression) (int, error) {
 				return n.Value, nil
 			}
 			if r := lit.Reference(); r != nil {
-				id := r.Value.Identifier
-				if lit2, ok := c.Constants[id]; ok {
-					if n := lit2.Number(); n != nil {
+				id := Identifier(r.Value.Identifier)
+				if d, ok := c.current.Lookup(id); ok && d.ConstantValue != nil {
+					if n := d.ConstantValue.Number(); n != nil {
 						return n.Value, nil
 					}
 					return 0, fmt.Errorf("constant %q is not a number", id)
@@ -177,8 +173,8 @@ func (c *Checker) EvalConstExpr(e Expression) (int, error) {
 			if len(ref.Subscripts) > 0 || len(ref.Fields) > 0 {
 				return 0, fmt.Errorf("cannot evaluate reference %q as constant expression", ref.Identifier)
 			}
-			if lit, ok := c.Constants[ref.Identifier]; ok {
-				if n := lit.Number(); n != nil {
+			if d, ok := c.current.Lookup(ref.Identifier); ok && d.ConstantValue != nil {
+				if n := d.ConstantValue.Number(); n != nil {
 					return n.Value, nil
 				}
 				return 0, fmt.Errorf("constant %q is not a number", ref.Identifier)
@@ -614,21 +610,30 @@ func (s Declare) Check(c *Checker) error {
 }
 
 // Check evaluates the constant expression and registers the result in the
-// checker's Constants map. Numeric values are stored as NumberLit for use
-// by later constant and code generation passes.
 func (s Constant) Check(c *Checker) error {
 	if s.Expr.Expr == nil {
 		return c.Errorf("", "CONSTANT %s requires a value", s.Name)
+	}
+	if _, ok := c.current.Symbols[Identifier(s.Name)]; ok {
+		return c.Errorf("", "duplicate declaration of %q", s.Name)
 	}
 	if v, err := c.EvalConstExpr(s.Expr); err == nil {
 		if v < -32768 || v > 65535 {
 			return c.Errorf("", "CONSTANT %s = %d does not fit in 16 bits", s.Name, v)
 		}
-		c.Constants[Identifier(s.Name)] = Literal{Lit: &NumberLit{Value: v & 0xFFFF}}
+		c.current.Symbols[Identifier(s.Name)] = Declare{
+			Identifier:    Identifier(s.Name),
+			Type:          Type{Typ: &PredeclaredType{Kind: PredeclaredWord}},
+			ConstantValue: &Literal{Lit: &NumberLit{Value: v & 0xFFFF}},
+		}
 	} else if op := s.Expr.Operand(); op != nil {
 		if lit := op.Literal(); lit != nil {
 			if t := lit.Text(); t != nil {
-				c.Constants[Identifier(s.Name)] = *lit
+				c.current.Symbols[Identifier(s.Name)] = Declare{
+					Identifier:    Identifier(s.Name),
+					Type:          Type{Typ: &PredeclaredType{Kind: PredeclaredWord}},
+					ConstantValue: lit,
+				}
 				return nil
 			}
 		}
@@ -640,11 +645,14 @@ func (s Constant) Check(c *Checker) error {
 }
 
 // Check registers a named data value in the checker's Data map so
-// that references to the data name can be resolved during code generation.
 func (d Data) Check(c *Checker) error {
-	c.Datas[Identifier(d.Name)] = d
 	if d.Tile == nil && d.Text == nil && len(d.Values) < 1 {
 		return c.Errorf("", "%s: DATA statement has no values, TILEs, or TEXT", d.Name)
+	}
+	c.current.Symbols[Identifier(d.Name)] = Declare{
+		Identifier: Identifier(d.Name),
+		Type:       Type{Typ: &PredeclaredType{Kind: PredeclaredData}},
+		DataValue:  &d,
 	}
 	return nil
 }
@@ -686,11 +694,11 @@ func (s Group) Check(c *Checker) error {
 		for _, branch := range s.Case.Branches {
 			for _, cv := range branch.Values {
 				if cv.Name != "" {
-					lit, ok := c.Constants[Identifier(cv.Name)]
-					if !ok {
+					d, ok := c.current.Lookup(Identifier(cv.Name))
+					if !ok || d.ConstantValue == nil {
 						return fmt.Errorf("CASE: undefined constant %q", cv.Name)
 					}
-					if lit.Number() == nil {
+					if d.ConstantValue.Number() == nil {
 						return fmt.Errorf("CASE: constant %q is not a number", cv.Name)
 					}
 				}
@@ -829,7 +837,7 @@ func checkTarget(c *Checker, r Reference) error {
 	if r.Identifier == "" {
 		return nil
 	}
-	if _, ok := c.Constants[r.Identifier]; ok {
+	if d, ok := c.Lookup(r.Identifier); ok && d.ConstantValue != nil {
 		return c.Errorf("", "cannot assign to constant %q", r.Identifier)
 	}
 	for _, sub := range r.Subscripts {
@@ -1070,16 +1078,19 @@ func (o Operand) Check(c *Checker) error {
 // identifier names a declared variable or DATA item and that it is not
 // an unbounded array.
 func (l Length) Check(c *Checker) error {
-	if d, ok := c.Lookup(l.Identifier); ok {
-		if arr := d.Type.Array(); arr != nil && arr.Size == 0 {
-			return c.Errorf("", "LENGTH: cannot determine length of unbounded array %s", l.Identifier)
-		}
+	d, ok := c.Lookup(l.Identifier)
+	if !ok {
+		return c.Errorf("", "LENGTH: undeclared variable or data %s", l.Identifier)
+	}
+	// DATA items are always valid.
+	if d.DataValue != nil {
 		return nil
 	}
-	if _, ok := c.Datas[l.Identifier]; ok {
-		return nil
+	// Unbounded arrays are invalid.
+	if arr := d.Type.Array(); arr != nil && arr.Size == 0 {
+		return c.Errorf("", "LENGTH: cannot determine length of unbounded array %s", l.Identifier)
 	}
-	return c.Errorf("", "LENGTH: undeclared variable or data %s", l.Identifier)
+	return nil
 }
 
 // evalLength returns the declared element count for a LENGTH expression.
@@ -1087,16 +1098,13 @@ func (l Length) Check(c *Checker) error {
 // (non-arrays), length is 1. For DATA items it returns the value count
 // or tile count.
 func (c *Checker) evalLength(l *Length) (int, error) {
-	if d, ok := c.Lookup(l.Identifier); ok {
-		if arr := d.Type.Array(); arr != nil {
-			if arr.Size > 0 {
-				return arr.Size, nil
-			}
-			return 0, c.Errorf("", "LENGTH: cannot determine length of unbounded array %s", l.Identifier)
-		}
-		return 1, nil
+	d, ok := c.Lookup(l.Identifier)
+	if !ok {
+		return 0, c.Errorf("", "LENGTH: undeclared variable or data %s", l.Identifier)
 	}
-	if data, ok := c.Datas[l.Identifier]; ok {
+	// DATA items
+	if d.DataValue != nil {
+		data := d.DataValue
 		if data.Tile != nil {
 			return len(data.Tile.Tiles), nil
 		}
@@ -1105,7 +1113,14 @@ func (c *Checker) evalLength(l *Length) (int, error) {
 		}
 		return len(data.Values), nil
 	}
-	return 0, c.Errorf("", "LENGTH: undeclared variable or data %s", l.Identifier)
+	// Arrays
+	if arr := d.Type.Array(); arr != nil {
+		if arr.Size > 0 {
+			return arr.Size, nil
+		}
+		return 0, c.Errorf("", "LENGTH: cannot determine length of unbounded array %s", l.Identifier)
+	}
+	return 1, nil
 }
 
 // Check validates a prefix expression by checking its single operand.
@@ -1173,14 +1188,14 @@ func (r *Reference) Check(c *Checker) error {
 		return nil
 	}
 	// Constants are resolved during code generation; no declaration needed.
-	if _, ok := c.Constants[r.Identifier]; ok {
+	if d, ok := c.Lookup(r.Identifier); ok && d.ConstantValue != nil {
 		if len(r.Fields) > 0 || len(r.Subscripts) > 0 {
 			return c.Errorf("", "constant %q cannot be subscripted or used with field access", r.Identifier)
 		}
 		return nil
 	}
 	// Data is resolved during code generation; no declaration needed.
-	if _, ok := c.Datas[r.Identifier]; ok {
+	if d, ok := c.Lookup(r.Identifier); ok && d.DataValue != nil {
 		if len(r.Fields) > 0 {
 			return c.Errorf("", "data %q cannot be used with field access", r.Identifier)
 		}
@@ -1229,23 +1244,12 @@ func (r *Reference) Check(c *Checker) error {
 // declared bounds of an array or DATA item. Non-constant subscripts are silently
 // skipped since they can only be checked at runtime.
 func (c *Checker) checkArraySubscript(id Identifier, expr Expression) error {
-	// Check declared variables.
-	if d, ok := c.Lookup(id); ok {
-		arr := d.Type.Array()
-		if arr == nil || arr.Size == 0 {
-			return nil // not an array or unbounded
-		}
-		v, err := c.EvalConstExpr(expr)
-		if err != nil {
-			return nil // non-constant subscript, skip
-		}
-		if v < 0 || v >= arr.Size {
-			return c.Errorf("", "index %d out of bounds for array %q (size %d)", v, id, arr.Size)
-		}
+	d, ok := c.Lookup(id)
+	if !ok {
 		return nil
 	}
 	// Check DATA items.
-	if data, ok := c.Datas[id]; ok {
+	if data := d.DataValue; data != nil {
 		size := 0
 		if data.Tile != nil {
 			size = len(data.Tile.Tiles)
@@ -1264,6 +1268,19 @@ func (c *Checker) checkArraySubscript(id Identifier, expr Expression) error {
 		if v < 0 || v >= size {
 			return c.Errorf("", "index %d out of bounds for data %q (size %d)", v, id, size)
 		}
+		return nil
+	}
+	// Check declared variables (arrays).
+	arr := d.Type.Array()
+	if arr == nil || arr.Size == 0 {
+		return nil // not an array or unbounded
+	}
+	v, err := c.EvalConstExpr(expr)
+	if err != nil {
+		return nil // non-constant subscript, skip
+	}
+	if v < 0 || v >= arr.Size {
+		return c.Errorf("", "index %d out of bounds for array %q (size %d)", v, id, arr.Size)
 	}
 	return nil
 }
