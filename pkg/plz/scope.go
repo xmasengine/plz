@@ -14,6 +14,7 @@ type Scope struct {
 	Symbols  map[Identifier]Declare // Symbols in this scope
 	Children []*Scope               // Child scopes forming the persistent scope tree
 	ProcData *ProcData              // Procedure metadata (set for procedure scopes)
+	Labels   map[string]int         // Named labels in this scope → loop nesting depth
 }
 
 // ProcData holds procedure metadata extracted from the AST for use by the
@@ -32,6 +33,7 @@ func NewScope(name string, parent *Scope) *Scope {
 		Name:    name,
 		Parent:  parent,
 		Symbols: make(map[Identifier]Declare),
+		Labels:  make(map[string]int),
 	}
 }
 
@@ -114,6 +116,17 @@ func (s *Scope) collectNodes(nodes *[]*Scope) {
 	for _, child := range s.Children {
 		child.collectNodes(nodes)
 	}
+}
+
+// FindLabel searches for a label by name, walking the scope chain from this
+// scope upward through ancestors. Returns the loop nesting depth if found.
+func (s *Scope) FindLabel(name string) (int, bool) {
+	for cur := s; cur != nil; cur = cur.Parent {
+		if depth, ok := cur.Labels[name]; ok {
+			return depth, true
+		}
+	}
+	return 0, false
 }
 
 // Depth returns the nesting depth of this scope (0 = root scope).

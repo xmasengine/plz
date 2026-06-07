@@ -10,7 +10,6 @@ type Checker struct {
 	root        *Scope                 // global scope
 	Tasks       map[string]int         // Tasks is a map of task name to task index
 	TaskDefs    []Task                 // TaskDefs are the task definitions in order
-	Labels      map[string]int         // Labels are named labels → loop nesting depth
 	usedVectors map[int]bool           // interrupt vectors already installed
 	usedRanges  map[int]int            // usedRanges tracks AT-placed address ranges (start addr → size)
 }
@@ -39,7 +38,6 @@ func (c *Checker) inTask() bool {
 func NewChecker() *Checker {
 	c := &Checker{
 		Tasks:       make(map[string]int),
-		Labels:      make(map[string]int),
 		usedVectors: make(map[int]bool),
 		usedRanges:  make(map[int]int),
 	}
@@ -349,10 +347,12 @@ func (p Program) Check(c *Checker) error {
 		}
 	}
 
-	// Third pass: walk statements to collect labels.
+	// Third pass: walk statements to collect labels (with scope tracking).
+	c.current = c.root
 	for _, stmt := range p.Statements {
-		c.collectLabels(stmt)
+		c.collectLabelsWithScope(stmt, 0)
 	}
+	c.current = c.root
 
 	// Third pass: walk statements with scope push/pop.
 	for _, stmt := range p.Statements {
@@ -363,16 +363,56 @@ func (p Program) Check(c *Checker) error {
 	return nil
 }
 
-// collectLabels recursively walks statements and their nested bodies to
-// register all named labels in the checker's Labels map. Labels inside
-// loops are recorded with their nesting depth to validate GOTO targets.
-func (c *Checker) collectLabels(s Statement) {
-	c.collectLabelsAtDepth(s, 0)
+// collectLabelsWithScope walks statements with scope tracking and registers
+// labeled statements in the nearest enclosing existing scope's Labels map.
+// Procedure/task scopes were created in pass 1 and are navigated here.
+// Block scopes (WHILE/DO/FOR bodies) don't exist yet and are skipped — labels
+// inside them are scoped to the enclosing procedure or global scope.
+func (c *Checker) collectLabelsWithScope(s Statement, depth int) {
+	if s.Label != nil && s.Label.Name != "" {
+		c.current.Labels[s.Label.Name] = depth
+	}
+	switch cmd := s.Command.(type) {
+	case Group:
+		loopDepth := depth
+		if cmd.For != nil || cmd.While != nil {
+			loopDepth = depth + 1
+		}
+		for _, stmt := range cmd.Statements {
+			c.collectLabelsWithScope(stmt, loopDepth)
+		}
+		if cmd.Case != nil {
+			for _, branch := range cmd.Case.Branches {
+				c.collectLabelsWithScope(branch.Statement, depth)
+			}
+			if cmd.Case.Default != nil {
+				c.collectLabelsWithScope(*cmd.Case.Default, depth)
+			}
+		}
+	case Procedure:
+		// Scope already created in pass 1; navigate to it.
+		if procScope := c.ProcScope(cmd.Name.Name); procScope != nil {
+			c.current = procScope
+			for _, stmt := range cmd.Statements {
+				c.collectLabelsWithScope(stmt, depth)
+			}
+			c.current = c.current.Parent
+		}
+	case Task:
+		for _, stmt := range cmd.Body {
+			c.collectLabelsWithScope(stmt, depth)
+		}
+	case If:
+		c.collectLabelsWithScope(cmd.Then, depth)
+		if cmd.Else != nil {
+			c.collectLabelsWithScope(*cmd.Else, depth)
+		}
+	}
 }
 
 func (c *Checker) collectLabelsAtDepth(s Statement, depth int) {
 	if s.Label != nil && s.Label.Name != "" {
-		c.Labels[s.Label.Name] = depth
+		c.current.Labels[s.Label.Name] = depth
 	}
 	c.walkStmtsDepth(s, func(child Statement, childDepth int) {
 		c.collectLabelsAtDepth(child, childDepth)
@@ -983,7 +1023,7 @@ func (s Return) Check(c *Checker) error {
 
 // Check validates a GOTO statement by verifying that the target label exists.
 func (s GoTo) Check(c *Checker) error {
-	labelDepth, ok := c.Labels[s.Name]
+	labelDepth, ok := c.current.FindLabel(s.Name)
 	if !ok {
 		return c.Errorf("", "GOTO: undefined label %q", s.Name)
 	}
