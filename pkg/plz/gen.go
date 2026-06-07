@@ -987,10 +987,11 @@ func (g *Gen) genInfixBitwiseOp(i *Infix) {
 // 8-bit comparisons, otherwise 16-bit comparisons.
 func (g *Gen) genInfixCmp(i *Infix) {
 	kind := cmpOpToKind(i.Operator)
+	n := g.nextLabel()
 	if g.isByteInfix(i) {
-		g.genInfixCmp8(kind)
+		g.genByteCmp(kind, n)
 	} else {
-		g.genInfixCmpWord(kind)
+		g.genWordCmp(kind, n)
 	}
 }
 
@@ -1068,15 +1069,6 @@ func (g *Gen) genInfixBitwise8(byteOp string) {
 	g.Emitln("\tld h, 0")
 }
 
-func (g *Gen) genInfixCmpWord(kind cmpKind) {
-	n := g.nextLabel()
-	g.genWordCmp(kind, n)
-}
-
-func (g *Gen) genInfixCmp8(kind cmpKind) {
-	n := g.nextLabel()
-	g.genByteCmp(kind, n)
-}
 
 func (g *Gen) genByteCmp(kind cmpKind, n int) {
 	switch kind {
