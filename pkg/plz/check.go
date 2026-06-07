@@ -799,9 +799,6 @@ func (s Load) Check(c *Checker) error {
 	if d, ok := c.Lookup(ref.Identifier); ok && d.StorageSize() == 0 {
 		return c.Errorf("", "LOAD: %q has zero size", ref.Identifier)
 	}
-	if s.Location == nil {
-		// Load from SRAMBase
-	}
 	return nil
 }
 

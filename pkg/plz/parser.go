@@ -243,11 +243,11 @@ func (p *Program) ParseInclude(parser *Parser) error {
 	if err != nil {
 		return filenameTok.Errorf("include: %v", err)
 	}
-	if p.IncludedFiles[absPath] {
-		return filenameTok.Errorf("include: recursive include of %q", incPath)
-	}
 	if p.IncludedFiles == nil {
 		p.IncludedFiles = make(map[string]bool)
+	}
+	if p.IncludedFiles[absPath] {
+		return filenameTok.Errorf("include: recursive include of %q", incPath)
 	}
 	p.IncludedFiles[absPath] = true
 
@@ -283,9 +283,6 @@ func (p *Program) ParseTemplate(parser *Parser) error {
 	parser.Skip(TokenKind(';')) // skip optional semicolon
 	tpl := nameTok.Text
 	body := bodyTok.Text
-	if err != nil {
-		return bodyTok.Errorf("template parse error: %s", err)
-	}
 	if _, ok := p.Templates[tpl]; ok {
 		return nameTok.Errorf("template redefined: %s", tpl)
 	}
