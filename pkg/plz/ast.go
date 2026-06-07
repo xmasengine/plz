@@ -248,7 +248,7 @@ func (t Type) Size() int {
 	if r := t.Record(); r != nil {
 		return nextPow2(r.TotalSize())
 	}
-	if t.Predeclared() == PredeclaredByte {
+	if t.Predeclared() == PredeclaredByte || t.Predeclared() == PredeclaredData {
 		return 1
 	}
 	return 2

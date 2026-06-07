@@ -1280,14 +1280,7 @@ func (g *Gen) elemSize(name Identifier) int {
 	if arr := t.Array(); arr != nil {
 		t = arr.ElemType
 	}
-	if t.Record() != nil {
-		total := t.Record().TotalSize()
-		return nextPow2(total)
-	}
-	if t.Predeclared() == PredeclaredByte || t.Predeclared() == PredeclaredData {
-		return 1
-	}
-	return 2
+	return t.Size()
 }
 
 // genIndexAddr computes the address of arr[index] into HL without loading the
