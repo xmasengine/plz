@@ -410,50 +410,7 @@ func (c *Checker) collectLabelsWithScope(s Statement, depth int) {
 	}
 }
 
-func (c *Checker) collectLabelsAtDepth(s Statement, depth int) {
-	if s.Label != nil && s.Label.Name != "" {
-		c.current.Labels[s.Label.Name] = depth
-	}
-	c.walkStmtsDepth(s, func(child Statement, childDepth int) {
-		c.collectLabelsAtDepth(child, childDepth)
-	}, depth)
-}
 
-// walkStmtsDepth visits nested statements within a compound statement,
-// incrementing depth for loop bodies (FOR/WHILE).
-func (c *Checker) walkStmtsDepth(s Statement, fn func(Statement, int), depth int) {
-	switch cmd := s.Command.(type) {
-	case Group:
-		loopDepth := depth
-		if cmd.For != nil || cmd.While != nil {
-			loopDepth = depth + 1
-		}
-		for _, stmt := range cmd.Statements {
-			fn(stmt, loopDepth)
-		}
-		if cmd.Case != nil {
-			for _, branch := range cmd.Case.Branches {
-				fn(branch.Statement, depth)
-			}
-			if cmd.Case.Default != nil {
-				fn(*cmd.Case.Default, depth)
-			}
-		}
-	case Procedure:
-		for _, stmt := range cmd.Statements {
-			fn(stmt, depth)
-		}
-	case Task:
-		for _, stmt := range cmd.Body {
-			fn(stmt, depth)
-		}
-	case If:
-		fn(cmd.Then, depth)
-		if cmd.Else != nil {
-			fn(*cmd.Else, depth)
-		}
-	}
-}
 
 // walkStmts visits nested statements within a compound statement.
 func (c *Checker) walkStmts(s Statement, fn func(Statement)) {
