@@ -142,9 +142,7 @@ const (
 	PredeclaredNone     Predeclared = iota
 	PredeclaredByte                 // 1-byte unsigned integer type
 	PredeclaredWord                 // 2-byte unsigned integer type
-	PredeclaredLabel                // code label type
 	PredeclaredData                 // data storage type
-	PredeclaredConstant             // compile-time constant type
 )
 
 // Typer is a marker interface for the variants of Type.
