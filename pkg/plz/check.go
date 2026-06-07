@@ -935,9 +935,9 @@ func (s Suspend) Check(c *Checker) error {
 
 // Check validates a RESUME statement by verifying that the named task has
 // been declared.
-func (r Resume) Check(c *Checker) error {
-	if _, ok := c.Tasks[string(r.Name)]; !ok {
-		return c.Errorf("", "undeclared task %q", r.Name)
+func (s Resume) Check(c *Checker) error {
+	if _, ok := c.Tasks[string(s.Name)]; !ok {
+		return c.Errorf("", "undeclared task %q", s.Name)
 	}
 	return nil
 }

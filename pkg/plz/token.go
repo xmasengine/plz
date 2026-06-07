@@ -155,7 +155,7 @@ func (t TokenKind) String() string {
 type Token struct {
 	TokenKind TokenKind // The kind of token.
 	Position  Position  // The source position of the token.
-	Raw       string    // The orininal text of the token, may be qouted.
+	Raw       string    // The original text of the token, may be quoted.
 	Text      string    // The text of the token, may be unquoted.
 	Number    int       // The numeric value, valid for TokenInt and TokenChar tokens.
 }

@@ -24,7 +24,7 @@ type Gen struct {
 	Heap               int                       // Heap pointer to last allocated heap RAM memory.
 	label              int                       // counter for unique local labels
 	Checker            *Checker                  // Checker for semantic information
-	InTask             bool                      // InTaks is set when generating inside a task body
+	InTask bool // set when generating inside a task body
 	procName           string                    // current procedure name (empty = global scope)
 	symStack           []map[Identifier]symEntry // scope stack for assembly label resolution
 	currentScope       *Scope                    // current position in checker's persistent scope tree
