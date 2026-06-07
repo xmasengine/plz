@@ -83,7 +83,7 @@ END
 // Pattern table base is 0x0000 in SMS mode 4; each 8x8 tile occupies 32 bytes (4 bpp).
 // Example: CALL load_tiles(128, my_tiles, 16)
 PROCEDURE load_tiles(idx BYTE, tiles DATA, count BYTE)
-  CALL copy_vram(idx << 5, tiles, count << 5)
+  CALL copy_vram(WORD(idx) << 5, tiles, count << 5)
 END
 
 // Load count sprite patterns into the sprite pattern table starting at sprite index idx.
