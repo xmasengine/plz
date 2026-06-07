@@ -377,8 +377,13 @@ func (p Program) Gen(g *Gen) error {
 		g.genTaskInit(taskDefs)
 	}
 
-	procedures, dataStmts, dataItems := g.genClassifyStmts(p.Statements)
-	g.genEmitSections(c, procedures, dataStmts, dataItems)
+	procedures, dataStmts, dataItems, err := g.genClassifyStmts(p.Statements)
+	if err != nil {
+		return err
+	}
+	if err := g.genEmitSections(c, procedures, dataStmts, dataItems); err != nil {
+		return err
+	}
 
 	if g.BoundCheck {
 		g.genOnceBoundsError()
@@ -388,13 +393,13 @@ func (p Program) Gen(g *Gen) error {
 
 // genClassifyStmts separates top-level statements into procedures, data
 // statements (DATA), and data items (AT, DECLARE) for ordered emission.
-func (g *Gen) genClassifyStmts(stmts []Statement) (procedures []Procedure, dataStmts []Data, dataItems []dataItem) {
+func (g *Gen) genClassifyStmts(stmts []Statement) (procedures []Procedure, dataStmts []Data, dataItems []dataItem, err error) {
 	for _, statement := range stmts {
 		switch cmd := statement.Command.(type) {
 		case At:
 			if cmd.HasBank {
 				if err := cmd.Gen(g); err != nil {
-					panic(err)
+					return nil, nil, nil, err
 				}
 			} else {
 				dataItems = append(dataItems, dataItem{at: &cmd})
@@ -407,7 +412,7 @@ func (g *Gen) genClassifyStmts(stmts []Statement) (procedures []Procedure, dataS
 			procedures = append(procedures, cmd)
 		default:
 			if err := statement.Gen(g); err != nil {
-				panic(err)
+				return nil, nil, nil, err
 			}
 		}
 	}
@@ -416,22 +421,25 @@ func (g *Gen) genClassifyStmts(stmts []Statement) (procedures []Procedure, dataS
 
 // genEmitSections emits all generated sections in link order: procedures,
 // data statements, task bodies, runtime data, and deferred data items.
-func (g *Gen) genEmitSections(c *Checker, procedures []Procedure, dataStmts []Data, dataItems []dataItem) {
+func (g *Gen) genEmitSections(c *Checker, procedures []Procedure, dataStmts []Data, dataItems []dataItem) error {
 	g.Emit(ProgramFooter)
 
 	for _, proc := range procedures {
 		if err := proc.Gen(g); err != nil {
-			panic(err)
+			return err
 		}
 	}
 	for _, ds := range dataStmts {
 		if err := ds.Gen(g); err != nil {
-			panic(err)
+			return err
 		}
 	}
 
 	taskDefs := c.TaskDefs()
-	taskDeclares := g.genTaskBodies(taskDefs)
+	taskDeclares, err := g.genTaskBodies(taskDefs)
+	if err != nil {
+		return err
+	}
 
 	g.genStringData()
 	if len(taskDefs) > 0 {
@@ -443,7 +451,7 @@ func (g *Gen) genEmitSections(c *Checker, procedures []Procedure, dataStmts []Da
 	for _, item := range dataItems {
 		if item.at != nil {
 			if err := item.at.Gen(g); err != nil {
-				panic(err)
+				return err
 			}
 		} else {
 			g.Emitln("")
@@ -452,9 +460,10 @@ func (g *Gen) genEmitSections(c *Checker, procedures []Procedure, dataStmts []Da
 	}
 	for _, s := range taskDeclares {
 		if err := s.Gen(g); err != nil {
-			panic(err)
+			return err
 		}
 	}
+	return nil
 }
 
 type dataItem struct {
@@ -492,7 +501,7 @@ func (g *Gen) genTaskInit(tasks []Task) {
 	g.Emitln("\tret")
 }
 
-func (g *Gen) genTaskBodies(tasks []Task) []Statement {
+func (g *Gen) genTaskBodies(tasks []Task) ([]Statement, error) {
 	var taskDeclares []Statement
 	for i := range tasks {
 		t := tasks[i]
@@ -504,13 +513,13 @@ func (g *Gen) genTaskBodies(tasks []Task) []Statement {
 				continue
 			}
 			if err := t.Body[j].Gen(g); err != nil {
-				panic(err) // or return error — kept for simplicity
+				return nil, err
 			}
 		}
 		g.InTask = false
 		g.Emitln("\tjp _plz_task_done")
 	}
-	return taskDeclares
+	return taskDeclares, nil
 }
 
 func (g *Gen) genStringData() {
@@ -1459,7 +1468,10 @@ func (g *Gen) genCallExpr(operands []Operand) error {
 		}
 		g.Emitln("\tpop de")
 	default:
-		totalExtra := g.emitExtraCallArgs(name, pd, genCallArg, len(args))
+		totalExtra, err := g.emitExtraCallArgs(name, pd, genCallArg, len(args))
+		if err != nil {
+			return err
+		}
 		if err := genCallArg(1); err != nil {
 			return err
 		}
@@ -1992,7 +2004,10 @@ func (s Call) Gen(g *Gen) error {
 		}
 		g.Emitln("\tpop de")
 	default:
-		totalExtra := g.emitExtraCallArgs(name, pd, genCallArg, len(args))
+		totalExtra, err := g.emitExtraCallArgs(name, pd, genCallArg, len(args))
+		if err != nil {
+			return err
+		}
 		if err := genCallArg(1); err != nil {
 			return err
 		}
@@ -2066,13 +2081,13 @@ func (g *Gen) genCallArg(expr Expression, pd *ProcData, i int) error {
 // non-REENTRANT procedures it stores each extra arg into its dedicated RAM
 // label; for REENTRANT it pushes them right-to-left. Returns total extra bytes
 // pushed (for REENTRANT cleanup).
-func (g *Gen) emitExtraCallArgs(name string, pd *ProcData, genArg func(int) error, argc int) int {
+func (g *Gen) emitExtraCallArgs(name string, pd *ProcData, genArg func(int) error, argc int) (int, error) {
 	isReentrant := pd == nil || pd.Reentrant
 	var totalExtra int
 	if !isReentrant {
 		for i := 2; i < argc; i++ {
 			if err := genArg(i); err != nil {
-				panic(err)
+				return 0, err
 			}
 			paramName := pd.Params[i]
 			if i < len(pd.ParamTypes) && pd.ParamTypes[i].Predeclared() == PredeclaredByte {
@@ -2084,7 +2099,7 @@ func (g *Gen) emitExtraCallArgs(name string, pd *ProcData, genArg func(int) erro
 	} else {
 		for i := argc - 1; i >= 2; i-- {
 			if err := genArg(i); err != nil {
-				panic(err)
+				return 0, err
 			}
 			psize := 2
 			if i < len(pd.ParamTypes) && pd.ParamTypes[i].Predeclared() == PredeclaredByte {
@@ -2099,7 +2114,7 @@ func (g *Gen) emitExtraCallArgs(name string, pd *ProcData, genArg func(int) erro
 			}
 		}
 	}
-	return totalExtra
+	return totalExtra, nil
 }
 
 // Gen generates assembly for a GOTO statement, emitting a JP to the named label.

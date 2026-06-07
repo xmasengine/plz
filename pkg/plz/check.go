@@ -182,144 +182,146 @@ func (c *Checker) Errorf(pos string, form string, args ...any) error {
 }
 
 // EvalConstExpr evaluates an Expression to an integer at compile time.
-// It resolves references to previously defined constants, evaluates all
-// standard arithmetic, bitwise, comparison, shift, and logical operators,
-// and rejects non-constant sub-expressions (variables, CALL, INPUT, etc.).
-// This allows us to use compute time constant expressions.
 func (c *Checker) EvalConstExpr(e Expression) (int, error) {
 	switch {
 	case e.Operand() != nil:
-		op := e.Operand()
-		switch {
-		case op.Literal() != nil:
-			lit := op.Literal()
-			if n := lit.Number(); n != nil {
-				return n.Value, nil
-			}
-			if r := lit.Reference(); r != nil {
-				id := Identifier(r.Value.Identifier)
-				if d, ok := c.current.Lookup(id); ok && d.ConstantValue != nil {
-					if n := d.ConstantValue.Number(); n != nil {
-						return n.Value, nil
-					}
-					return 0, fmt.Errorf("constant %q is not a number", id)
-				}
-				return 0, fmt.Errorf("undefined constant %q", id)
-			}
-			return 0, fmt.Errorf("text literal cannot be used in a numeric constant expression")
-		case op.Expr() != nil:
-			return c.EvalConstExpr(*op.Expr())
-		case op.Reference() != nil:
-			ref := op.Reference()
-			if len(ref.Subscripts) > 0 || len(ref.Fields) > 0 {
-				return 0, fmt.Errorf("cannot evaluate reference %q as constant expression", ref.Identifier)
-			}
-			if d, ok := c.current.Lookup(ref.Identifier); ok && d.ConstantValue != nil {
-				if n := d.ConstantValue.Number(); n != nil {
-					return n.Value, nil
-				}
-				return 0, fmt.Errorf("constant %q is not a number", ref.Identifier)
-			}
-			return 0, fmt.Errorf("undefined identifier %q in constant expression", ref.Identifier)
-		case op.Length() != nil:
-			return c.evalLength(op.Length())
-		default:
-			return 0, fmt.Errorf("CALL and INPUT cannot be used in constant expressions")
-		}
-
+		return c.evalConstOperand(e.Operand())
 	case e.Prefix() != nil:
-		p := e.Prefix()
-		v, err := c.EvalConstExpr(Expression{Expr: &p.Operand})
-		if err != nil {
-			return 0, err
-		}
-		switch p.Operator {
-		case OperatorNEG:
-			return -v, nil
-		case OperatorNOT:
-			if v == 0 {
-				return 1, nil
-			}
-			return 0, nil
-		default:
-			return 0, fmt.Errorf("unknown prefix operator in constant expression")
-		}
-
+		return c.evalConstPrefix(e.Prefix())
 	case e.Infix() != nil:
-		i := e.Infix()
-		l, err := c.EvalConstExpr(Expression{Expr: &i.Operands[0]})
-		if err != nil {
-			return 0, err
-		}
-		r, err := c.EvalConstExpr(Expression{Expr: &i.Operands[1]})
-		if err != nil {
-			return 0, err
-		}
-		switch i.Operator {
-		case OperatorADD:
-			return l + r, nil
-		case OperatorSUB:
-			return l - r, nil
-		case OperatorMUL:
-			return l * r, nil
-		case OperatorDIV:
-			if r == 0 {
-				return 0, fmt.Errorf("division by zero")
-			}
-			return l / r, nil
-		case OperatorMOD:
-			if r == 0 {
-				return 0, fmt.Errorf("modulo by zero")
-			}
-			return l % r, nil
-		case OperatorAND:
-			return l & r, nil
-		case OperatorOR:
-			return l | r, nil
-		case OperatorXOR:
-			return l ^ r, nil
-		case OperatorShiftLeft:
-			return l << uint(r), nil
-		case OperatorShiftRight:
-			return l >> uint(r), nil
-		case OperatorEQU:
-			if l == r {
-				return 1, nil
-			}
-			return 0, nil
-		case OperatorNEQ:
-			if l != r {
-				return 1, nil
-			}
-			return 0, nil
-		case OperatorLT:
-			if l < r {
-				return 1, nil
-			}
-			return 0, nil
-		case OperatorGT:
-			if l > r {
-				return 1, nil
-			}
-			return 0, nil
-		case OperatorLTE:
-			if l <= r {
-				return 1, nil
-			}
-			return 0, nil
-		case OperatorGTE:
-			if l >= r {
-				return 1, nil
-			}
-			return 0, nil
-		default:
-			return 0, fmt.Errorf("unknown operator in constant expression")
-		}
-
+		return c.evalConstInfix(e.Infix())
 	case e.Suffix() != nil:
 		return 0, fmt.Errorf("suffix operators (index, call, field) cannot be used in constant expressions")
 	}
 	return 0, fmt.Errorf("empty expression")
+}
+
+func (c *Checker) evalConstOperand(op *Operand) (int, error) {
+	switch {
+	case op.Literal() != nil:
+		lit := op.Literal()
+		if n := lit.Number(); n != nil {
+			return n.Value, nil
+		}
+		if r := lit.Reference(); r != nil {
+			id := Identifier(r.Value.Identifier)
+			if d, ok := c.current.Lookup(id); ok && d.ConstantValue != nil {
+				if n := d.ConstantValue.Number(); n != nil {
+					return n.Value, nil
+				}
+				return 0, fmt.Errorf("constant %q is not a number", id)
+			}
+			return 0, fmt.Errorf("undefined constant %q", id)
+		}
+		return 0, fmt.Errorf("text literal cannot be used in a numeric constant expression")
+	case op.Expr() != nil:
+		return c.EvalConstExpr(*op.Expr())
+	case op.Reference() != nil:
+		ref := op.Reference()
+		if len(ref.Subscripts) > 0 || len(ref.Fields) > 0 {
+			return 0, fmt.Errorf("cannot evaluate reference %q as constant expression", ref.Identifier)
+		}
+		if d, ok := c.current.Lookup(ref.Identifier); ok && d.ConstantValue != nil {
+			if n := d.ConstantValue.Number(); n != nil {
+				return n.Value, nil
+			}
+			return 0, fmt.Errorf("constant %q is not a number", ref.Identifier)
+		}
+		return 0, fmt.Errorf("undefined identifier %q in constant expression", ref.Identifier)
+	case op.Length() != nil:
+		return c.evalLength(op.Length())
+	default:
+		return 0, fmt.Errorf("CALL and INPUT cannot be used in constant expressions")
+	}
+}
+
+func (c *Checker) evalConstPrefix(p *Prefix) (int, error) {
+	v, err := c.EvalConstExpr(Expression{Expr: &p.Operand})
+	if err != nil {
+		return 0, err
+	}
+	switch p.Operator {
+	case OperatorNEG:
+		return -v, nil
+	case OperatorNOT:
+		if v == 0 {
+			return 1, nil
+		}
+		return 0, nil
+	default:
+		return 0, fmt.Errorf("unknown prefix operator in constant expression")
+	}
+}
+
+func (c *Checker) evalConstInfix(i *Infix) (int, error) {
+	l, err := c.EvalConstExpr(Expression{Expr: &i.Operands[0]})
+	if err != nil {
+		return 0, err
+	}
+	r, err := c.EvalConstExpr(Expression{Expr: &i.Operands[1]})
+	if err != nil {
+		return 0, err
+	}
+	switch i.Operator {
+	case OperatorADD:
+		return l + r, nil
+	case OperatorSUB:
+		return l - r, nil
+	case OperatorMUL:
+		return l * r, nil
+	case OperatorDIV:
+		if r == 0 {
+			return 0, fmt.Errorf("division by zero")
+		}
+		return l / r, nil
+	case OperatorMOD:
+		if r == 0 {
+			return 0, fmt.Errorf("modulo by zero")
+		}
+		return l % r, nil
+	case OperatorAND:
+		return l & r, nil
+	case OperatorOR:
+		return l | r, nil
+	case OperatorXOR:
+		return l ^ r, nil
+	case OperatorShiftLeft:
+		return l << uint(r), nil
+	case OperatorShiftRight:
+		return l >> uint(r), nil
+	case OperatorEQU:
+		if l == r {
+			return 1, nil
+		}
+		return 0, nil
+	case OperatorNEQ:
+		if l != r {
+			return 1, nil
+		}
+		return 0, nil
+	case OperatorLT:
+		if l < r {
+			return 1, nil
+		}
+		return 0, nil
+	case OperatorGT:
+		if l > r {
+			return 1, nil
+		}
+		return 0, nil
+	case OperatorLTE:
+		if l <= r {
+			return 1, nil
+		}
+		return 0, nil
+	case OperatorGTE:
+		if l >= r {
+			return 1, nil
+		}
+		return 0, nil
+	default:
+		return 0, fmt.Errorf("unknown operator in constant expression")
+	}
 }
 
 // Check runs semantic analysis on the program using a three-pass approach.
