@@ -182,6 +182,17 @@ type Field struct {
 	Type
 }
 
+// FindField looks up a field by name, returning its index and a pointer
+// to the field, or (-1, nil) if not found.
+func (r *Record) FindField(name Identifier) (int, *Field) {
+	for i := range r.Fields {
+		if r.Fields[i].Identifier == name {
+			return i, &r.Fields[i]
+		}
+	}
+	return -1, nil
+}
+
 // Predeclared returns the Predeclared kind of t, or PredeclaredNone
 // if t is not a predeclared type.
 func (t Type) Predeclared() Predeclared {

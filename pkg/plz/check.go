@@ -852,14 +852,7 @@ func checkTarget(c *Checker, r Reference) error {
 			if rec == nil {
 				return c.Errorf("", "%q is not a record, cannot access field %q", r.Identifier, fname)
 			}
-			found := false
-			for _, f := range rec.Fields {
-				if f.Identifier == fname {
-					found = true
-					break
-				}
-			}
-			if !found {
+			if _, f := rec.FindField(fname); f == nil {
 				return c.Errorf("", "struct %q has no field %q", r.Identifier, fname)
 			}
 		}
@@ -1220,14 +1213,7 @@ func (r *Reference) Check(c *Checker) error {
 		if rec == nil {
 			return c.Errorf("", "%q is not a record, cannot access field %q", r.Identifier, fname)
 		}
-		found := false
-		for _, f := range rec.Fields {
-			if f.Identifier == fname {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if _, f := rec.FindField(fname); f == nil {
 			return c.Errorf("", "struct %q has no field %q", r.Identifier, fname)
 		}
 	}
@@ -1328,16 +1314,10 @@ func (c *Checker) targetType(r Reference) (Predeclared, bool) {
 		if rec == nil {
 			return PredeclaredNone, false
 		}
-		found := false
-		for _, f := range rec.Fields {
-			if f.Identifier == fname {
-				t = f.Type
-				found = true
-				break
-			}
-		}
-		if !found {
+		if _, f := rec.FindField(fname); f == nil {
 			return PredeclaredNone, false
+		} else {
+			t = f.Type
 		}
 	}
 	return t.Predeclared(), true

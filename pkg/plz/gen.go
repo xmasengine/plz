@@ -1685,12 +1685,8 @@ func (g *Gen) emitStoreDE8() {
 }
 
 func findField(rec *Record, name Identifier) int {
-	for i, f := range rec.Fields {
-		if f.Identifier == name {
-			return i
-		}
-	}
-	return -1
+	i, _ := rec.FindField(name)
+	return i
 }
 
 // emitTarget2Store emits code to store the second return value (in DE) into
