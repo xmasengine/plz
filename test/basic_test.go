@@ -4,6 +4,165 @@ import (
 	"testing"
 )
 
+func TestIntegrationPIR_OutputLiteral(t *testing.T) {
+	io := compileAndRunPIR(t, `OUTPUT 0 42
+HALT`)
+	if len(io.OutBytes[0]) < 1 {
+		t.Fatal("expected output")
+	}
+	if io.OutBytes[0][0] != 42 {
+		t.Errorf("expected 42, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationPIR_LetNumber(t *testing.T) {
+	io := compileAndRunPIR(t, `DECLARE x WORD
+LET x = 99
+OUTPUT 0 x
+HALT`)
+	if io.OutBytes[0][0] != 99 {
+		t.Errorf("expected 99, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationPIR_LetAdd(t *testing.T) {
+	io := compileAndRunPIR(t, `DECLARE x WORD
+LET x = 10 + 20
+OUTPUT 0 x
+HALT`)
+	if io.OutBytes[0][0] != 30 {
+		t.Errorf("expected 30, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationPIR_LetSub(t *testing.T) {
+	io := compileAndRunPIR(t, `DECLARE x WORD
+LET x = 50 - 8
+OUTPUT 0 x
+HALT`)
+	if io.OutBytes[0][0] != 42 {
+		t.Errorf("expected 42, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationPIR_LetMul(t *testing.T) {
+	io := compileAndRunPIR(t, `DECLARE x WORD
+LET x = 6 * 7
+OUTPUT 0 x
+HALT`)
+	if io.OutBytes[0][0] != 42 {
+		t.Errorf("expected 42, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationPIR_LetDiv(t *testing.T) {
+	io := compileAndRunPIR(t, `DECLARE x WORD
+LET x = 42 / 6
+OUTPUT 0 x
+HALT`)
+	if io.OutBytes[0][0] != 7 {
+		t.Errorf("expected 7, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationPIR_LetMod(t *testing.T) {
+	io := compileAndRunPIR(t, `DECLARE x WORD
+LET x = 47 % 5
+OUTPUT 0 x
+HALT`)
+	if io.OutBytes[0][0] != 2 {
+		t.Errorf("expected 2, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationPIR_IfThen(t *testing.T) {
+	io := compileAndRunPIR(t, `DECLARE x WORD
+LET x = 0
+IF 1 THEN LET x = 42
+OUTPUT 0 x
+HALT`)
+	if io.OutBytes[0][0] != 42 {
+		t.Errorf("expected 42, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationPIR_IfThenElse(t *testing.T) {
+	io := compileAndRunPIR(t, `DECLARE x WORD
+IF 0 THEN LET x = 10 ELSE LET x = 20
+OUTPUT 0 x
+HALT`)
+	if io.OutBytes[0][0] != 20 {
+		t.Errorf("expected 20, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationPIR_WhileLoop(t *testing.T) {
+	io := compileAndRunPIR(t, `DECLARE cnt WORD
+LET cnt = 5
+WHILE cnt > 0 DO
+  OUTPUT 0 cnt
+  LET cnt = cnt - 1
+END
+HALT`)
+	if len(io.OutBytes[0]) != 5 {
+		t.Fatalf("expected 5 outputs, got %d", len(io.OutBytes[0]))
+	}
+	for i, b := range io.OutBytes[0] {
+		want := byte(5 - i)
+		if b != want {
+			t.Errorf("output[%d] = %d, want %d", i, b, want)
+		}
+	}
+}
+
+func TestIntegrationPIR_ByteVar(t *testing.T) {
+	io := compileAndRunPIR(t, `DECLARE bv BYTE
+LET bv = 200
+OUTPUT 0 bv
+HALT`)
+	if io.OutBytes[0][0] != 200 {
+		t.Errorf("expected 200, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationPIR_ProcedureCall(t *testing.T) {
+	io := compileAndRunPIR(t, `DECLARE x WORD
+PROCEDURE inc(n WORD) WORD
+  RETURN n + 1
+END
+LET x = inc(41)
+OUTPUT 0 x
+HALT`)
+	if io.OutBytes[0][0] != 42 {
+		t.Errorf("expected 42, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationPIR_ComparisonEQ(t *testing.T) {
+	io := compileAndRunPIR(t, `DECLARE x WORD
+LET x = 10
+IF x = 10 THEN OUTPUT 0 1 ELSE OUTPUT 0 0
+HALT`)
+	if io.OutBytes[0][0] != 1 {
+		t.Errorf("expected 1, got %d", io.OutBytes[0][0])
+	}
+}
+
+func TestIntegrationPIR_ForLoop(t *testing.T) {
+	io := compileAndRunPIR(t, `DECLARE cnt WORD
+DECLARE sum WORD
+LET sum = 0
+FOR cnt = 1 TO 5 DO
+  LET sum = sum + cnt
+END
+OUTPUT 0 sum
+HALT`)
+	// Sum 1..5 = 15
+	if io.OutBytes[0][0] != 15 {
+		t.Errorf("expected 15, got %d", io.OutBytes[0][0])
+	}
+}
+
 func TestIntegrationOutputLiteral(t *testing.T) {
 	io := compileAndRun(t, `OUTPUT 0 42
 HALT`)

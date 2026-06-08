@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/user-none/go-chip-sn76489"
+	"github.com/xmasengine/plz/pkg/pir"
 	"github.com/xmasengine/plz/pkg/plz"
 	"github.com/xmasengine/plz/pkg/sms"
 	"github.com/xmasengine/plz/pkg/z80/emu"
@@ -174,6 +175,62 @@ func compileAndRunSMSFile(t *testing.T, path string) *sms.VDP {
 	v.Tick(sms.LinesNTSC * sms.HblankCycles)
 
 	return v
+}
+
+func compileAndRunPIR(t *testing.T, src string) *emu.ByteIO {
+	t.Helper()
+	dir := t.TempDir()
+
+	srcPath := filepath.Join(dir, "test.plz")
+	if err := os.WriteFile(srcPath, []byte(src), 0644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	tokens, err := plz.ScanFile(srcPath)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	prog := plz.Program{}
+	parser := plz.NewParser(tokens)
+	if err := prog.Parse(parser); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	pirProg, err := prog.GenPIR()
+	if err != nil {
+		t.Fatalf("genpir: %v", err)
+	}
+
+	t.Logf("PIR Program:\n%s", pirProg.String())
+
+	asmText := pir.NewZ80Gen(pir.DefaultConfig()).Gen(pirProg)
+	t.Logf("Z80 Assembly:\n%s", asmText)
+	asmPath := filepath.Join(dir, "test.asm")
+	if err := os.WriteFile(asmPath, []byte(asmText), 0644); err != nil {
+		t.Fatalf("write asm: %v", err)
+	}
+
+	binPath := filepath.Join(dir, "test.bin")
+	if err := asm.AssembleFiles(binPath, []string{asmPath}); err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+
+	bin, err := os.ReadFile(binPath)
+	if err != nil {
+		t.Fatalf("read bin: %v", err)
+	}
+
+	io := &emu.ByteIO{}
+	cpu := emu.NewCPU(emu.WithBinary(bin...))
+	cpu.IO = io
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := cpu.Run(ctx); err != nil {
+		t.Fatalf("cpu run: %v", err)
+	}
+
+	return io
 }
 
 func frameImage(v *sms.VDP) *image.RGBA {
