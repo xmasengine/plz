@@ -4,6 +4,12 @@
 // Each instruction has at most one operand.
 package pir
 
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
 // Instruction identifies a PIR opcode.
 type Instruction int
 
@@ -142,3 +148,353 @@ const (
 	SAVE // Pop length, then destination address, then source address; copy to battery RAM.
 	LOAD // Pop length, then destination address, then source address; copy from battery RAM.
 )
+
+// OperandType describes the kind of operand an instruction carries.
+type OperandType int
+
+const (
+	OpNone      OperandType = iota // no operand (e.g. ADD_B, DONE)
+	OpNumber                       // unsigned 16-bit literal (e.g. PUSH_W 42, FRAME 6)
+	OpName                         // identifier (e.g. GET_B x, TAG loop)
+	OpString                       // string literal (e.g. DATA_STR "hello", INLINE "nop")
+	OpCondition                    // comparison condition (e.g. IS_W LT)
+)
+
+// Condition enumerates the six unsigned comparison relations.
+type Condition int
+
+const (
+	CondLT Condition = iota // <
+	CondGT                  // >
+	CondLE                  // <=
+	CondGE                  // >=
+	CondEQ                  // ==
+	CondNE                  // !=
+)
+
+var condNames = map[Condition]string{
+	CondLT: "LT",
+	CondGT: "GT",
+	CondLE: "LE",
+	CondGE: "GE",
+	CondEQ: "EQ",
+	CondNE: "NE",
+}
+
+var condFromName = map[string]Condition{
+	"LT": CondLT,
+	"GT": CondGT,
+	"LE": CondLE,
+	"GE": CondGE,
+	"EQ": CondEQ,
+	"NE": CondNE,
+}
+
+// String returns the uppercase condition mnemonic.
+func (c Condition) String() string {
+	if s, ok := condNames[c]; ok {
+		return s
+	}
+	return fmt.Sprintf("Cond(%d)", c)
+}
+
+// Operand is the (at most one) argument carried by an instruction.
+type Operand struct {
+	Type  OperandType
+	Num   uint16
+	Name  string
+	Str   string
+	Cond  Condition
+}
+
+// Instr couples an opcode with an optional operand.
+type Instr struct {
+	Op      Instruction
+	Operand Operand
+}
+
+// Program is a sequence of PIR instructions.
+type Program struct {
+	Instrs []Instr
+}
+
+// instructionNames maps each opcode to its text mnemonic.
+var instructionNames = map[Instruction]string{
+	NOP:            "NOP",
+	PUSH_B:         "PUSH_B",
+	PUSH_W:         "PUSH_W",
+	VAR_B:          "VAR_B",
+	VAR_W:          "VAR_W",
+	AT:             "AT",
+	GET_B:          "GET_B",
+	GET_W:          "GET_W",
+	PUT_B:          "PUT_B",
+	PUT_W:          "PUT_W",
+	PUSH_A:         "PUSH_A",
+	READ_B:         "READ_B",
+	READ_W:         "READ_W",
+	WRITE_B:        "WRITE_B",
+	WRITE_W:        "WRITE_W",
+	ADD_B:          "ADD_B",
+	ADD_W:          "ADD_W",
+	SUB_B:          "SUB_B",
+	SUB_W:          "SUB_W",
+	MUL_B:          "MUL_B",
+	MUL_W:          "MUL_W",
+	DIV_B:          "DIV_B",
+	DIV_W:          "DIV_W",
+	MOD_B:          "MOD_B",
+	MOD_W:          "MOD_W",
+	SHL_B:          "SHL_B",
+	SHL_W:          "SHL_W",
+	SHR_B:          "SHR_B",
+	SHR_W:          "SHR_W",
+	AND_B:          "AND_B",
+	AND_W:          "AND_W",
+	OR_B:           "OR_B",
+	OR_W:           "OR_W",
+	XOR_B:          "XOR_B",
+	XOR_W:          "XOR_W",
+	NEG_B:          "NEG_B",
+	NEG_W:          "NEG_W",
+	NOT_B:          "NOT_B",
+	NOT_W:          "NOT_W",
+	CAST_W:         "CAST_W",
+	CAST_B:         "CAST_B",
+	DUP:            "DUP",
+	DROP:           "DROP",
+	SWAP:           "SWAP",
+	IS_B:           "IS_B",
+	IS_W:           "IS_W",
+	TAG:            "TAG",
+	GO:             "GO",
+	GO_IF:          "GO_IF",
+	ROUTE:          "ROUTE",
+	FRAME:          "FRAME",
+	LOCAL_B:        "LOCAL_B",
+	LOCAL_W:        "LOCAL_W",
+	RUN:            "RUN",
+	DONE:           "DONE",
+	DONE_INTERRUPT: "DONE_INTERRUPT",
+	DONE_NMI:       "DONE_NMI",
+	JOB:            "JOB",
+	PRIORITY:       "PRIORITY",
+	BYE:            "BYE",
+	SLEEP:          "SLEEP",
+	STOP:           "STOP",
+	START:          "START",
+	IN_B:           "IN_B",
+	IN_W:           "IN_W",
+	OUT_B:          "OUT_B",
+	OUT_W:          "OUT_W",
+	INT:            "INT",
+	NMI:            "NMI",
+	HLT:            "HLT",
+	DII:            "DII",
+	ENI:            "ENI",
+	SEED:           "SEED",
+	BANK:           "BANK",
+	SWITCH:         "SWITCH",
+	DATA_B:         "DATA_B",
+	DATA_W:         "DATA_W",
+	DATA_STR:       "DATA_STR",
+	DATA_TILE:      "DATA_TILE",
+	PRAGMA:         "PRAGMA",
+	INLINE:         "INLINE",
+	SAVE:           "SAVE",
+	LOAD:           "LOAD",
+}
+
+// nameFromMnemonic is the reverse lookup of instructionNames.
+var nameFromMnemonic map[string]Instruction
+
+func init() {
+	nameFromMnemonic = make(map[string]Instruction, len(instructionNames))
+	for op, name := range instructionNames {
+		nameFromMnemonic[name] = op
+	}
+}
+
+// String returns the text form of the instruction, e.g. "PUSH_W 42" or "IS_W LT".
+func (i Instr) String() string {
+	opName := instructionNames[i.Op]
+	if opName == "" {
+		opName = fmt.Sprintf("INSTR(%d)", i.Op)
+	}
+	switch i.Operand.Type {
+	case OpNone:
+		return opName
+	case OpNumber:
+		return fmt.Sprintf("%s %d", opName, i.Operand.Num)
+	case OpName:
+		return fmt.Sprintf("%s %s", opName, i.Operand.Name)
+	case OpString:
+		return fmt.Sprintf("%s %q", opName, i.Operand.Str)
+	case OpCondition:
+		return fmt.Sprintf("%s %s", opName, i.Operand.Cond)
+	default:
+		return fmt.Sprintf("%s <?>", opName)
+	}
+}
+
+// String returns the full program text, one instruction per line.
+func (p *Program) String() string {
+	var b strings.Builder
+	for _, instr := range p.Instrs {
+		b.WriteString(instr.String())
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// operands returns the expected OperandType for each opcode.
+func expectedOperand(op Instruction) OperandType {
+	switch op {
+	case NOP, ADD_B, ADD_W, SUB_B, SUB_W,
+		MUL_B, MUL_W, DIV_B, DIV_W, MOD_B, MOD_W,
+		SHL_B, SHL_W, SHR_B, SHR_W,
+		AND_B, AND_W, OR_B, OR_W, XOR_B, XOR_W,
+		NEG_B, NEG_W, NOT_B, NOT_W,
+		CAST_W, CAST_B,
+		DUP, DROP, SWAP,
+		READ_B, READ_W, WRITE_B, WRITE_W,
+		BYE, SLEEP,
+		HLT, DII, ENI, SEED, SWITCH,
+		SAVE, LOAD:
+		return OpNone
+	case PUSH_B, PUSH_W, AT, FRAME, PRIORITY,
+		BANK, DATA_B, DATA_W, PRAGMA:
+		return OpNumber
+	case VAR_B, VAR_W, GET_B, GET_W, PUT_B, PUT_W,
+		PUSH_A, TAG, GO, GO_IF,
+		ROUTE, RUN, LOCAL_B, LOCAL_W,
+		JOB, STOP, START,
+		INT, NMI:
+		return OpName
+	case DATA_STR, DATA_TILE, INLINE:
+		return OpString
+	case IS_B, IS_W:
+		return OpCondition
+	default:
+		return OpNone
+	}
+}
+
+// ParseError describes an error encountered during text parsing.
+type ParseError struct {
+	Line int
+	Msg  string
+}
+
+func (e *ParseError) Error() string {
+	return fmt.Sprintf("line %d: %s", e.Line, e.Msg)
+}
+
+// Parse converts PIR text format back into a Program.
+// Lines starting with "//" are comments; empty lines are skipped.
+// Each non-comment line is: MNEMONIC [operand].
+func Parse(text string) (*Program, error) {
+	lines := strings.Split(text, "\n")
+	prog := &Program{}
+	for lineIdx, line := range lines {
+		lineNum := lineIdx + 1
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		parts := splitLine(line)
+		if len(parts) == 0 {
+			continue
+		}
+		mnemonic := parts[0]
+		op, ok := nameFromMnemonic[mnemonic]
+		if !ok {
+			return nil, &ParseError{Line: lineNum, Msg: fmt.Sprintf("unknown instruction %q", mnemonic)}
+		}
+		exp := expectedOperand(op)
+		var operand Operand
+		switch exp {
+		case OpNone:
+			if len(parts) > 1 {
+				return nil, &ParseError{Line: lineNum, Msg: fmt.Sprintf("%s takes no operand", mnemonic)}
+			}
+		case OpNumber:
+			if len(parts) < 2 {
+				return nil, &ParseError{Line: lineNum, Msg: fmt.Sprintf("%s needs a number operand", mnemonic)}
+			}
+			n, err := parseNumber(parts[1])
+			if err != nil {
+				return nil, &ParseError{Line: lineNum, Msg: err.Error()}
+			}
+			operand = Operand{Type: OpNumber, Num: n}
+		case OpName:
+			if len(parts) < 2 {
+				return nil, &ParseError{Line: lineNum, Msg: fmt.Sprintf("%s needs a name operand", mnemonic)}
+			}
+			operand = Operand{Type: OpName, Name: parts[1]}
+		case OpString:
+			if len(parts) < 2 {
+				return nil, &ParseError{Line: lineNum, Msg: fmt.Sprintf("%s needs a string operand", mnemonic)}
+			}
+			s, err := strconv.Unquote(parts[1])
+			if err != nil {
+				return nil, &ParseError{Line: lineNum, Msg: fmt.Sprintf("bad string: %v", err)}
+			}
+			operand = Operand{Type: OpString, Str: s}
+		case OpCondition:
+			if len(parts) < 2 {
+				return nil, &ParseError{Line: lineNum, Msg: fmt.Sprintf("%s needs a condition operand", mnemonic)}
+			}
+			cond, ok := condFromName[parts[1]]
+			if !ok {
+				return nil, &ParseError{Line: lineNum, Msg: fmt.Sprintf("unknown condition %q", parts[1])}
+			}
+			operand = Operand{Type: OpCondition, Cond: cond}
+		}
+		prog.Instrs = append(prog.Instrs, Instr{Op: op, Operand: operand})
+	}
+	return prog, nil
+}
+
+// splitLine splits a text line on whitespace, respecting double-quoted strings.
+func splitLine(line string) []string {
+	var parts []string
+	var cur strings.Builder
+	inQuote := false
+	for _, ch := range line {
+		switch {
+		case ch == '"':
+			inQuote = !inQuote
+			cur.WriteRune(ch)
+		case ch == ' ' || ch == '\t':
+			if inQuote {
+				cur.WriteRune(ch)
+			} else if cur.Len() > 0 {
+				parts = append(parts, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteRune(ch)
+		}
+	}
+	if cur.Len() > 0 {
+		parts = append(parts, cur.String())
+	}
+	return parts
+}
+
+// parseNumber parses a decimal or 0x-hex number.
+func parseNumber(s string) (uint16, error) {
+	if len(s) > 2 && s[:2] == "0x" {
+		n, err := strconv.ParseUint(s[2:], 16, 16)
+		if err != nil {
+			return 0, fmt.Errorf("bad number %q", s)
+		}
+		return uint16(n), nil
+	}
+	n, err := strconv.ParseUint(s, 10, 16)
+	if err != nil {
+		return 0, fmt.Errorf("bad number %q", s)
+	}
+	return uint16(n), nil
+}

@@ -1,1 +1,10 @@
-build
+*.out
+*.bin
+*.asm
+plz
+tmp/
+port/
+oldasm/
+src/
+opcodes
+last_prompt
