@@ -49,15 +49,26 @@ type Z80Gen struct {
 	needHL int // label counter for unique locals
 
 	// usage tracking — which helpers we actually need
-	needMul     bool
-	needDiv     bool
-	needMod     bool
-	needCmp     bool
-	needSched   bool
-	needSleep   bool
-	needSave    bool
-	needLoad    bool
-	taskCount   int
+	needMul   bool
+	needDiv   bool
+	needMod   bool
+	needCmp   bool
+	needSched bool
+	needSleep bool
+	needSave  bool
+	needLoad  bool
+	taskCount int
+}
+
+// NewZ80Gen creates a Z80Gen with the given config.
+func NewZ80Gen(cfg Z80Config) *Z80Gen {
+	return &Z80Gen{cfg: cfg}
+}
+
+// varName returns the assembly-safe name for a user variable.
+// Prefixing avoids conflicts with Z80 register names (a, b, c, d, e, h, l, i, r, ix, iy).
+func (z *Z80Gen) varName(name string) string {
+	return "_v_" + name
 }
 
 // Gen translates a PIR programme into Z80 assembly text.
@@ -91,13 +102,13 @@ func (z *Z80Gen) scanProg(prog *Program) {
 	for _, instr := range prog.Instrs {
 		switch instr.Op {
 		case VAR_B:
-			name := instr.Operand.Name
+			name := z.varName(instr.Operand.Name)
 			if _, ok := z.varAddr[name]; !ok {
 				z.varAddr[name] = z.varNext
 				z.varNext += 1
 			}
 		case VAR_W:
-			name := instr.Operand.Name
+			name := z.varName(instr.Operand.Name)
 			if _, ok := z.varAddr[name]; !ok {
 				z.varAddr[name] = z.varNext
 				z.varNext += 2
@@ -631,7 +642,7 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 			z.emitf("\tld e, %s", la)
 			z.emit("\tld d, 0")
 		} else {
-			z.emitf("\tld a, (%s)", o.Name)
+			z.emitf("\tld a, (%s)", z.varName(o.Name))
 			z.emit("\tld e, a")
 			z.emit("\tld d, 0")
 		}
@@ -643,7 +654,7 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 			off := z.localOff[o.Name]
 			z.emitf("\tld d, (ix+%d)", off+1)
 		} else {
-			z.emitf("\tld de, (%s)", o.Name)
+			z.emitf("\tld de, (%s)", z.varName(o.Name))
 		}
 
 	case PUT_B:
@@ -652,7 +663,7 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 			z.emitf("\tld %s, a", la)
 		} else {
 			z.emit("\tld a, e")
-			z.emitf("\tld (%s), a", o.Name)
+			z.emitf("\tld (%s), a", z.varName(o.Name))
 		}
 		z.fill()
 
@@ -664,14 +675,14 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 			z.emit("\tld a, d")
 			z.emitf("\tld (ix+%d), a", off+1)
 		} else {
-			z.emitf("\tld (%s), de", o.Name)
+			z.emitf("\tld (%s), de", z.varName(o.Name))
 		}
 		z.fill()
 
 	// ── Pointers & Memory ──
 	case PUSH_A:
 		z.spill()
-		z.emitf("\tld de, %s", o.Name)
+		z.emitf("\tld de, %s", z.varName(o.Name))
 
 	case READ_B:
 		z.emit("\tld a, (de)")
@@ -693,14 +704,20 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 
 	case WRITE_W:
 		z.emit("\tpush hl")
-		z.emit("\tld hl, de")
+		z.emit("\tld b, d")
+		z.emit("\tld c, e         // BC = value to write")
 		z.fill()
-		z.emit("\tld a, l")
-		z.emit("\tld (de), a")
-		z.emit("\tinc de")
-		z.emit("\tld a, h")
-		z.emit("\tld (de), a")
-		z.emit("\tpop hl")
+		// DE = target address, HL = updated data stack ptr
+		z.emit("\tpush de         // save target address")
+		z.emit("\tld d, b")
+		z.emit("\tld e, c         // DE = value to write")
+		z.emit("\tpop hl          // HL = target address")
+		z.emit("\tld a, e")
+		z.emit("\tld (hl), a")
+		z.emit("\tinc hl")
+		z.emit("\tld a, d")
+		z.emit("\tld (hl), a")
+		z.emit("\tpop hl          // restore data stack ptr")
 
 	// ── Math & Logic ──
 	case ADD_B:
@@ -711,12 +728,17 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.emit("\tld d, 0")
 
 	case ADD_W:
-		z.emit("\tpush hl")
-		z.emit("\tld hl, de")
+		z.emit("\tld b, d")
+		z.emit("\tld c, e         // BC = right (TOS)")
 		z.fill()
-		z.emit("\tadd hl, de")
-		z.emit("\tex de, hl")
-		z.emit("\tpop hl")
+		// DE = left (NEXT), HL = updated data stack ptr
+		z.emit("\tpush hl")
+		z.emit("\tex de, hl       // HL = left, DE = saved HL")
+		z.emit("\tld d, b")
+		z.emit("\tld e, c         // DE = right")
+		z.emit("\tadd hl, de      // HL = left + right")
+		z.emit("\tex de, hl       // DE = result")
+		z.emit("\tpop hl          // restore data stack ptr")
 
 	case SUB_B:
 		z.emit("\tld b, e         // save TOS (right)")
@@ -740,47 +762,57 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.emit("\tld d, 0")
 
 	case SUB_W:
-		z.emit("\tpush hl")
-		z.emit("\tex de, hl       // HL = TOS (right operand)")
+		z.emit("\tld b, d")
+		z.emit("\tld c, e         // BC = right (TOS)")
 		z.fill()
-		z.emit("\tex de, hl       // HL = left, DE = right")
+		// DE = left (NEXT), HL = updated data stack ptr
+		z.emit("\tpush hl")
+		z.emit("\tex de, hl       // HL = left, DE = saved HL")
+		z.emit("\tld d, b")
+		z.emit("\tld e, c         // DE = right")
 		z.emit("\tor a")
 		z.emit("\tsbc hl, de      // HL = left - right")
 		z.emit("\tex de, hl       // DE = result")
-		z.emit("\tpop hl")
+		z.emit("\tpop hl          // restore data stack ptr")
 
 	case MUL_B, MUL_W:
-		z.emit("\tpush hl")
-		z.emit("\tld bc, de")
+		z.emit("\tld b, d")
+		z.emit("\tld c, e         // BC = right (TOS)")
 		z.fill()
-		z.emit("\tex de, hl")
+		// DE = left (NEXT), HL = updated data stack ptr
+		z.emit("\tpush hl")
+		z.emit("\tex de, hl       // HL = left, DE = saved HL")
 		z.emit("\tld d, b")
-		z.emit("\tld e, c")
+		z.emit("\tld e, c         // DE = right")
 		z.emit("\tcall _plz_mul   // HL = left * right")
-		z.emit("\tex de, hl")
-		z.emit("\tpop hl")
+		z.emit("\tex de, hl       // DE = result")
+		z.emit("\tpop hl          // restore data stack ptr")
 
 	case DIV_B, DIV_W:
-		z.emit("\tpush hl")
-		z.emit("\tld bc, de       // save TOS (divisor)")
+		z.emit("\tld b, d")
+		z.emit("\tld c, e         // BC = right (TOS, divisor)")
 		z.fill()
-		z.emit("\tex de, hl       // HL = left (dividend)")
+		// DE = left (NEXT, dividend), HL = updated data stack ptr
+		z.emit("\tpush hl")
+		z.emit("\tex de, hl       // HL = dividend, DE = saved HL")
 		z.emit("\tld d, b")
-		z.emit("\tld e, c         // DE = right (divisor)")
-		z.emit("\tcall _plz_div   // HL = left / right")
+		z.emit("\tld e, c         // DE = divisor")
+		z.emit("\tcall _plz_div   // HL = dividend / divisor")
 		z.emit("\tex de, hl")
-		z.emit("\tpop hl")
+		z.emit("\tpop hl          // restore data stack ptr")
 
 	case MOD_B, MOD_W:
-		z.emit("\tpush hl")
-		z.emit("\tld bc, de       // save TOS (divisor)")
+		z.emit("\tld b, d")
+		z.emit("\tld c, e         // BC = right (TOS, divisor)")
 		z.fill()
-		z.emit("\tex de, hl       // HL = left (dividend)")
+		// DE = left (NEXT, dividend), HL = updated data stack ptr
+		z.emit("\tpush hl")
+		z.emit("\tex de, hl       // HL = dividend, DE = saved HL")
 		z.emit("\tld d, b")
-		z.emit("\tld e, c         // DE = right (divisor)")
+		z.emit("\tld e, c         // DE = divisor")
 		z.emit("\tcall _plz_mod")
 		z.emit("\tex de, hl")
-		z.emit("\tpop hl")
+		z.emit("\tpop hl          // restore data stack ptr")
 
 	case SHL_B:
 		z.emit("\tld b, e         // B = shift count")
@@ -849,16 +881,19 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.emit("\tld d, 0")
 
 	case AND_W:
-		z.emit("\tpush hl")
-		z.emit("\tld hl, de")
+		z.emit("\tld b, d")
+		z.emit("\tld c, e         // BC = right (TOS)")
 		z.fill()
-		z.emit("\tld a, e")
-		z.emit("\tand l")
-		z.emit("\tld e, a")
-		z.emit("\tld a, d")
-		z.emit("\tand h")
-		z.emit("\tld d, a")
-		z.emit("\tpop hl")
+		// DE = left (NEXT), HL = updated data stack ptr
+		z.emit("\tpush hl")
+		z.emit("\tex de, hl       // HL = left, DE = saved HL")
+		z.emit("\tld a, l")
+		z.emit("\tand c")
+		z.emit("\tld e, a         // result low byte")
+		z.emit("\tld a, h")
+		z.emit("\tand b")
+		z.emit("\tld d, a         // result high byte")
+		z.emit("\tpop hl          // restore data stack ptr")
 
 	case OR_B:
 		z.emit("\tld a, e")
@@ -868,16 +903,19 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.emit("\tld d, 0")
 
 	case OR_W:
-		z.emit("\tpush hl")
-		z.emit("\tld hl, de")
+		z.emit("\tld b, d")
+		z.emit("\tld c, e         // BC = right (TOS)")
 		z.fill()
-		z.emit("\tld a, e")
-		z.emit("\tor l")
-		z.emit("\tld e, a")
-		z.emit("\tld a, d")
-		z.emit("\tor h")
-		z.emit("\tld d, a")
-		z.emit("\tpop hl")
+		// DE = left (NEXT), HL = updated data stack ptr
+		z.emit("\tpush hl")
+		z.emit("\tex de, hl       // HL = left, DE = saved HL")
+		z.emit("\tld a, l")
+		z.emit("\tor c")
+		z.emit("\tld e, a         // result low byte")
+		z.emit("\tld a, h")
+		z.emit("\tor b")
+		z.emit("\tld d, a         // result high byte")
+		z.emit("\tpop hl          // restore data stack ptr")
 
 	case XOR_B:
 		z.emit("\tld a, e")
@@ -887,16 +925,19 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.emit("\tld d, 0")
 
 	case XOR_W:
-		z.emit("\tpush hl")
-		z.emit("\tld hl, de")
+		z.emit("\tld b, d")
+		z.emit("\tld c, e         // BC = right (TOS)")
 		z.fill()
-		z.emit("\tld a, e")
-		z.emit("\txor l")
-		z.emit("\tld e, a")
-		z.emit("\tld a, d")
-		z.emit("\txor h")
-		z.emit("\tld d, a")
-		z.emit("\tpop hl")
+		// DE = left (NEXT), HL = updated data stack ptr
+		z.emit("\tpush hl")
+		z.emit("\tex de, hl       // HL = left, DE = saved HL")
+		z.emit("\tld a, l")
+		z.emit("\txor c")
+		z.emit("\tld e, a         // result low byte")
+		z.emit("\tld a, h")
+		z.emit("\txor b")
+		z.emit("\tld d, a         // result high byte")
+		z.emit("\tpop hl          // restore data stack ptr")
 
 	case NEG_B:
 		z.emit("\tld a, e")
@@ -957,7 +998,7 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		// Save TOS (DE) to BC, pop NEXT (a) to DE, push a, overwrite stack with BC
 		z.emit("\tld b, e")
 		z.emit("\tld c, d         // BC = TOS")
-		z.fill() // DE = NEXT (a). HL -= 2.
+		z.fill()  // DE = NEXT (a). HL -= 2.
 		z.spill() // push a to stack slot. HL back to original position.
 		// Overwrite the stack top with BC (old TOS):
 		z.emit("\tdec hl")
@@ -971,17 +1012,18 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 	// ── Comparison ──
 	case IS_B, IS_W:
 		// Save TOS (right) to BC, pop NEXT (left) to DE,
-		// set HL=left, DE=right, call appropriate helper
+		// then call comparison helper with HL=left, DE=right
 		helper := cmpHelper(o.Cond)
-		z.emit("\tpush hl")
-		z.emit("\tld bc, de       // BC = right (TOS)")
-		z.fill() // DE = left (NEXT)
-		z.emit("\tex de, hl       // HL = left")
+		z.emit("\tld b, d")
+		z.emit("\tld c, e         // BC = right (TOS)")
+		z.fill() // DE = left (NEXT), HL = HL_orig - 2
+		z.emit("\tpush hl         // save data stack ptr (post-fill)")
+		z.emit("\tex de, hl       // HL = left, DE = old HL")
 		z.emit("\tld d, b")
 		z.emit("\tld e, c         // DE = right")
 		z.emitf("\tcall %s", helper)
 		z.emit("\tex de, hl       // DE = result (0/1)")
-		z.emit("\tpop hl")
+		z.emit("\tpop hl          // restore data stack ptr")
 
 	// ── Control Flow ──
 	case TAG:

@@ -30,22 +30,37 @@ func TestZ80GenDataMovement(t *testing.T) {
 		{
 			name: "GET_B",
 			prog: &Program{Instrs: []Instr{{Op: GET_B, Operand: Operand{Type: OpName, Name: "x"}}}},
-			want: []string{"ld (hl), e", "ld a, (x)", "ld e, a", "ld d, 0"},
+			want: []string{"ld (hl), e", "ld a, (_v_x)", "ld e, a", "ld d, 0"},
+		},
+		{
+			name: "GET_B",
+			prog: &Program{Instrs: []Instr{{Op: GET_B, Operand: Operand{Type: OpName, Name: "x"}}}},
+			want: []string{"ld a, (_v_x)"},
 		},
 		{
 			name: "GET_W",
 			prog: &Program{Instrs: []Instr{{Op: GET_W, Operand: Operand{Type: OpName, Name: "y"}}}},
-			want: []string{"ld (hl), e", "ld de, (y)"},
+			want: []string{"ld de, (_v_y)"},
 		},
 		{
 			name: "PUT_B",
 			prog: &Program{Instrs: []Instr{{Op: PUT_B, Operand: Operand{Type: OpName, Name: "x"}}}},
-			want: []string{"ld a, e", "ld (x), a", "dec hl", "ld d, (hl)", "dec hl", "ld e, (hl)"},
+			want: []string{"ld (_v_x), a"},
 		},
 		{
 			name: "PUT_W",
 			prog: &Program{Instrs: []Instr{{Op: PUT_W, Operand: Operand{Type: OpName, Name: "y"}}}},
-			want: []string{"ld (y), de", "dec hl", "ld d, (hl)"},
+			want: []string{"ld (_v_y), de"},
+		},
+		{
+			name: "PUT_B",
+			prog: &Program{Instrs: []Instr{{Op: PUT_B, Operand: Operand{Type: OpName, Name: "x"}}}},
+			want: []string{"ld a, e", "ld (_v_x), a", "dec hl", "ld d, (hl)", "dec hl", "ld e, (hl)"},
+		},
+		{
+			name: "PUT_W",
+			prog: &Program{Instrs: []Instr{{Op: PUT_W, Operand: Operand{Type: OpName, Name: "y"}}}},
+			want: []string{"ld (_v_y), de", "dec hl", "ld d, (hl)"},
 		},
 	}
 	for _, tc := range tests {
@@ -70,7 +85,7 @@ func TestZ80GenPointers(t *testing.T) {
 		{
 			name: "PUSH_A",
 			prog: &Program{Instrs: []Instr{{Op: PUSH_A, Operand: Operand{Type: OpName, Name: "arr"}}}},
-			want: []string{"ld de, arr"},
+			want: []string{"ld de, _v_arr"},
 		},
 		{
 			name: "READ_B",
@@ -690,15 +705,15 @@ PUT_W y
 	var gen Z80Gen
 	out := gen.Gen(prog)
 	check := []string{
-		"x: ds",
-		"y: ds",
+		"_v_x: ds",
+		"_v_y: ds",
 		"ld a, e",
-		"ld (x), a",
-		"ld (y), de",
+		"ld (_v_x), a",
+		"ld (_v_y), de",
 	}
 	for _, s := range check {
 		if !strings.Contains(out, s) {
-			t.Errorf("output missing %q\n%s", s, out)
+			t.Errorf("output missing %q\n%s", out, s)
 		}
 	}
 }

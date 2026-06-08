@@ -80,8 +80,8 @@ const (
 
 	// ── Control Flow ───────────────────────────────────────────────
 
-	TAG  // [name] Declare a jump target label. Global scope, forward-referencable.
-	GO   // [name] Unconditional jump to tag.
+	TAG   // [name] Declare a jump target label. Global scope, forward-referencable.
+	GO    // [name] Unconditional jump to tag.
 	GO_IF // [name] Pop value; jump to tag if non-zero (true).
 
 	// ── Procedures ─────────────────────────────────────────────────
@@ -130,9 +130,9 @@ const (
 
 	// ── Data Emission ──────────────────────────────────────────────
 
-	DATA_B   // [number] Emit a byte of ROM constant data.
-	DATA_W   // [number] Emit a word of ROM constant data.
-	DATA_STR // [string] Emit a null-terminated string constant.
+	DATA_B    // [number] Emit a byte of ROM constant data.
+	DATA_W    // [number] Emit a word of ROM constant data.
+	DATA_STR  // [string] Emit a null-terminated string constant.
 	DATA_TILE // [string] Emit an 8x8 SMS tile from a backtick string.
 
 	// ── Pragma ─────────────────────────────────────────────────────
@@ -200,11 +200,11 @@ func (c Condition) String() string {
 
 // Operand is the (at most one) argument carried by an instruction.
 type Operand struct {
-	Type  OperandType
-	Num   uint16
-	Name  string
-	Str   string
-	Cond  Condition
+	Type OperandType
+	Num  uint16
+	Name string
+	Str  string
+	Cond Condition
 }
 
 // Instr couples an opcode with an optional operand.
