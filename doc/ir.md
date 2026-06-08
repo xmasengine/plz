@@ -600,3 +600,13 @@ is free as a scratch register.
 
 IY must not be modified by generated code. On SMS the BIOS and
 VDP interrupt handler may rely on IY holding a system pointer.
+
+
+# To Do & Work In Progress
+
+* Investigate and decide if the current Data Stack operation order
+  is optimal or should be inverted from `NEXT op TOS` to `TOS op NEXT`.
+
+* AT is not implemented correctly yet for Z80.
+
+
