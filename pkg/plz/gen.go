@@ -1747,6 +1747,12 @@ func (g *Gen) genForGroup(s Group) error {
 	g.addForTemp(stepLabel)
 	g.addForTemp(endLabel)
 
+	// Determine if the loop variable is BYTE so we use correct load/store size.
+	isByte := false
+	if t, ok := g.localType(s.For.Reference.Identifier); ok {
+		isByte = t.Predeclared() == PredeclaredByte
+	}
+
 	// Evaluate step (default 1), store in temp variable
 	if s.For.By != nil {
 		if err := s.For.By.Gen(g); err != nil {
@@ -1767,12 +1773,23 @@ func (g *Gen) genForGroup(s Group) error {
 	if err := s.For.Start.Gen(g); err != nil {
 		return err
 	}
-	g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
+	if isByte {
+		g.Emitln("\tld a, l")
+		g.Emitf("\tld (%s), a\n", g.localSym(s.For.Reference.Identifier))
+	} else {
+		g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
+	}
 
 	g.Emitf("_for_%d:\n", n)
 	// Compare var with end (hl = end - var)
 	g.Emitf("\tld hl, (%s)\n", endLabel)
-	g.Emitf("\tld de, (%s)\n", g.localSym(s.For.Reference.Identifier))
+	if isByte {
+		g.Emitf("\tld a, (%s)\n", g.localSym(s.For.Reference.Identifier))
+		g.Emitln("\tld e, a")
+		g.Emitln("\tld d, 0")
+	} else {
+		g.Emitf("\tld de, (%s)\n", g.localSym(s.For.Reference.Identifier))
+	}
 	g.Emitln("\tor a")
 	g.Emitln("\tsbc hl, de")
 	g.Emitf("\tjmp c, _end_%d\n", n)
@@ -1788,9 +1805,20 @@ func (g *Gen) genForGroup(s Group) error {
 
 	// var += step
 	g.Emitf("\tld hl, (%s)\n", stepLabel)
-	g.Emitf("\tld de, (%s)\n", g.localSym(s.For.Reference.Identifier))
+	if isByte {
+		g.Emitf("\tld a, (%s)\n", g.localSym(s.For.Reference.Identifier))
+		g.Emitln("\tld e, a")
+		g.Emitln("\tld d, 0")
+	} else {
+		g.Emitf("\tld de, (%s)\n", g.localSym(s.For.Reference.Identifier))
+	}
 	g.Emitln("\tadd hl, de")
-	g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
+	if isByte {
+		g.Emitln("\tld a, l")
+		g.Emitf("\tld (%s), a\n", g.localSym(s.For.Reference.Identifier))
+	} else {
+		g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
+	}
 	g.Emitf("\tjmp _for_%d\n", n)
 	g.Emitf("_end_%d:\n", n)
 	return nil
