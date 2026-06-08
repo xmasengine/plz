@@ -51,6 +51,10 @@ const (
 	OR_W  // Word bitwise OR:  NEXT | TOS.
 	XOR_B // Byte bitwise XOR: NEXT ^ TOS.
 	XOR_W // Word bitwise XOR: NEXT ^ TOS.
+	NEG_B // Byte unary negation: 0 − TOS, byte result.
+	NEG_W // Word unary negation: 0 − TOS, word result.
+	NOT_B // Byte logical not: 1 if TOS==0 else 0, byte result.
+	NOT_W // Word logical not: 1 if TOS==0 else 0, word result.
 
 	// ── Casting ────────────────────────────────────────────────────
 
@@ -87,11 +91,12 @@ const (
 
 	// ── Tasks ──────────────────────────────────────────────────────
 
-	JOB   // [name] Declare start of a cooperative task.
-	BYE   // Yield control back to the scheduler.
-	SLEEP // Pop 16-bit tick count; sleep current task for that many ticks.
-	STOP  // [name] Suspend the named task.
-	START // [name] Resume the named task.
+	JOB      // [name] Declare start of a cooperative task.
+	PRIORITY // [n] One-shot: set priority (0-15) for the next JOB.
+	BYE      // Yield control back to the scheduler.
+	SLEEP    // Pop 16-bit tick count; sleep current task for that many ticks.
+	STOP     // [name] Suspend the named task.
+	START    // [name] Resume the named task.
 
 	// ── Port I/O ───────────────────────────────────────────────────
 

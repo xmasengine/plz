@@ -133,6 +133,22 @@ XOR_B / XOR_W
 
     NEXT & TOS  /  NEXT | TOS  /  NEXT ^ TOS
 
+NEG_B / NEG_W
+
+    Unary negation: pops a value, pushes its two's complement (0 − value).
+    Example — `LET x = -y`:
+        GET_W y
+        NEG_W
+        PUT_W x
+
+NOT_B / NOT_W
+
+    Logical not: pops a value, pushes 1 if the value was 0, otherwise 0.
+    Example — `IF NOT done THEN ...`:
+        GET_W done
+        NOT_W
+        GO_IF continue
+
 ## Casting
 
 CAST_W
@@ -249,13 +265,36 @@ LOCAL_W [name]
 RUN [name]
 
     Calls a subroutine. The return address is pushed onto the hardware
-    return stack (SP). Arguments must be set up by the caller before RUN;
-    return values arrive on the data stack.
+    return stack (SP).
 
-    For REENTRANT callees, the caller pushes arguments onto the stack
-    (following the standard Z80 calling convention) before RUN. The
-    callee's FRAME then references them as LOCALs at known offsets
-    from the frame pointer.
+    **Argument passing convention**: arguments are pushed onto the data
+    stack in **reverse order** (rightmost argument first). This way the
+    first argument ends up as TOS and can be popped first by the callee.
+
+    **Return values**: the callee pushes return value(s) onto the data
+    stack before DONE. The caller finds them on the data stack after RUN
+    returns. Multiple return values are pushed left-to-right (first
+    return at TOS).
+
+    Example — `CALL foo(a, b)` where foo declares params `(x, y)`:
+
+        ; Caller:
+        GET_W b         ; push rightmost arg first
+        GET_W a         ; push leftmost arg last (now TOS)
+        RUN foo
+
+        ; Callee:
+        ROUTE foo
+        FRAME 4
+        LOCAL_W x       ; first param
+        LOCAL_W y       ; second param
+        PUT_W x         ; pop TOS → x (correct: a)
+        PUT_W y         ; pop → y (correct: b)
+
+    The data stack is **preserved across calls**: values pushed before
+    RUN are still there after RUN returns (except those consumed as
+    arguments). The callee sees the same data stack pointer; it just
+    adds its own temporaries on top and leaves return values when done.
 
 DONE
 
@@ -329,6 +368,17 @@ JOB [name]
 
     Declares the start of a cooperative task. Code follows until the
     next ROUTE, JOB, or end of the IR program. Forward references allowed.
+
+PRIORITY [n]
+
+    One-shot directive: sets the priority (0=highest, 15=lowest) for
+    the next JOB declaration. If omitted, default priority is 7.
+    Like AT, only the immediately following JOB is affected.
+
+    Example:
+        PRIORITY 4
+        JOB music_player
+        ...
 
 BYE
 
