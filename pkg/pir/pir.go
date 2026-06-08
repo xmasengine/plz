@@ -71,6 +71,9 @@ const (
 	// ── Procedures ─────────────────────────────────────────────────
 
 	ROUTE          // [name] Declare start of a subroutine.
+	FRAME          // [size] Allocate stack frame (must follow ROUTE for reentrant procs).
+	LOCAL_B        // [name] Declare 8-bit frame-relative local (requires FRAME).
+	LOCAL_W        // [name] Declare 16-bit frame-relative local (requires FRAME).
 	RUN            // [name] Call a subroutine (return address on SP).
 	DONE           // Return from subroutine (RET).
 	DONE_INTERRUPT // Return from interrupt handler (RETI).

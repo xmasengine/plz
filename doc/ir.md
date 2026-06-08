@@ -184,15 +184,51 @@ ROUTE [name]
     Declares the start of a subroutine. Code follows until the next
     ROUTE, JOB, or end of the IR program. Forward references allowed.
 
+FRAME [size]
+
+    Declares a stack frame of `size` bytes for the current ROUTE.
+    Must appear immediately after ROUTE (before any other instruction
+    in the subroutine body). The backend sets up a frame pointer
+    (IX on Z80) and adjusts SP to allocate `size` bytes.
+
+    A DONE/DONE_INTERRUPT/DONE_NMI in a FRAME-d procedure tears
+    down the frame before returning.
+
+    Non-REENTRANT procedures omit FRAME entirely and use global
+    VAR storage instead.
+
+LOCAL_B [name]
+LOCAL_W [name]
+
+    Declare an 8-bit or 16-bit local variable allocated on the stack
+    frame. Valid only inside a ROUTE that uses FRAME. The variable
+    is accessed via GET_B/PUT_B (same instructions as global VARs);
+    the backend resolves the addressing mode from the declaration.
+
+    The offset within the frame is assigned sequentially: first
+    LOCAL_B uses offset 0, next LOCAL_W uses offset 1 (or 2 for
+    word alignment), etc.
+
+    For reentrant recursion to work, parameters are also stored
+    in LOCAL slots — the prologue copies register-passed arguments
+    to their LOCAL positions.
+
 RUN [name]
 
     Calls a subroutine. The return address is pushed onto the hardware
     return stack (SP). Arguments must be set up by the caller before RUN;
     return values arrive on the data stack.
 
+    For REENTRANT callees, the caller pushes arguments onto the stack
+    (following the standard Z80 calling convention) before RUN. The
+    callee's FRAME then references them as LOCALs at known offsets
+    from the frame pointer.
+
 DONE
 
-    Returns from a subroutine (plain RET).
+    Returns from a subroutine (plain RET). If the procedure has a
+    FRAME, the frame is torn down (SP restored, IX popped) before
+    the RET.
 
 DONE_INTERRUPT
 
@@ -201,6 +237,58 @@ DONE_INTERRUPT
 DONE_NMI
 
     Returns from a non-maskable interrupt handler (RETN).
+
+Example — Reentrant factorial (5!):
+
+    ; Caller:
+    PUSH_W 5        ; push argument on data stack
+    RUN fact        ; call
+    ; data stack now has result (120)
+
+    ; Callee:
+    ROUTE fact
+    FRAME 6         ; 3 locals × 2 bytes each
+    LOCAL_W n       ; n at ix+0
+    LOCAL_W result  ; result at ix+2
+    LOCAL_W i       ; i at ix+4
+
+    PUT_W n         ; pop argument from data stack → LOCAL n
+
+    GET_W n         ; if n <= 1: return 1
+    PUSH_W 1
+    IS_W LE
+    GO_IF base
+
+    PUSH_W 1        ; result = 1
+    PUT_W result
+    PUSH_W 2        ; i = 2
+    PUT_W i
+
+loop:
+    GET_W i         ; if i > n: done
+    GET_W n
+    IS_W GT
+    GO_IF done
+
+    GET_W result    ; result = result * i
+    GET_W i
+    MUL_W
+    PUT_W result
+
+    GET_W i         ; i = i + 1
+    PUSH_W 1
+    ADD_W
+    PUT_W i
+
+    GO loop
+
+base:
+    PUSH_W 1
+    DONE
+
+done:
+    GET_W result
+    DONE
 
 ## Tasks
 
