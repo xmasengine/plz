@@ -33,7 +33,9 @@ Examples:
     PUSH_W 3
     SUB_W              ; 10 - 3 → 7
 
-Unary operations (CAST, NOT via XOR -1, etc.) pop one value and push one result.
+Unary operations (CAST, SEED) pop one value and push one result.
+Stack-manipulation operations (DUP, DROP, SWAP) rearrange the stack
+without changing the semantics of values on it.
 
 
 # Complete IR Instruction List
@@ -141,6 +143,37 @@ CAST_B
 
     Pops a word value, truncates to the low 8 bits (high byte discarded),
     pushes the result.
+
+## Stack Manipulation
+
+DUP
+
+    Duplicates the top-of-stack value.
+    Effect: `[..., a] → [..., a, a]`
+
+DROP
+
+    Discards the top-of-stack value.
+    Effect: `[..., a] → [...]`
+
+    Essential for CALL-as-statement: when a procedure's return value
+    is not needed, DROP removes it from the stack.
+
+SWAP
+
+    Exchanges the top two stack values.
+    Effect: `[..., a, b] → [..., b, a]`  (b was TOS, a was NEXT)
+
+    Useful for read-modify-write patterns:
+        PUSH_A arr     ; stack: [addr]
+        GET_W i        ; stack: [addr, i]
+        ADD_W          ; stack: [addr_of_arr_i]
+        DUP            ; stack: [addr, addr]
+        READ_W         ; stack: [addr, val]
+        PUSH_W 1       ; stack: [addr, val, 1]
+        ADD_W          ; stack: [addr, val+1]
+        SWAP           ; stack: [val+1, addr]
+        WRITE_W        ; stack: []
 
 ## Comparison
 

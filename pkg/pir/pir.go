@@ -57,6 +57,12 @@ const (
 	CAST_W // Zero-extend byte to word (from TOS, push result).
 	CAST_B // Truncate word to byte (keep low 8 bits, push result).
 
+	// ── Stack Manipulation ─────────────────────────────────────────
+
+	DUP  // Duplicate TOS: [a] → [a, a]
+	DROP // Discard TOS:   [a] → []
+	SWAP // Exchange TOS and NEXT: [a, b] → [b, a]
+
 	// ── Comparison ─────────────────────────────────────────────────
 
 	IS_B // [cond] Pop two byte values; compare NEXT against TOS using condition; push 0/1.
