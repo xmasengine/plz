@@ -49,6 +49,8 @@ type arguments struct {
 	}
 	IncludeDirs StringList
 	Sources     []string
+	Legacy      bool
+	Arch        string
 	Timeout     time.Duration
 	Ctx         context.Context
 }
@@ -108,6 +110,8 @@ func main() {
 	flag.StringVar(&args.Format, "f", "bin", "output file format")
 	flag.Var(&args.IncludeDirs, "d", "include directories")
 	flag.IntVar(&args.InputPort, "q", 0, "input port for emulation")
+	flag.BoolVar(&args.Legacy, "legacy", false, "Use legacy generator (skip PIR)")
+	flag.StringVar(&args.Arch, "arch", "z80", "Target architecture (z80, 6502, nes)")
 	flag.Parse()
 	if args.Mode.Help {
 		flag.PrintDefaults()
@@ -160,7 +164,7 @@ func main() {
 			os.Exit(2)
 		}
 		src := args.Sources[0]
-		err := plz.Compile(args.Output, args.Format, src)
+		err := plz.CompileOpt(args.Output, args.Format, src, args.Arch, args.Legacy)
 		ExitIfError("compiler", err)
 	} else if args.Mode.Run {
 		output, err := os.CreateTemp("", "plz_*."+args.Format)
@@ -172,7 +176,7 @@ func main() {
 			os.Exit(2)
 		}
 		src := args.Sources[0]
-		err = plz.Compile(output.Name(), args.Format, src)
+		err = plz.CompileOpt(output.Name(), args.Format, src, args.Arch, args.Legacy)
 		ExitIfError("run", err)
 
 		v := sms.New(false)

@@ -1,7 +1,7 @@
 *.out
 *.bin
 *.asm
-plz
+build/
 tmp/
 port/
 oldasm/
