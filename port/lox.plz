@@ -125,9 +125,20 @@ INCLUDE "font.plz"
 PROCEDURE print_abc()
 	DECLARE letter BYTE
 	DECLARE i BYTE
-	FOR i = 0 TO 26 DO
+	WHILE i < 26 DO
 		LET letter = 'A' + i
 		CALL print_char(letter)
+		LET i = i + 1
+	END
+END
+
+PROCEDURE print_abc_l()
+	DECLARE letter BYTE
+	DECLARE i BYTE
+	WHILE i < 26 DO
+		LET letter = 'a' + i
+		CALL print_char(letter)
+		LET i = i + 1
 	END
 END
 
@@ -155,12 +166,13 @@ start:
 	CALL cls
 //	BANK 1
 
-	CALL load_tiles('A', font, 8)
-	CALL load_tiles('I', font_h, 18)
-    CALL load_tiles(128, nun_tiles, NUN_TILE_COUNT)
+	CALL load_tiles('A', font, 26)
+
+	CALL load_tiles('a', font_l, 26)
+    // CALL load_tiles(128, nun_tiles, NUN_TILE_COUNT)
 //	BANK 0
 	DECLARE nun_pattern BYTE
-	CALL set_cursor(1,15)
+/*	CALL set_cursor(1,15)
 	CALL print_char('A')
 	CALL print_char('B')
 	CALL print_char('C')
@@ -187,9 +199,14 @@ start:
 	CALL print_char('X')
 	CALL print_char('Y')
 	CALL print_char('Z')
-
+*/
 	CALL set_cursor(1,16)
 	CALL print_abc()
+
+	CALL set_cursor(1,17)
+	CALL print_abc_l()
+
+
 	CALL set_cursor(1,1)
 	CALL draw_nun
 
