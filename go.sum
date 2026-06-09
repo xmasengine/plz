@@ -1,3 +1,5 @@
+github.com/beevik/go6502 v0.3.0 h1:1Gsf1VZjZapXcQbrIzgnqHCPy9+4QuaUNZKyCVBGISY=
+github.com/beevik/go6502 v0.3.0/go.mod h1:RnOLF4I+55D4QsUn0BQK1Sy40dtjco/XHC+iI82IBU0=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/koron-go/z80 v0.10.2 h1:WDv01O98uV00yD775QBqEfTvOOj1aqk3czEY5esw+8Q=
