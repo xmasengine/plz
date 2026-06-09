@@ -23,6 +23,12 @@ All binary operations pop **two** values from the data stack:
 
 The result `NEXT op TOS` is then pushed back.
 
+This `NEXT op TOS` convention matches established stack-machine
+practice — Forth (e.g. `10 3 - .` prints 7) and Java bytecode
+(`iload_a; iload_b; isub` computes `a - b`) both pop the right
+operand first. It also lets expressions read naturally left-to-right:
+`a - b` → push a, push b, SUB — no operand reversal needed.
+
 Examples:
 
     PUSH_W 10          ; stack: [10]
@@ -507,18 +513,30 @@ INLINE [string]
 
 ## Battery RAM (Save/Load)
 
+SRAM_ON
+
+    Enables battery-backed SRAM access by writing to the SMS
+    mapper control port (0xFFFC, bit 3 = 1). Must precede SAVE
+    or LOAD when accessing battery-backed SRAM.
+
+SRAM_OFF
+
+    Disables battery-backed SRAM access (writes 0x00 to port
+    0xFFFC). Should follow SAVE or LOAD to protect SRAM contents.
+
 SAVE
 
-    Pops a 16-bit length, then a 16-bit destination address, then a
-    16-bit source address. Copies `length` bytes from source to
-    destination. The destination is typically battery-backed SRAM
-    at 0x8000 on SMS.
+    Generic block copy. Pops a 16-bit length, then a 16-bit
+    destination address, then a 16-bit source address. Copies
+    `length` bytes from source to destination.
+    When used with battery-backed SRAM, wrap in SRAM_ON/SAVE/SRAM_OFF.
 
 LOAD
 
-    Pops a 16-bit length, then a 16-bit destination address, then a
-    16-bit source address. Copies `length` bytes from source to
-    destination. The source is typically battery-backed SRAM.
+    Generic block copy. Pops a 16-bit length, then a 16-bit
+    destination address, then a 16-bit source address. Copies
+    `length` bytes from source to destination.
+    When used with battery-backed SRAM, wrap in SRAM_ON/LOAD/SRAM_OFF.
 
 
 # Z80 Register Mapping
@@ -602,11 +620,110 @@ IY must not be modified by generated code. On SMS the BIOS and
 VDP interrupt handler may rely on IY holding a system pointer.
 
 
+# 6502 Register Mapping
+
+The following mapping is used for the 6502 backend:
+
+┌────────────────────────────────────────────────────────────┐
+│                    6502 REGISTERS & FUNCTIONS               │
+├───────────────────┬────────────────────────────────────────┤
+│ REGISTER / ADDR   │ COMPILER ROLE                          │
+├───────────────────┼────────────────────────────────────────┤
+│     A             │ Accumulator — primary 8-bit ALU        │
+│                   │ Used for all 8-bit arithmetic and      │
+│                   │ data movement.                         │
+├───────────────────┼────────────────────────────────────────┤
+│     X             │ Index register — high byte of word     │
+│                   │ values during data stack operations.   │
+│                   │ After fillW: X = high byte.           │
+├───────────────────┼────────────────────────────────────────┤
+│     Y             │ Index register — always 0 for          │
+│                   │ (zeropage),Y addressing into the       │
+│                   │ data stack. Never modified elsewhere.  │
+├───────────────────┼────────────────────────────────────────┤
+│     SP            │ Hardware return stack. Used exclusively│
+│                   │ for JSR/RTS (call/return). NOT used    │
+│                   │ for data. Initialized to $FF.          │
+├───────────────────┼────────────────────────────────────────┤
+│     $00-$01 (zp)  │ Data Stack Pointer (16-bit, LE).      │
+│                   │ Points to the next free slot in the    │
+│                   │ data stack area (grows upward).        │
+│                   │ Initialized to StackBase.              │
+│                   │ Spill byte:  sta ($00),y; inc $00      │
+│                   │ Spill word:  sta ($00),y; inc $00;     │
+│                   │              txa; sta ($00),y; inc $00 │
+│                   │ Fill byte:   dec $00; lda ($00),y     │
+│                   │ Fill word:   dec $00; lda ($00),y;    │
+│                   │              tax; dec $00; lda ($00),y │
+├───────────────────┼────────────────────────────────────────┤
+│     $02-$05       │ General scratchpad / temp storage.    │
+│     (zp)          │ Used for temporary values during       │
+│                   │ binary operations, comparison, etc.    │
+├───────────────────┼────────────────────────────────────────┤
+│     $06-$FF       │ Free for program use (not used by      │
+│     (zp)          │ generated code).                       │
+└───────────────────┴────────────────────────────────────────┘
+
+## Architecture Notes
+
+### Data Stack via Zero-Page Pointer
+
+Unlike the Z80 backend (which uses DE as TOS cache and HL as data stack
+pointer), the 6502 backend uses a software-managed data stack with a
+zero-page pointer at $00-$01 (little-endian):
+
+- $00 = low byte, $01 = high byte
+- Stack grows **upward** (incrementing addresses)
+- Values are accessed via `(zp),y` indirect indexed addressing
+- Y is always 0 when accessing the data stack
+
+This design avoids the 6502's limited stack (hardware SP is only 8 bits)
+and provides a full 16-bit address space for the data stack.
+
+### Key Differences from Z80
+
+| Aspect              | Z80                           | 6502                          |
+|---------------------|-------------------------------|-------------------------------|
+| TOS cache           | DE register (always TOS)      | None (always in memory)       |
+| Data stack ptr      | HL register                   | Zero-page $00-$01 (memory)    |
+| Return stack        | SP (hardware)                 | SP (hardware)                 |
+| Word operations     | 16-bit add/sub with HL/DE/BC  | 2×8-bit ops, carry chaining   |
+| Frame pointer       | IX register                   | Not available (no frame ptr)  |
+| Temp storage        | BC, AF, IX (scratch)          | Zero-page $02-$05             |
+| Spill cost (byte)   | 3 bytes, 3 cycles             | 5 bytes, 7 cycles             |
+| Fill cost (byte)    | 5 bytes, 4 cycles             | 4 bytes, 6 cycles             |
+| Spill cost (word)   | 6 bytes, 6 cycles             | 10 bytes, 14 cycles           |
+| Fill cost (word)    | 10 bytes, 8 cycles            | 8 bytes, 12 cycles            |
+
+### Addressing Mode Constraints
+
+The 6502 backend avoids the following invalid addressing modes:
+
+- **No stack-relative**: `ora 1,s` is 65C02-only; use `sta $02` / `ora $02`
+  for zero-page temp operations instead.
+- **No multiply/divide hardware**: MUL and DIV are not yet implemented;
+  the backend emits stub comments.
+- **Single .org**: The go6502 assembler only supports one `.org` directive,
+  at the start. Variables are placed contiguously after code using label
+  references and `.ds` directives, without a second `.org`.
+
+### Assembly Format Requirements
+
+The go6502 assembler (`github.com/beevik/go6502/asm`) has specific
+syntax requirements:
+
+- **Pseudo-ops** (`.org`, `.byte`, `.word`, `.ds`) must be indented
+  with whitespace. Column-0 text is treated as labels.
+- **Comments** use `;` (semicolons), not `//`.
+- **Labels** start at column 0 and may or may not have a trailing `:`.
+- **Expressions** support `<expr` (low byte) and `>expr` (high byte)
+  as unary operators.
+
 # To Do & Work In Progress
 
-* Investigate and decide if the current Data Stack operation order
-  is optimal or should be inverted from `NEXT op TOS` to `TOS op NEXT`.
-
-* AT is not implemented correctly yet for Z80.
+* 6502 multiply/divide/modulo runtime helpers not yet implemented
+* 6502 frame pointer for reentrant procedures not implemented
+* 6502 task scheduler not implemented
+* 6502 SRAM save/load not implemented
 
 
