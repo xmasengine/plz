@@ -141,7 +141,7 @@ HALT`)
 func TestIntegrationPIR_ComparisonEQ(t *testing.T) {
 	io := compileAndRunPIR(t, `DECLARE x WORD
 LET x = 10
-IF x = 10 THEN OUTPUT 0 1 ELSE OUTPUT 0 0
+IF x == 10 THEN OUTPUT 0 1 ELSE OUTPUT 0 0
 HALT`)
 	if io.OutBytes[0][0] != 1 {
 		t.Errorf("expected 1, got %d", io.OutBytes[0][0])

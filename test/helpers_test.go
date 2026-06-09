@@ -201,10 +201,7 @@ func compileAndRunPIR(t *testing.T, src string) *emu.ByteIO {
 		t.Fatalf("genpir: %v", err)
 	}
 
-	t.Logf("PIR Program:\n%s", pirProg.String())
-
 	asmText := pir.NewZ80Gen(pir.DefaultConfig()).Gen(pirProg)
-	t.Logf("Z80 Assembly:\n%s", asmText)
 	asmPath := filepath.Join(dir, "test.asm")
 	if err := os.WriteFile(asmPath, []byte(asmText), 0644); err != nil {
 		t.Fatalf("write asm: %v", err)
