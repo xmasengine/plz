@@ -34,8 +34,9 @@ type Z80Gen struct {
 	lines []string
 
 	// variable tracking
-	varAddr map[string]uint16
-	varNext uint16
+	varAddr  map[string]uint16
+	varSizes map[string]int
+	varNext  uint16
 
 	// procedure / frame tracking
 	procName string
@@ -47,6 +48,9 @@ type Z80Gen struct {
 	// tag tracking for forward references
 	tags   map[string]bool
 	needHL int // label counter for unique locals
+
+	// one-shot AT directive tracking
+	pendingAT int // >=0 when AT is active, the target address; -1 when none
 
 	// usage tracking — which helpers we actually need
 	needMul   bool
@@ -62,7 +66,7 @@ type Z80Gen struct {
 
 // NewZ80Gen creates a Z80Gen with the given config.
 func NewZ80Gen(cfg Z80Config) *Z80Gen {
-	return &Z80Gen{cfg: cfg}
+	return &Z80Gen{cfg: cfg, varSizes: make(map[string]int), pendingAT: -1}
 }
 
 // varName returns the assembly-safe name for a user variable.
@@ -75,9 +79,11 @@ func (z *Z80Gen) varName(name string) string {
 func (z *Z80Gen) Gen(prog *Program) string {
 	z.lines = nil
 	z.varAddr = make(map[string]uint16)
+	z.varSizes = make(map[string]int)
 	z.varNext = z.cfg.HeapBase
 	z.localOff = make(map[string]int)
 	z.tags = make(map[string]bool)
+	z.pendingAT = -1
 
 	// Initial scan: collect variable names and tag definitions,
 	// detect which runtime helpers are needed.
@@ -100,21 +106,54 @@ func (z *Z80Gen) Gen(prog *Program) string {
 // scanProg does a first pass to collect variable names and detect requirements.
 func (z *Z80Gen) scanProg(prog *Program) {
 	for _, instr := range prog.Instrs {
+		consumed := false
+
 		switch instr.Op {
+		case AT:
+			z.pendingAT = int(instr.Operand.Num)
+
 		case VAR_B:
 			name := z.varName(instr.Operand.Name)
 			if _, ok := z.varAddr[name]; !ok {
-				z.varAddr[name] = z.varNext
-				z.varNext += 1
+				if z.pendingAT >= 0 {
+					z.varAddr[name] = uint16(z.pendingAT)
+					z.varSizes[name] = 1
+					consumed = true
+				} else {
+					z.varAddr[name] = z.varNext
+					z.varSizes[name] = 1
+					z.varNext += 1
+				}
 			}
+
 		case VAR_W:
 			name := z.varName(instr.Operand.Name)
 			if _, ok := z.varAddr[name]; !ok {
-				z.varAddr[name] = z.varNext
-				z.varNext += 2
+				if z.pendingAT >= 0 {
+					z.varAddr[name] = uint16(z.pendingAT)
+					z.varSizes[name] = 2
+					consumed = true
+				} else {
+					z.varAddr[name] = z.varNext
+					z.varSizes[name] = 2
+					z.varNext += 2
+				}
 			}
+
+		case DATA_B, DATA_W, DATA_STR, DATA_TILE:
+			consumed = true
+
+		case ROUTE:
+			consumed = true
+
+		case JOB:
+			z.needSched = true
+			z.taskCount++
+			consumed = true
+
 		case TAG:
 			z.tags[instr.Operand.Name] = true
+
 		case MUL_B, MUL_W:
 			z.needMul = true
 		case DIV_B, DIV_W:
@@ -123,9 +162,6 @@ func (z *Z80Gen) scanProg(prog *Program) {
 			z.needMod = true
 		case IS_B, IS_W:
 			z.needCmp = true
-		case JOB:
-			z.needSched = true
-			z.taskCount++
 		case BYE:
 			z.needSched = true
 		case SLEEP:
@@ -135,6 +171,10 @@ func (z *Z80Gen) scanProg(prog *Program) {
 			z.needSave = true
 		case LOAD:
 			z.needLoad = true
+		}
+
+		if !consumed && z.pendingAT >= 0 {
+			z.pendingAT = -1 // no declaration follows, silently ignore
 		}
 	}
 }
@@ -371,7 +411,7 @@ func (z *Z80Gen) emitRuntime() {
 
 	if z.needSave {
 		z.emit("_plz_save:")
-		z.emit("\t// pops length, dest, src; copies length bytes from src to dest")
+		z.emit("\t// generic block copy: pops length, dest, src; copies length bytes from src to dest")
 		z.emit("\t// data stack: TOS=length, NEXT=dest, NEXT2=src")
 		z.emit("\t// After fills: BC=length, DE=dest, HL=src")
 		z.emit("\tdec hl")
@@ -402,7 +442,7 @@ func (z *Z80Gen) emitRuntime() {
 
 	if z.needLoad {
 		z.emit("_plz_load:")
-		z.emit("\t// same as _plz_save but source/dest swapped")
+		z.emit("\t// generic block copy: pops length, dest, src; copies length bytes from src to dest")
 		z.emit("\tdec hl")
 		z.emit("\tld a, (hl)")
 		z.emit("\tdec hl")
@@ -455,18 +495,28 @@ func (z *Z80Gen) emitVars() {
 	z.emit("// -------------------------------------------------------------------")
 	z.emit("// Variable storage")
 	z.emit("// -------------------------------------------------------------------")
+	var curAddr uint16
+	first := true
 	for _, kv := range sorted {
+		if first {
+			z.emitf("org %d", kv.addr)
+			curAddr = kv.addr
+			first = false
+		} else if kv.addr != curAddr {
+			z.emitf("org %d", kv.addr)
+			curAddr = kv.addr
+		}
 		z.emitf("%s: ds %d", kv.name, z.varSize(kv.name))
+		curAddr += uint16(z.varSize(kv.name))
 	}
 	z.emit("")
 }
 
 func (z *Z80Gen) varSize(name string) int {
-	// We can't know if it was VAR_B or VAR_W from the map, so scan source again.
-	// Simpler: store size during scan. Use a separate map.
-	// For now, always emit 1 byte per var; the caller must use correct size.
-	// Actually, let's store sizes.
-	return 1 // placeholder — overridden by varSizeMap below
+	if s, ok := z.varSizes[name]; ok {
+		return s
+	}
+	return 1
 }
 
 func (z *Z80Gen) emitTaskStacks() {
@@ -608,6 +658,24 @@ func (z *Z80Gen) emitScheduler() {
 
 func (z *Z80Gen) emitProg(prog *Program) {
 	for _, instr := range prog.Instrs {
+		if instr.Op == AT {
+			z.pendingAT = int(instr.Operand.Num)
+			continue
+		}
+		// If a pending AT precedes this instruction, emit org for
+		// qualifying declarations. AT is one-shot — once consumed
+		// (or passed to a non-declaration) it is cleared.
+		if z.pendingAT >= 0 {
+			switch instr.Op {
+			case VAR_B, VAR_W:
+				// handled by scanProg + emitVars
+			case DATA_B, DATA_W, DATA_STR, DATA_TILE, ROUTE, JOB:
+				z.emitf("org %d", z.pendingAT)
+			default:
+				// no declaration follows — silently ignore
+			}
+			z.pendingAT = -1
+		}
 		z.emitInstr(instr)
 	}
 }
@@ -632,9 +700,6 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 
 	case VAR_B, VAR_W:
 	// Handled in scan phase; no code emitted here.
-
-	case AT:
-		z.emitf("org %d", o.Num)
 
 	case GET_B:
 		z.spill()
@@ -961,10 +1026,10 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 	case NOT_B:
 		z.emit("\tld a, e")
 		z.emit("\tor a")
-		z.emit("\tld e, 1")
+		z.emit("\tld e, 0")
 		li := z.nextLabel()
 		z.emitf("\tjr nz, _not_%d", li)
-		z.emit("\tld e, 0")
+		z.emit("\tinc e")
 		z.emitf("_not_%d:", li)
 		z.emit("\tld d, 0")
 
@@ -975,7 +1040,7 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.emit("\tor l")
 		z.emit("\tld de, 0")
 		li := z.nextLabel()
-		z.emitf("\tjr z, _notw_%d", li)
+		z.emitf("\tjr nz, _notw_%d", li)
 		z.emit("\tinc de")
 		z.emitf("_notw_%d:", li)
 		z.emit("\tpop hl")
@@ -1033,10 +1098,30 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.emitf("\tjmp %s", o.Name)
 
 	case GO_IF:
-		z.fill()
+		// The condition result is in DE; the data stack has garbage
+		// from PUSH_B spilling the old DE. Save DE, pop garbage, check.
 		z.emit("\tld a, e")
+		z.fill()
 		z.emit("\tor a")
 		z.emitf("\tjp nz, %s", o.Name)
+
+	case FRAME:
+		z.inFrame = true
+		z.frameSz = int(o.Num)
+		z.emit("\tpush ix")
+		z.emit("\tld ix, 0")
+		z.emit("\tadd ix, sp")
+		z.emitf("\tld hl, -%d", o.Num)
+		z.emit("\tadd hl, sp")
+		z.emit("\tld sp, hl")
+
+	case LOCAL_B:
+		z.localOff[o.Name] = z.localNxt
+		z.localNxt += 1
+
+	case LOCAL_W:
+		z.localOff[o.Name] = z.localNxt
+		z.localNxt += 2
 
 	// ── Procedures ──
 	case ROUTE:
@@ -1045,30 +1130,10 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.frameSz = 0
 		z.localOff = make(map[string]int)
 		z.localNxt = 0
-		z.emitf("%s:", o.Name)
-
-	case FRAME:
-		z.inFrame = true
-		z.frameSz = int(o.Num)
-		z.emit("\tpush ix")
-		z.emit("\tld ix, 0")
-		z.emit("\tadd ix, sp")
-		z.emit("\tpush hl")
-		z.emitf("\tld hl, -%d", o.Num)
-		z.emit("\tadd hl, sp")
-		z.emit("\tld sp, hl")
-		z.emit("\tpop hl")
-
-	case LOCAL_B:
-		z.localOff[o.Name] = z.localNxt
-		z.localNxt++
-
-	case LOCAL_W:
-		z.localOff[o.Name] = z.localNxt
-		z.localNxt += 2
+		z.emitf("_plz_%s:", o.Name)
 
 	case RUN:
-		z.emitf("\tcall %s", o.Name)
+		z.emitf("\tcall _plz_%s", o.Name)
 
 	case DONE:
 		if z.inFrame {
@@ -1218,6 +1283,14 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.emit("\t" + o.Str)
 
 	// ── Battery RAM ──
+	case SRAM_ON:
+		z.emit("\tld a, 8")
+		z.emit("\tld (0xfffc), a")
+
+	case SRAM_OFF:
+		z.emit("\tld a, 0")
+		z.emit("\tld (0xfffc), a")
+
 	case SAVE:
 		z.emit("\tcall _plz_save")
 

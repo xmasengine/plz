@@ -52,6 +52,8 @@ func TestInstrStringNoOperand(t *testing.T) {
 		{SWITCH, "SWITCH"},
 		{SAVE, "SAVE"},
 		{LOAD, "LOAD"},
+		{SRAM_ON, "SRAM_ON"},
+		{SRAM_OFF, "SRAM_OFF"},
 	}
 	for _, tc := range tests {
 		instr := Instr{Op: tc.op}

@@ -105,7 +105,7 @@ func TestZ80GenPointers(t *testing.T) {
 		{
 			name: "WRITE_W",
 			prog: &Program{Instrs: []Instr{{Op: WRITE_W}}},
-			want: []string{"push hl", "ld hl, de", "ld a, l", "ld (de), a", "inc de", "ld a, h", "ld (de), a", "pop hl"},
+			want: []string{"push hl", "ld b, d", "ld c, e", "pop hl", "ld (hl), a"},
 		},
 	}
 	for _, tc := range tests {
@@ -128,9 +128,9 @@ func TestZ80GenMath(t *testing.T) {
 		want []string
 	}{
 		{name: "ADD_B", prog: &Program{Instrs: []Instr{{Op: ADD_B}}}, want: []string{"ld a, e", "dec hl", "ld d, (hl)", "dec hl", "ld e, (hl)", "add a, e"}},
-		{name: "ADD_W", prog: &Program{Instrs: []Instr{{Op: ADD_W}}}, want: []string{"push hl", "ld hl, de", "add hl, de", "ex de, hl", "pop hl"}},
+		{name: "ADD_W", prog: &Program{Instrs: []Instr{{Op: ADD_W}}}, want: []string{"ld b, d", "ld c, e", "add hl, de", "ex de, hl"}},
 		{name: "SUB_B", prog: &Program{Instrs: []Instr{{Op: SUB_B}}}, want: []string{"ld b, e", "sub a, b"}},
-		{name: "SUB_W", prog: &Program{Instrs: []Instr{{Op: SUB_W}}}, want: []string{"ex de, hl", "or a", "sbc hl, de", "ex de, hl"}},
+		{name: "SUB_W", prog: &Program{Instrs: []Instr{{Op: SUB_W}}}, want: []string{"ld b, d", "ld c, e", "sbc hl, de", "ex de, hl"}},
 		{name: "MUL_B", prog: &Program{Instrs: []Instr{{Op: MUL_B}}}, want: []string{"call _plz_mul"}},
 		{name: "MUL_W", prog: &Program{Instrs: []Instr{{Op: MUL_W}}}, want: []string{"call _plz_mul"}},
 		{name: "DIV_B", prog: &Program{Instrs: []Instr{{Op: DIV_B}}}, want: []string{"call _plz_div"}},
@@ -138,15 +138,15 @@ func TestZ80GenMath(t *testing.T) {
 		{name: "MOD_B", prog: &Program{Instrs: []Instr{{Op: MOD_B}}}, want: []string{"call _plz_mod"}},
 		{name: "MOD_W", prog: &Program{Instrs: []Instr{{Op: MOD_W}}}, want: []string{"call _plz_mod"}},
 		{name: "AND_B", prog: &Program{Instrs: []Instr{{Op: AND_B}}}, want: []string{"ld a, e", "and e"}},
-		{name: "AND_W", prog: &Program{Instrs: []Instr{{Op: AND_W}}}, want: []string{"ld hl, de", "and l", "and h"}},
+		{name: "AND_W", prog: &Program{Instrs: []Instr{{Op: AND_W}}}, want: []string{"ld b, d", "ld c, e", "and c", "and b"}},
 		{name: "OR_B", prog: &Program{Instrs: []Instr{{Op: OR_B}}}, want: []string{"ld a, e", "or e"}},
-		{name: "OR_W", prog: &Program{Instrs: []Instr{{Op: OR_W}}}, want: []string{"ld hl, de", "or l", "or h"}},
+		{name: "OR_W", prog: &Program{Instrs: []Instr{{Op: OR_W}}}, want: []string{"ld b, d", "ld c, e", "or c", "or b"}},
 		{name: "XOR_B", prog: &Program{Instrs: []Instr{{Op: XOR_B}}}, want: []string{"ld a, e", "xor e"}},
-		{name: "XOR_W", prog: &Program{Instrs: []Instr{{Op: XOR_W}}}, want: []string{"ld hl, de", "xor l", "xor h"}},
+		{name: "XOR_W", prog: &Program{Instrs: []Instr{{Op: XOR_W}}}, want: []string{"ld b, d", "ld c, e", "xor c", "xor b"}},
 		{name: "NEG_B", prog: &Program{Instrs: []Instr{{Op: NEG_B}}}, want: []string{"neg"}},
 		{name: "NEG_W", prog: &Program{Instrs: []Instr{{Op: NEG_W}}}, want: []string{"cpl", "cpl", "inc hl"}},
-		{name: "NOT_B", prog: &Program{Instrs: []Instr{{Op: NOT_B}}}, want: []string{"ld a, e", "or a", "ld e, 1", "ld e, 0"}},
-		{name: "NOT_W", prog: &Program{Instrs: []Instr{{Op: NOT_W}}}, want: []string{"ld a, h", "or l", "ld de, 0", "inc de"}},
+		{name: "NOT_B", prog: &Program{Instrs: []Instr{{Op: NOT_B}}}, want: []string{"ld a, e", "or a", "ld e, 0", "jr nz", "inc e"}},
+		{name: "NOT_W", prog: &Program{Instrs: []Instr{{Op: NOT_W}}}, want: []string{"ld a, h", "or l", "ld de, 0", "jr nz", "inc de"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -282,7 +282,7 @@ func TestZ80GenProcedures(t *testing.T) {
 		"ld sp, hl",
 		"ld (ix), a",
 		"ld (ix+1), a",
-		"call other",
+		"call _plz_other",
 		"ld sp, ix",
 		"pop ix",
 		"ret",
@@ -421,6 +421,8 @@ func TestZ80GenBankData(t *testing.T) {
 		{name: "SWITCH", prog: &Program{Instrs: []Instr{{Op: SWITCH}}}, want: []string{"ld a, e", "out (0xfffd), a"}},
 		{name: "DATA_B", prog: &Program{Instrs: []Instr{{Op: DATA_B, Operand: Operand{Type: OpNumber, Num: 255}}}}, want: []string{"db 255"}},
 		{name: "DATA_W", prog: &Program{Instrs: []Instr{{Op: DATA_W, Operand: Operand{Type: OpNumber, Num: 0x1234}}}}, want: []string{"dw 4660"}},
+		{name: "SRAM_ON", prog: &Program{Instrs: []Instr{{Op: SRAM_ON}}}, want: []string{"ld a, 8", "ld (0xfffc), a"}},
+		{name: "SRAM_OFF", prog: &Program{Instrs: []Instr{{Op: SRAM_OFF}}}, want: []string{"ld a, 0", "ld (0xfffc), a"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

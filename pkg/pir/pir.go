@@ -145,8 +145,10 @@ const (
 
 	// ── Battery RAM ────────────────────────────────────────────────
 
-	SAVE // Pop length, then destination address, then source address; copy to battery RAM.
-	LOAD // Pop length, then destination address, then source address; copy from battery RAM.
+	SRAM_ON  // Enable battery-backed SRAM access (SMS port 0xFFFC bit 3).
+	SRAM_OFF // Disable battery-backed SRAM access.
+	SAVE     // [3 pops: length, dest addr, src addr] Block copy from src to dest.
+	LOAD     // [3 pops: length, dest addr, src addr] Block copy from src to dest.
 )
 
 // OperandType describes the kind of operand an instruction carries.
@@ -303,6 +305,8 @@ var instructionNames = map[Instruction]string{
 	INLINE:         "INLINE",
 	SAVE:           "SAVE",
 	LOAD:           "LOAD",
+	SRAM_ON:        "SRAM_ON",
+	SRAM_OFF:       "SRAM_OFF",
 }
 
 // nameFromMnemonic is the reverse lookup of instructionNames.
@@ -360,7 +364,7 @@ func expectedOperand(op Instruction) OperandType {
 		READ_B, READ_W, WRITE_B, WRITE_W,
 		BYE, SLEEP,
 		HLT, DII, ENI, SEED, SWITCH,
-		SAVE, LOAD:
+		SAVE, LOAD, SRAM_ON, SRAM_OFF:
 		return OpNone
 	case PUSH_B, PUSH_W, AT, FRAME, PRIORITY,
 		BANK, DATA_B, DATA_W, PRAGMA:
