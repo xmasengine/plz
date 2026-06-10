@@ -48,6 +48,11 @@ for the Sega Master System. While I started development in BASIC, I was not
 satisfied with the result. And C is bad fit for small architectures. When I
 found out about PL/M this inspired me to make PLZ.
 
+Another design decision I made myself is to use an intermediate representation
+(PIR) that implements a FORTH like stack machine with separate data and
+return stacks. This simplifies the code generator and allows easier porting
+to other 8 bits architectures like the NES.
+
 ## On the use of LLM.
 
 Since 2026 some LLM and agents which produce passable results have become freely
@@ -77,6 +82,9 @@ graphics, under the MIT license.
 
 PLZ uses github.com/user-none/go-chip-sn76489 as the sound chip emulator
 for testing, under the MIT license.
+
+PLZ uses github.com/beevik/go6502 as the 6502 assembler, under the 2BSD license.
+
 
 And Gary Kildall for his brilliant design of PL/M. We need such programming
 languages to truly turn software development into software engineering.
