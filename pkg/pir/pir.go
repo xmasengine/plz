@@ -29,7 +29,8 @@ const (
 
 	// ── Pointers & Memory ──────────────────────────────────────────
 
-	PUSH_A  // [name] Push the 16-bit hardware address of name onto the data stack.
+	PUSH_A  // [name] Push the 16-bit RAM address of a variable onto the data stack.
+	PUSH_D  // [name] Push the 16-bit ROM address of a data label onto the data stack.
 	READ_B  // Pop 16-bit address; read byte from RAM; push result.
 	READ_W  // Pop 16-bit address; read word from RAM; push result.
 	WRITE_B // Pop byte value, then pop 16-bit address; write value to RAM.
@@ -133,7 +134,6 @@ const (
 	DATA_B    // [number] Emit a byte of ROM constant data.
 	DATA_W    // [number] Emit a word of ROM constant data.
 	DATA_STR  // [string] Emit a null-terminated string constant.
-	DATA_TILE // [string] Emit an 8x8 SMS tile from a backtick string.
 
 	// ── Pragma ─────────────────────────────────────────────────────
 
@@ -233,6 +233,7 @@ var instructionNames = map[Instruction]string{
 	PUT_B:          "PUT_B",
 	PUT_W:          "PUT_W",
 	PUSH_A:         "PUSH_A",
+	PUSH_D:         "PUSH_D",
 	READ_B:         "READ_B",
 	READ_W:         "READ_W",
 	WRITE_B:        "WRITE_B",
@@ -300,7 +301,6 @@ var instructionNames = map[Instruction]string{
 	DATA_B:         "DATA_B",
 	DATA_W:         "DATA_W",
 	DATA_STR:       "DATA_STR",
-	DATA_TILE:      "DATA_TILE",
 	PRAGMA:         "PRAGMA",
 	INLINE:         "INLINE",
 	SAVE:           "SAVE",
@@ -370,12 +370,12 @@ func expectedOperand(op Instruction) OperandType {
 		BANK, DATA_B, DATA_W, PRAGMA:
 		return OpNumber
 	case VAR_B, VAR_W, GET_B, GET_W, PUT_B, PUT_W,
-		PUSH_A, TAG, GO, GO_IF,
+		PUSH_A, PUSH_D, TAG, GO, GO_IF,
 		ROUTE, RUN, LOCAL_B, LOCAL_W,
 		JOB, STOP, START,
 		INT, NMI:
 		return OpName
-	case DATA_STR, DATA_TILE, INLINE:
+	case DATA_STR, INLINE:
 		return OpString
 	case IS_B, IS_W:
 		return OpCondition

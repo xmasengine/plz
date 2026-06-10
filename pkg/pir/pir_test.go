@@ -100,6 +100,7 @@ func TestInstrStringName(t *testing.T) {
 		{PUT_B, "x", "PUT_B x"},
 		{PUT_W, "y", "PUT_W y"},
 		{PUSH_A, "arr", "PUSH_A arr"},
+		{PUSH_D, "data", "PUSH_D data"},
 		{TAG, "loop", "TAG loop"},
 		{GO, "done", "GO done"},
 		{GO_IF, "then", "GO_IF then"},
@@ -128,7 +129,6 @@ func TestInstrStringString(t *testing.T) {
 		want string
 	}{
 		{DATA_STR, "hello", `DATA_STR "hello"`},
-		{DATA_TILE, "..##", `DATA_TILE "..##"`},
 		{INLINE, "nop", `INLINE "nop"`},
 	}
 	for _, tc := range tests {
@@ -261,7 +261,6 @@ func TestParseOperands(t *testing.T) {
 		{"PUSH_W 0x1000", PUSH_W, "PUSH_W 4096"},
 		{"GET_B x", GET_B, "GET_B x"},
 		{"DATA_STR \"hello\"", DATA_STR, `DATA_STR "hello"`},
-		{"DATA_TILE \"..##\"", DATA_TILE, `DATA_TILE "..##"`},
 		{"INLINE \"nop\"", INLINE, `INLINE "nop"`},
 		{"IS_B LT", IS_B, "IS_B LT"},
 		{"IS_W EQ", IS_W, "IS_W EQ"},

@@ -88,6 +88,11 @@ func TestZ80GenPointers(t *testing.T) {
 			want: []string{"ld de, _v_arr"},
 		},
 		{
+			name: "PUSH_D",
+			prog: &Program{Instrs: []Instr{{Op: PUSH_D, Operand: Operand{Type: OpName, Name: "mydata"}}}},
+			want: []string{"ld de, mydata"},
+		},
+		{
 			name: "READ_B",
 			prog: &Program{Instrs: []Instr{{Op: READ_B}}},
 			want: []string{"ld a, (de)", "ld e, a", "ld d, 0"},
@@ -391,8 +396,8 @@ func TestZ80GenInterrupts(t *testing.T) {
 		prog *Program
 		want []string
 	}{
-		{name: "INT", prog: &Program{Instrs: []Instr{{Op: INT, Operand: Operand{Type: OpName, Name: "tick"}}}}, want: []string{"ld hl, tick", "ld (0x0038), hl"}},
-		{name: "NMI", prog: &Program{Instrs: []Instr{{Op: NMI, Operand: Operand{Type: OpName, Name: "pause"}}}}, want: []string{"ld hl, pause", "ld (0x0066), hl"}},
+		{name: "INT", prog: &Program{Instrs: []Instr{{Op: INT, Operand: Operand{Type: OpName, Name: "tick"}}}}, want: []string{"ld hl, _plz_tick", "ld (0x0038), hl"}},
+		{name: "NMI", prog: &Program{Instrs: []Instr{{Op: NMI, Operand: Operand{Type: OpName, Name: "pause"}}}}, want: []string{"ld hl, _plz_pause", "ld (0x0066), hl"}},
 		{name: "HLT", prog: &Program{Instrs: []Instr{{Op: HLT}}}, want: []string{"halt"}},
 		{name: "DII", prog: &Program{Instrs: []Instr{{Op: DII}}}, want: []string{"di"}},
 		{name: "ENI", prog: &Program{Instrs: []Instr{{Op: ENI}}}, want: []string{"ei"}},

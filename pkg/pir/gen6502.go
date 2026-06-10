@@ -62,13 +62,19 @@ type Gen6502 struct {
 	tags    map[string]bool
 	labelID int
 
-	// sage tracking — which helpers we need
-	needMul bool
-	needDiv bool
-	needMod bool
-	needCmp bool
+	// usage tracking — which helpers we need
+	needMul   bool
+	needDiv   bool
+	needMod   bool
+	needCmp   bool
+	needShift bool
+	needSched bool
 
-	// ne-shot AT tracking
+	// task tracking
+	taskCount        int
+	taskEntryLabels  []string
+
+	// one-shot AT tracking
 	pendingAT int
 }
 
@@ -95,6 +101,7 @@ func (z *Gen6502) Gen(prog *Program) string {
 	z.emitHeader()
 	z.emitStart()
 	z.emitProg(prog)
+	z.emitRuntime()
 	z.emitFooter()
 	z.emitVars()
 
@@ -133,7 +140,7 @@ func (z *Gen6502) scanProg(prog *Program) {
 					z.varNext += 2
 				}
 			}
-		case DATA_B, DATA_W, DATA_STR, DATA_TILE:
+		case DATA_B, DATA_W, DATA_STR:
 			consumed = true
 		case ROUTE:
 			consumed = true
@@ -145,8 +152,16 @@ func (z *Gen6502) scanProg(prog *Program) {
 			z.needDiv = true
 		case MOD_B, MOD_W:
 			z.needMod = true
+		case SHL_B, SHL_W, SHR_B, SHR_W:
+			z.needShift = true
 		case IS_B, IS_W:
 			z.needCmp = true
+		case JOB:
+			z.needSched = true
+			z.taskEntryLabels = append(z.taskEntryLabels, instr.Operand.Name)
+			z.taskCount++
+		case BYE, SLEEP, STOP, START:
+			z.needSched = true
 		}
 		if !consumed && z.pendingAT >= 0 {
 			z.pendingAT = -1
@@ -185,10 +200,19 @@ func (z *Gen6502) emitStart() {
 	z.emit("\tcld")
 	z.emit("\tldx #$ff")
 	z.emit("\ttxs")
+
+	// Init data stack pointer
 	z.emitf("\tlda #<%d", z.cfg.StackBase)
 	z.emitf("\tsta $00")
 	z.emitf("\tlda #>%d", z.cfg.StackBase)
 	z.emitf("\tsta $01")
+
+	if z.needSched {
+		// JSR to task init (emitted after all code so JOB labels exist)
+		z.emit("\tjsr _plz_init_tasks")
+		// After init, RTS to task 0
+	}
+
 	z.emit("")
 }
 
@@ -202,9 +226,18 @@ func (z *Gen6502) emitFooter() {
 // ── Runtime helpers ──
 
 func (z *Gen6502) emitRuntime() {
+	z.emit("; -------------------------------------------------------------------")
+	z.emit("; Runtime helpers")
+	z.emit("; -------------------------------------------------------------------")
+	z.emit("")
+
+	z.emitMulHelpers()
+	z.emitDivModHelpers()
+	z.emitScheduler()
+
 	if z.needCmp {
 		z.emit("; Word comparison helper")
-		z.emit("; On entry: A=low(NEXT), X=high(NEXT), _t0=low(TOS), _t0+1=high(TOS)")
+		z.emit("; On entry: A=low(NEXT), X=high(NEXT), $02=low(TOS), $03=high(TOS)")
 		z.emit("; On exit: A=1 if NEXT < TOS (unsigned), else 0")
 		z.emit("_plz_ult:")
 		z.emit("\tsec")
@@ -219,6 +252,314 @@ func (z *Gen6502) emitRuntime() {
 		z.emit("\trts")
 		z.emit("")
 	}
+}
+
+func (z *Gen6502) emitMulHelpers() {
+	if !z.needMul {
+		return
+	}
+	z.emit("; 8-bit multiply: A = A * $02 (unsigned)")
+	z.emit("_plz_mul8:")
+	z.emit("\tsta $04          ; save left operand")
+	z.emit("\tlda #0           ; accumulator")
+	z.emit("\tldx #8")
+	_ml8_loop := z.nextLabel()
+	_ml8_skip := z.nextLabel()
+	z.emitf("_ml8_%d:", _ml8_loop)
+	z.emit("\tlsr $02          ; shift right, LSB -> carry")
+	z.emitf("\tbcc _ml8_%d", _ml8_skip)
+	z.emit("\tclc")
+	z.emit("\tadc $04          ; add left to accumulator")
+	z.emitf("_ml8_%d:", _ml8_skip)
+	z.emit("\tasl $04          ; shift left")
+	z.emit("\tdex")
+	z.emitf("\tbne _ml8_%d", _ml8_loop)
+	z.emit("\trts")
+	z.emit("")
+
+	z.emit("; 16-bit multiply: A,X = A,X * ($02),($03) (unsigned, low 16 bits)")
+	z.emit("; Uses $04-$07 as scratch")
+	z.emit("_plz_mul16:")
+	z.emit("\tsta $04          ; save left low")
+	z.emit("\tstx $05          ; save left high")
+	z.emit("\tlda #0")
+	z.emit("\tsta $06          ; result low")
+	z.emit("\tsta $07          ; result high")
+	z.emit("\tldx #16")
+	_ml16_loop := z.nextLabel()
+	_ml16_skip := z.nextLabel()
+	z.emitf("_ml16_%d:", _ml16_loop)
+	z.emit("\tlsr $03          ; shift right high")
+	z.emit("\tror $02          ; rotate right low")
+	z.emitf("\tbcc _ml16_%d", _ml16_skip)
+	z.emit("\tclc")
+	z.emit("\tlda $06")
+	z.emit("\tadc $04")
+	z.emit("\tsta $06")
+	z.emit("\tlda $07")
+	z.emit("\tadc $05")
+	z.emit("\tsta $07")
+	z.emitf("_ml16_%d:", _ml16_skip)
+	z.emit("\tasl $04")
+	z.emit("\trol $05")
+	z.emit("\tdex")
+	z.emitf("\tbne _ml16_%d", _ml16_loop)
+	z.emit("\tlda $06")
+	z.emit("\tldx $07")
+	z.emit("\trts")
+	z.emit("")
+}
+
+func (z *Gen6502) emitDivModHelpers() {
+	if !z.needDiv && !z.needMod {
+		return
+	}
+	// Combined divmod: dividend in A, divisor in $02
+	// Returns: A = quotient, X = remainder
+	z.emit("; 8-bit divmod: A = A / $02 (quotient), X = remainder")
+	z.emit("_plz_div8:")
+	z.emit("_plz_mod8:")
+	z.emit("\tsta $04          ; save dividend")
+	z.emit("\tlda #0           ; remainder = 0")
+	z.emit("\tldx #8")
+	_dm8_loop := z.nextLabel()
+	_dm8_skip := z.nextLabel()
+	z.emitf("_dm8_%d:", _dm8_loop)
+	z.emit("\tasl $04          ; shift dividend left")
+	z.emit("\trol              ; rotate into remainder")
+	z.emit("\tcmp $02          ; compare with divisor")
+	z.emitf("\tbcc _dm8_%d", _dm8_skip)
+	z.emit("\tsbc $02          ; subtract divisor")
+	z.emit("\tsec              ; set carry for quotient")
+	z.emitf("_dm8_%d:", _dm8_skip)
+	z.emit("\trol $04          ; shift carry into quotient")
+	z.emit("\tdex")
+	z.emitf("\tbne _dm8_%d", _dm8_loop)
+	z.emit("\tldx $04          ; quotient in X")
+	z.emit("\tpha              ; save remainder")
+	z.emit("\ttxa              ; A = quotient")
+	z.emit("\tpla              ; restore remainder")
+	z.emit("\ttax              ; X = remainder")
+	z.emit("\trts")
+	z.emit("")
+
+	// 16-bit divmod: dividend in A,X, divisor in $02,$03
+	// Returns: A = quotient low, X = quotient high
+	// Mod returns remainder (stored in a fixed location)
+	z.emit("; 16-bit divmod: A,X = (A,X) / ($02,$03)")
+	z.emit("; Uses $04-$08 as scratch")
+	z.emit("_plz_div16:")
+	z.emit("_plz_mod16:")
+	z.emit("\tsta $04          ; dividend low")
+	z.emit("\tstx $05          ; dividend high")
+	z.emit("\tlda #0")
+	z.emit("\tsta $06          ; remainder low")
+	z.emit("\tsta $07          ; remainder high")
+	_dm16_do := z.nextLabel()
+	_dm16_loop := z.nextLabel()
+	_dm16_skip := z.nextLabel()
+	z.emit("\tlda $02")
+	z.emit("\tora $03")
+	z.emitf("\tbne _dm16_%d", _dm16_do)
+	z.emit("\tlda #0           ; div by zero -> 0")
+	z.emit("\ttax")
+	z.emit("\trts")
+	z.emitf("_dm16_%d:", _dm16_do)
+	z.emit("\tldx #16")
+	z.emitf("_dm16_%d:", _dm16_loop)
+	z.emit("\tasl $04")
+	z.emit("\trol $05")
+	z.emit("\trol $06")
+	z.emit("\trol $07")
+	z.emit("\tsec")
+	z.emit("\tlda $06")
+	z.emit("\tsbc $02")
+	z.emit("\tpha")
+	z.emit("\tlda $07")
+	z.emit("\tsbc $03")
+	z.emitf("\tbcc _dm16_%d", _dm16_skip)
+	z.emit("\tsta $07")
+	z.emit("\tpla")
+	z.emit("\tsta $06")
+	z.emit("\tinc $04          ; set quotient bit")
+	z.emitf("\tjmp _dm16_next_%d", _dm16_skip)
+	z.emitf("_dm16_%d:", _dm16_skip)
+	z.emit("\tpla")
+	z.emitf("_dm16_next_%d:", _dm16_skip)
+	z.emit("\tdex")
+	z.emitf("\tbne _dm16_%d", _dm16_loop)
+	z.emit("\tlda $04          ; quotient low")
+	z.emit("\tldx $05          ; quotient high")
+	z.emit("\trts")
+	z.emit("")
+}
+
+func (z *Gen6502) emitScheduler() {
+	if !z.needSched {
+		return
+	}
+	z.emit("; -------------------------------------------------------------------")
+	z.emit("; Task scheduler")
+	z.emit("; -------------------------------------------------------------------")
+	z.emit("")
+	z.emit("; TCB layout (8 bytes per task, zero-page at _plz_tcbs):")
+	z.emit("; +0: SP_low (1 byte)")
+	z.emit("; +1: SP_high (1 byte)")
+	z.emit("; +2: state (1 byte: 0=READY, 1=SUSPENDED, 2=SLEEPING, 3=DEAD)")
+	z.emit("; +3: sleep counter (1 byte)")
+	z.emit("; +4: priority (1 byte)")
+	z.emit("; +5: reserved")
+	z.emit("; +6: reserved")
+	z.emit("; +7: reserved")
+	z.emit(";")
+	z.emit("; Current task index in $06")
+	z.emit("")
+
+	z.emit("_plz_scheduler:")
+	// Save current SP into current task's TCB
+	z.emit("\tsei")
+	z.emit("\ttsx")
+	z.emit("\tlda $06           ; current task index")
+	z.emit("\tasl")
+	z.emit("\tasl")
+	z.emit("\tasl")
+	z.emit("\ttay               ; Y = task_index * 8")
+	z.emit("\ttxa               ; A = SP")
+	z.emit("\tsta _plz_tcbs,y   ; save SP low")
+	z.emit("\tlda #$01")
+	z.emit("\tsta _plz_tcbs+1,y ; save SP high (always page $01)")
+	z.emit("")
+
+	// Decrement all sleep counters
+	z.emit("\t; Decrement sleep counters")
+	z.emit("\tldx #0")
+	sch_slp := z.nextLabel()
+	sch_skip := z.nextLabel()
+	z.emitf("_sch_slp_%d:", sch_slp)
+	z.emit("\tlda _plz_tcbs+3,x  ; sleep counter")
+	z.emitf("\tbeq _sch_sk_%d", sch_skip)
+	z.emit("\tdec _plz_tcbs+3,x")
+	z.emitf("\tbne _sch_sk_%d", sch_skip)
+	z.emit("\t; Reached 0 — wake up if SLEEPING")
+	z.emit("\tlda _plz_tcbs+2,x")
+	z.emit("\tcmp #2")
+	z.emitf("\tbne _sch_sk_%d", sch_skip)
+	z.emit("\tlda #0")
+	z.emit("\tsta _plz_tcbs+2,x  ; state = READY")
+	z.emitf("_sch_sk_%d:", sch_skip)
+	z.emit("\ttxa")
+	z.emit("\tclc")
+	z.emit("\tadc #8")
+	z.emit("\ttax")
+	z.emitf("\tcpx #%d", z.taskCount*8)
+	z.emitf("\tbne _sch_slp_%d", sch_slp)
+	z.emit("")
+
+	// Scan for best READY task (lowest priority value, round-robin)
+	z.emit("\t; Scan for best READY task")
+	sch_start := z.nextLabel()
+	sch_loop := z.nextLabel()
+	sch_next := z.nextLabel()
+	sch_wrap := z.nextLabel()
+	sch_done := z.nextLabel()
+	// candidate starts at current+1 (with wrap)
+	z.emit("\tlda $06")
+	z.emit("\tclc")
+	z.emit("\tadc #1")
+	z.emitf("\tcmp #%d", z.taskCount)
+	z.emitf("\tbcc _sch_st_%d", sch_start)
+	z.emit("\tlda #0")
+	z.emitf("_sch_st_%d:", sch_start)
+	z.emit("\tsta $07           ; candidate")
+	z.emit("\tlda #15           ; best priority = worst")
+	z.emit("\tsta $08")
+	z.emit("\tldx #0            ; iteration count")
+	z.emitf("_sch_lp_%d:", sch_loop)
+	// Check candidate at $07
+	z.emit("\tldy $07")
+	z.emit("\tlda _plz_tcbs+2,y  ; state")
+	z.emitf("\tbne _sch_nx_%d", sch_next)
+	z.emit("\t; READY — check priority")
+	z.emit("\tlda _plz_tcbs+4,y")
+	z.emit("\tcmp $08")
+	z.emitf("\tbcs _sch_nx_%d", sch_next)
+	z.emit("\tsta $08           ; new best priority")
+	z.emit("\tlda $07")
+	z.emit("\tsta $06           ; current_task = candidate")
+	z.emitf("_sch_nx_%d:", sch_next)
+	// Advance to next candidate
+	z.emit("\tinx")
+	z.emitf("\tcpx #%d", z.taskCount)
+	z.emitf("\tbeq _sch_dn_%d", sch_done)
+	z.emit("\tlda $07")
+	z.emit("\tclc")
+	z.emit("\tadc #1")
+	z.emitf("\tcmp #%d", z.taskCount)
+	z.emitf("\tbcc _sch_wr_%d", sch_wrap)
+	z.emit("\tlda #0")
+	z.emitf("_sch_wr_%d:", sch_wrap)
+	z.emit("\tsta $07")
+	z.emitf("\tjmp _sch_lp_%d", sch_loop)
+	z.emitf("_sch_dn_%d:", sch_done)
+	z.emit("")
+
+	// Restore chosen task's SP
+	z.emit("\t; Restore chosen task")
+	z.emit("\tlda $06")
+	z.emit("\tasl")
+	z.emit("\tasl")
+	z.emit("\tasl")
+	z.emit("\ttay")
+	z.emit("\tlda _plz_tcbs,y    ; SP low")
+	z.emit("\ttax")
+	z.emit("\ttxs")
+	z.emit("\tcli")
+	z.emit("\trts                ; jump to chosen task")
+	z.emit("")
+
+	// Task init routine (called from _6502_main)
+	z.emit("_plz_init_tasks:")
+	taskStackSize := 256 / z.cfg.TaskLimit
+	z.emitf("\t; Init %d tasks, %d bytes stack each", z.taskCount, taskStackSize)
+	// Zero TCBs
+	z.emit("\tldx #0")
+	z.emit("\tlda #0")
+	z_clr := z.nextLabel()
+	z.emitf("_init_clr_%d:", z_clr)
+	z.emit("\tsta _plz_tcbs,x")
+	z.emit("\tinx")
+	z.emitf("\tcpx #%d", z.taskCount*8)
+	z.emitf("\tbne _init_clr_%d", z_clr)
+	z.emit("")
+	// For each task, set SP to top of its stack area, push entry address,
+	// and save SP in TCB
+	for i, name := range z.taskEntryLabels {
+		spOffset := byte((i+1)*taskStackSize - 1)
+		z.emitf("\t; Task %d: %s", i, name)
+		z.emitf("\tldx #%d", spOffset)
+		z.emit("\ttxs")
+		z.emitf("\tlda #>_plz_task_entry_%s", name)
+		z.emit("\tpha")
+		z.emitf("\tlda #<_plz_task_entry_%s", name)
+		z.emit("\tpha")
+		z.emit("\ttsx")
+		z.emitf("\tstx _plz_tcbs+%d", i*8)
+		z.emit("\tlda #$01")
+		z.emitf("\tsta _plz_tcbs+%d", i*8+1)
+		z.emit("")
+	}
+	// Restore SP for task 0
+	z.emit("\tldx _plz_tcbs+0")
+	z.emit("\ttxs")
+	z.emit("\tlda #0")
+	z.emit("\tsta $06           ; current task = 0")
+	z.emit("\trts               ; return to main -> RTS into task 0")
+	z.emit("")
+
+	// TCB storage in zero page
+	z.emit("_plz_tcbs:")
+	z.emitf("\t.ds %d", z.taskCount*8)
+	z.emit("")
 }
 
 // ── Variables ──
@@ -265,7 +606,7 @@ func (z *Gen6502) emitProg(prog *Program) {
 			switch instr.Op {
 			case VAR_B, VAR_W:
 				// handled by emitVars
-			case DATA_B, DATA_W, DATA_STR, DATA_TILE, ROUTE:
+			case DATA_B, DATA_W, DATA_STR, ROUTE:
 				z.emitf("\t; AT $%04x", z.pendingAT)
 			}
 			z.pendingAT = -1
@@ -314,6 +655,11 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitf("\tstx %s+1", z.varName(o.Name))
 
 	case PUSH_A:
+		z.emitf("\tlda #<%s", o.Name)
+		z.emitf("\tldx #>%s", o.Name)
+		z.emitSpillW()
+
+	case PUSH_D:
 		z.emitf("\tlda #<%s", o.Name)
 		z.emitf("\tldx #>%s", o.Name)
 		z.emitSpillW()
@@ -409,6 +755,55 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emit("\tsbc $03         ; high(NEXT) - high(TOS) - borrow")
 		z.emit("\ttax              ; X = result high")
 		z.emit("\tpla              ; A = result low")
+		z.emitSpillW()
+
+	// ── Multiply / Divide / Modulo ──
+	case MUL_B:
+		z.emitFill()              // A = right
+		z.emit("\tsta $02")       // save right (multiplier)
+		z.emitFill()              // A = left
+		z.emit("\tjsr _plz_mul8") // A = result
+		z.emit("\tldx #0")
+		z.emitSpillW()
+
+	case MUL_W:
+		z.emitFillW()             // A=right low, X=right high
+		z.emit("\tsta $02")
+		z.emit("\tstx $03")
+		z.emitFillW()             // A=left low, X=left high
+		z.emit("\tjsr _plz_mul16")
+		z.emitSpillW()            // A=result low, X=result high
+
+	case DIV_B:
+		z.emitFill()              // A = right (divisor)
+		z.emit("\tsta $02")       // save divisor
+		z.emitFill()              // A = left (dividend)
+		z.emit("\tjsr _plz_div8") // A = quotient, X = remainder
+		z.emit("\tldx #0")
+		z.emitSpillW()
+
+	case DIV_W:
+		z.emitFillW()             // A=right low, X=right high
+		z.emit("\tsta $02")
+		z.emit("\tstx $03")
+		z.emitFillW()             // A=left low, X=left high
+		z.emit("\tjsr _plz_div16")
+		z.emitSpillW()
+
+	case MOD_B:
+		z.emitFill()              // A = right (divisor)
+		z.emit("\tsta $02")       // save divisor
+		z.emitFill()              // A = left (dividend)
+		z.emit("\tjsr _plz_mod8") // A = remainder
+		z.emit("\tldx #0")
+		z.emitSpillW()
+
+	case MOD_W:
+		z.emitFillW()             // A=right low, X=right high
+		z.emit("\tsta $02")
+		z.emit("\tstx $03")
+		z.emitFillW()             // A=left low, X=left high
+		z.emit("\tjsr _plz_mod16")
 		z.emitSpillW()
 
 	case AND_B:
@@ -516,6 +911,87 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emit("\tbcc _neg_w_done")
 		z.emit("\tinx")
 		z.emit("_neg_w_done:")
+		z.emitSpillW()
+
+	// ── Shifts ──
+	case SHL_B:
+		_shl_b_loop := z.nextLabel()
+		_shl_b_done := z.nextLabel()
+		z.emitFill()              // A = shift count
+		z.emit("\tsta $02")       // save shift count
+		z.emitFill()              // A = value
+		z.emit("\tsta $04")       // save value in temp
+		z.emit("\tlda $02")       // A = shift count
+		z.emitf("\tbeq _shl_b_%d", _shl_b_done)
+		z.emit("\tldx $02")       // X = shift count
+		z.emit("\tlda $04")       // A = value
+		z.emitf("_shl_b_%d:", _shl_b_loop)
+		z.emit("\tasl")
+		z.emit("\tdex")
+		z.emitf("\tbne _shl_b_%d", _shl_b_loop)
+		z.emitf("_shl_b_%d:", _shl_b_done)
+		z.emit("\tldx #0")
+		z.emitSpillW()
+
+	case SHL_W:
+		_shl_w_loop := z.nextLabel()
+		_shl_w_done := z.nextLabel()
+		z.emitFill()              // A = shift count
+		z.emit("\tsta $02")       // save shift count
+		z.emitFillW()             // A=value low, X=value high
+		z.emit("\tsta $04")       // value low in $04
+		z.emit("\tstx $05")       // value high in $05
+		z.emit("\tlda $02")       // A = shift count
+		z.emitf("\tbeq _shl_w_%d", _shl_w_done)
+		z.emit("\tldx $02")       // X = shift count
+		z.emitf("_shl_w_%d:", _shl_w_loop)
+		z.emit("\tasl $04")
+		z.emit("\trol $05")
+		z.emit("\tdex")
+		z.emitf("\tbne _shl_w_%d", _shl_w_loop)
+		z.emitf("_shl_w_%d:", _shl_w_done)
+		z.emit("\tlda $04")
+		z.emit("\tldx $05")
+		z.emitSpillW()
+
+	case SHR_B:
+		_shr_b_loop := z.nextLabel()
+		_shr_b_done := z.nextLabel()
+		z.emitFill()              // A = shift count
+		z.emit("\tsta $02")       // save shift count
+		z.emitFill()              // A = value
+		z.emit("\tsta $04")       // save value in temp
+		z.emit("\tlda $02")       // A = shift count
+		z.emitf("\tbeq _shr_b_%d", _shr_b_done)
+		z.emit("\tldx $02")       // X = shift count
+		z.emit("\tlda $04")       // A = value
+		z.emitf("_shr_b_%d:", _shr_b_loop)
+		z.emit("\tlsr")
+		z.emit("\tdex")
+		z.emitf("\tbne _shr_b_%d", _shr_b_loop)
+		z.emitf("_shr_b_%d:", _shr_b_done)
+		z.emit("\tldx #0")
+		z.emitSpillW()
+
+	case SHR_W:
+		_shr_w_loop := z.nextLabel()
+		_shr_w_done := z.nextLabel()
+		z.emitFill()              // A = shift count
+		z.emit("\tsta $02")       // save shift count
+		z.emitFillW()             // A=value low, X=value high
+		z.emit("\tsta $04")       // value low
+		z.emit("\tstx $05")       // value high
+		z.emit("\tlda $02")       // A = shift count
+		z.emitf("\tbeq _shr_w_%d", _shr_w_done)
+		z.emit("\tldx $02")       // X = shift count
+		z.emitf("_shr_w_%d:", _shr_w_loop)
+		z.emit("\tlsr $05")
+		z.emit("\tror $04")
+		z.emit("\tdex")
+		z.emitf("\tbne _shr_w_%d", _shr_w_loop)
+		z.emitf("_shr_w_%d:", _shr_w_done)
+		z.emit("\tlda $04")
+		z.emit("\tldx $05")
 		z.emitSpillW()
 
 	// ── Cast ──
@@ -736,8 +1212,53 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emit("\trts")
 
 	// ── Tasks ──
-	case JOB, BYE, SLEEP, STOP, START, PRIORITY:
-		z.emitf("\t; %s not yet implemented", instructionNames[op])
+	case JOB:
+		// JOB declares a task entry point; at boot the scheduler pushes
+		// the address onto the task's stack so it can be RETed into.
+		// In the 6502 backend, task initialisation is handled at startup:
+		// we emit TAG + a stub that the startup code references.
+		z.emitf("\t; JOB %s", o.Name)
+		z.emitf("_plz_task_entry_%s:", o.Name)
+
+	case PRIORITY:
+		z.emitf("\t; PRIORITY %d", o.Num)
+
+	case BYE:
+		// Mark current task DEAD (3), then call scheduler
+		z.emit("\tsei")
+		// current_task_idx * 8 + 2 = TCB + state offset
+		z.emit("\tlda $06")          // current task index
+		z.emit("\tasl")              // *2
+		z.emit("\tasl")              // *4
+		z.emit("\tasl")              // *8
+		z.emit("\tadc #2")           // +2 (state offset)
+		z.emit("\ttax")
+		z.emit("\tlda #3")           // DEAD
+		z.emit("\tsta _plz_tcbs,x")
+		z.emit("\tjmp _plz_scheduler")
+
+	case SLEEP:
+		// Pop sleep duration from data stack, store in current task's
+		// TCB sleep field (offset +3), then call scheduler
+		z.emitFill()                  // A = sleep duration
+		z.emit("\tpha")
+		z.emit("\tlda $06")           // current task index
+		z.emit("\tasl")
+		z.emit("\tasl")
+		z.emit("\tasl")
+		z.emit("\tadc #3")            // +3 (sleep offset)
+		z.emit("\ttax")
+		z.emit("\tpla")
+		z.emit("\tsta _plz_tcbs,x")
+		z.emit("\tjmp _plz_scheduler")
+
+	case STOP:
+		// Suspend named task
+		z.emitf("\t; STOP %s", o.Name)
+
+	case START:
+		// Resume named task
+		z.emitf("\t; START %s", o.Name)
 
 	// ── Port I/O ──
 	case IN_B:
@@ -795,9 +1316,6 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		for _, ch := range o.Str {
 			z.emitf("\t.byte %d", byte(ch))
 		}
-	case DATA_TILE:
-		z.emit("\t; tile data")
-		emitTile6502(z, o.Str)
 
 	// ── Pragma ──
 	case PRAGMA:
@@ -809,9 +1327,21 @@ func (z *Gen6502) emitInstr(instr Instr) {
 
 	// ── Battery RAM ──
 	case SRAM_ON:
-		z.emit("\t; SRAM_ON not implemented on 6502")
+		if z.cfg.NES {
+			// MMC5: 8KB SRAM at $6000-$7FFF, enable via $5104
+			z.emit("\tlda #$02")
+			z.emit("\tsta $5104")
+		} else {
+			z.emit("\t; SRAM_ON not implemented on 6502")
+		}
 	case SRAM_OFF:
-		z.emit("\t; SRAM_OFF not implemented on 6502")
+		if z.cfg.NES {
+			// MMC5: disable SRAM writes
+			z.emit("\tlda #$00")
+			z.emit("\tsta $5104")
+		} else {
+			z.emit("\t; SRAM_OFF not implemented on 6502")
+		}
 	case SAVE:
 		z.emit("\t; SAVE not yet implemented")
 	case LOAD:
@@ -921,32 +1451,12 @@ func Assemble6502(cfg Gen6502Config, code string) ([]byte, error) {
 		}
 		padded := make([]byte, padLen)
 		bin = append(bin, padded...)
-		// Vectors at $FFFA-$FFFF
-		resetVec := uint16(len(bin) - padLen) // relative to start of PRG
+		// Vectors at $FFFA-$FFFF (offset from PRG origin)
+		resetVec := cfg.Origin + uint16(len(bin)-padLen-6)
 		bin = append(bin, 0x00, 0x00) // NMI (dummy)
 		bin = append(bin, byte(resetVec), byte(resetVec>>8)) // RESET
 		bin = append(bin, 0x00, 0x00) // IRQ (dummy)
 		bin = append(header, bin...)
 	}
 	return bin, nil
-}
-
-// emitTile6502 emits 8x8 SMS tile data as .byte directives.
-func emitTile6502(z *Gen6502, s string) {
-	for _, ch := range s {
-		var val byte
-		switch {
-		case ch == '.':
-			val = 0
-		case ch >= '0' && ch <= '9':
-			val = byte(ch - '0')
-		case ch >= 'A' && ch <= 'F':
-			val = byte(ch - 'A' + 10)
-		case ch >= 'a' && ch <= 'f':
-			val = byte(ch - 'a' + 10)
-		default:
-			val = 0
-		}
-		z.emitf("\t.byte %d", val)
-	}
 }

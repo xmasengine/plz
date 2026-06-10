@@ -140,7 +140,7 @@ func (z *Z80Gen) scanProg(prog *Program) {
 				}
 			}
 
-		case DATA_B, DATA_W, DATA_STR, DATA_TILE:
+		case DATA_B, DATA_W, DATA_STR:
 			consumed = true
 
 		case ROUTE:
@@ -669,7 +669,7 @@ func (z *Z80Gen) emitProg(prog *Program) {
 			switch instr.Op {
 			case VAR_B, VAR_W:
 				// handled by scanProg + emitVars
-			case DATA_B, DATA_W, DATA_STR, DATA_TILE, ROUTE, JOB:
+			case DATA_B, DATA_W, DATA_STR, ROUTE, JOB:
 				z.emitf("org %d", z.pendingAT)
 			default:
 				// no declaration follows — silently ignore
@@ -748,6 +748,10 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 	case PUSH_A:
 		z.spill()
 		z.emitf("\tld de, %s", z.varName(o.Name))
+
+	case PUSH_D:
+		z.spill()
+		z.emitf("\tld de, %s", o.Name)
 
 	case READ_B:
 		z.emit("\tld a, (de)")
@@ -1224,12 +1228,12 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 	// ── Interrupts ──
 	case INT:
 		z.emitf("\t// INT %s: install interrupt handler", o.Name)
-		z.emitf("\tld hl, %s", o.Name)
+		z.emitf("\tld hl, _plz_%s", o.Name)
 		z.emit("\tld (0x0038), hl")
 
 	case NMI:
 		z.emitf("\t// NMI %s: install NMI handler", o.Name)
-		z.emitf("\tld hl, %s", o.Name)
+		z.emitf("\tld hl, _plz_%s", o.Name)
 		z.emit("\tld (0x0066), hl")
 
 	case HLT:
@@ -1269,10 +1273,6 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		for _, ch := range o.Str {
 			z.emitf("\tdb %d", byte(ch))
 		}
-
-	case DATA_TILE:
-		z.emit("\t// tile data")
-		emitTile(z, o.Str)
 
 	// ── Pragma ──
 	case PRAGMA:
@@ -1322,58 +1322,6 @@ func cmpHelper(c Condition) string {
 	}
 }
 
-// emitTile converts a backtick tile string into 8 bytes of tile data.
-func emitTile(z *Z80Gen, s string) {
-	if len(s) < 64 {
-		s = padTile(s)
-	}
-	for row := 0; row < 8; row++ {
-		var hi, lo uint8
-		for col := 0; col < 8; col++ {
-			ch := byte('.')
-			idx := row*8 + col
-			if idx < len(s) {
-				ch = s[idx]
-			}
-			// Convert character to palette index
-			pal := tilePal(ch)
-			if pal&1 != 0 {
-				lo |= 1 << (7 - uint(col))
-			}
-			if pal&2 != 0 {
-				hi |= 1 << (7 - uint(col))
-			}
-		}
-		z.emitf("\tdb %d, %d", lo, hi)
-	}
-}
 
-func padTile(s string) string {
-	if len(s) >= 64 {
-		return s[:64]
-	}
-	b := make([]byte, 64)
-	for i := 0; i < 64; i++ {
-		if i < len(s) {
-			b[i] = s[i]
-		} else {
-			b[i] = '.'
-		}
-	}
-	return string(b)
-}
 
-func tilePal(ch byte) int {
-	switch {
-	case ch == '.':
-		return 0
-	case ch >= '0' && ch <= '9':
-		return int(ch - '0')
-	case ch >= 'A' && ch <= 'F':
-		return int(ch-'A') + 10
-	case ch >= 'a' && ch <= 'f':
-		return int(ch-'a') + 10
-	default:
-		return 0
-	}
-}
+
