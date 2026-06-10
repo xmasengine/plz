@@ -955,7 +955,6 @@ func (s Data) genPIR(g *GenPIR) error {
 	}
 	if s.Tile != nil {
 		for _, tile := range s.Tile.Tiles {
-			g.emitName(pir.TAG, s.Name)
 			for _, b := range tile.Bytes() {
 				g.emitNum(pir.DATA_B, uint16(b))
 			}
@@ -1029,6 +1028,10 @@ func (o Operand) genPIRExpr(g *GenPIR) error {
 					g.emitNum(pir.PUSH_W, uint16(n.Value))
 					return nil
 				}
+			}
+			if d, ok := g.currentScope.Lookup(ref.Identifier); ok && d.DataValue != nil && len(ref.Subscripts) == 0 {
+				g.emitName(pir.PUSH_D, string(ref.Identifier))
+				return nil
 			}
 		}
 		if len(ref.Fields) > 0 || len(ref.Subscripts) > 0 {

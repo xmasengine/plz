@@ -55,6 +55,7 @@ func CompileOpt(out, format, src, arch string, legacy bool) error {
 		} else {
 			cfg = pir.Default6502Config()
 		}
+		pirProg = pir.Optimize(pirProg)
 		asmText := pir.NewGen6502(cfg).Gen(pirProg)
 		bin, err := pir.Assemble6502(cfg, asmText)
 		if err != nil {
@@ -80,6 +81,7 @@ func CompileOpt(out, format, src, arch string, legacy bool) error {
 		if err != nil {
 			return err
 		}
+		pirProg = pir.Optimize(pirProg)
 		asmText := pir.NewZ80Gen(pir.DefaultConfig()).Gen(pirProg)
 		err = os.WriteFile(asmPath, []byte(asmText), 0644)
 		if err != nil {
