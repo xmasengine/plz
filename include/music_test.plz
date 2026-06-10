@@ -1,74 +1,24 @@
-// Mary Had a Little Lamb — PL/Z music test
+// music_test.plz — PL/Z music demo
 // Uses SMS PSG (SN76489) on I/O port 0x7F.
-// Note frequency constants (C4, D4, E4, G4, etc.) are defined in include/music.plz.
 //
-// Timing approaches:
+// Demonstrates the music library from include/music.plz:
+//   - Song data format with 5-byte entries
+//   - play_song (play once) and play_song_loop (loop)
+//   - Sustain (freq=0xFFFF), rest (freq=0)
+//   - Multi-octave range (C4-C6)
+//   - Noise channel
 //
-// 1. Busy-wait (used here) — works with the basic emulator (no interrupts).
-//    CALL delay(song[idx+2] * 8000) spins the CPU for ~0.2s per unit.
-//    Good for the plain "plz -E" emulator.
-//
-// 2. SLEEP + VBlank interrupt — correct for real SMS hardware or plz -R.
-//    Replace CALL delay(...) with SLEEP song[idx+2].
-//    Add a VBlank handler and enable interrupts:
-//
-//      INTERRUPT PROCEDURE tick()
-//        CALL _plz_scheduler
-//      END
-//
-//      ENABLE
-//      OUTPUT 0xBF 0xE0   // VDP reg 1: display + VBlank int enable
-//      OUTPUT 0xBF 0x81   // select reg 1
-//
-//    Then each VBlank (60 Hz) calls the scheduler, which decrements all
-//    sleeping tasks' counters — SLEEP 60 ≈ 1 second on NTSC.
-//
-// 3. Timer task — cooperative heartbeat without real-time guarantees.
-//    A low-priority YIELD-spinning task advances all SLEEP counters:
-//
-//      TASK timer PRIORITY 1
-//        WHILE 1 DO YIELD END
-//      END
+// Timing: requires TASK context with SLEEP + VBlank interrupt or timer task.
+// See the comment block at the end for setup instructions.
 
-// Note frequency constants for SN76489 at 3.579545 MHz.
-// These are also available in include/music.plz.
-CONSTANT C4 = 0x1AB
-CONSTANT CS4 = 0x194
-CONSTANT D4 = 0x17D
-CONSTANT DS4 = 0x168
-CONSTANT E4 = 0x153
-CONSTANT F4 = 0x140
-CONSTANT FS4 = 0x12E
-CONSTANT G4 = 0x11D
-CONSTANT GS4 = 0x10D
-CONSTANT A4 = 0xFE
-CONSTANT AS4 = 0xF0
-CONSTANT B4 = 0xE2
-CONSTANT C5 = 0xD5
+INCLUDE "music.plz"
 
-PROCEDURE psg_freq(channel BYTE, freq WORD)
-  OUTPUT 0x7F 0x80 | (channel << 5) | (freq & 0x0F)
-  OUTPUT 0x7F (freq >> 4) & 0x3F
-END
-
-PROCEDURE psg_vol(channel BYTE, vol BYTE)
-  OUTPUT 0x7F 0x90 | (channel << 5) | vol
-END
-
-// Busy-wait delay. Each unit is ~25us at 3.58 MHz.
-// 1 unit = ~90 T-state iterations = ~25 microseconds.
-PROCEDURE delay(units WORD)
-  DECLARE i WORD
-  LET i = 0
-  WHILE i < units DO
-    LET i = i + 1
-  END
-END
-
-// Song data: freq_lo, freq_hi, duration, channel, volume
-// Note constants (C4, D4, E4, G4) are defined above.
-// Expressions like E4 & 0xFF and E4 >> 8 are evaluated at compile time.
-my_song: DATA
+// ---------------------------------------------------------------
+// "Mary Had a Little Lamb" — demonstrates basic note format
+// Each entry: freq_L, freq_H, duration, channel, volume
+// The PLZ compiler evaluates C4 & 0xFF, C4 >> 8 at compile time.
+// ---------------------------------------------------------------
+DATA mary
   E4 & 0xFF, E4 >> 8, 1, 0, 10,
   D4 & 0xFF, D4 >> 8, 1, 0, 10,
   C4 & 0xFF, C4 >> 8, 1, 0, 10,
@@ -95,25 +45,81 @@ my_song: DATA
   E4 & 0xFF, E4 >> 8, 1, 0, 10,
   D4 & 0xFF, D4 >> 8, 1, 0, 10,
   C4 & 0xFF, C4 >> 8, 3, 0, 10,
+  0, 0, 0, 0, 0xFF                  // end marker
+
+// ---------------------------------------------------------------
+// Sustain demo: hold a note while playing melody on another channel
+// Ch0: bass note held via sustain (0xFFFF)
+// Ch1: melody
+// ---------------------------------------------------------------
+DATA sustain_demo
+  // Bar 1: hold C3 bass, play C4-E4 melody
+  C3 & 0xFF, C3 >> 8, 4, 0, 6,     // C3 bass on ch0
+  C4 & 0xFF, C4 >> 8, 4, 1, 10,    // C4 melody on ch1
+  0xFF, 0xFF, 4, 0, 0,             // sustain C3 on ch0
+  E4 & 0xFF, E4 >> 8, 4, 1, 10,   // E4 melody on ch1
+  0xFF, 0xFF, 4, 0, 0,             // sustain C3
+  G4 & 0xFF, G4 >> 8, 4, 1, 10,   // G4 melody
+  // Bar 2: rest + new bass
+  0, 0, 2, 0, 15,                  // rest on ch0 (silent)
+  A3 & 0xFF, A3 >> 8, 4, 0, 6,     // A3 bass
+  A4 & 0xFF, A4 >> 8, 4, 1, 10,   // A4 melody
+  0xFF, 0xFF, 4, 0, 0,             // sustain A3
+  G4 & 0xFF, G4 >> 8, 4, 1, 10,   // G4 melody
+  0xFF, 0xFF, 4, 0, 0,             // sustain A3
+  F4 & 0xFF, F4 >> 8, 4, 1, 10,   // F4 melody
+  0, 0, 0, 0, 0xFF                  // end
+
+// ---------------------------------------------------------------
+// Noise demo: drum/percussion effects on noise channel (ch 3)
+// Noise format: freq=noise_rate (0-3), channel=3
+// ---------------------------------------------------------------
+DATA noise_demo
+  C4 & 0xFF, C4 >> 8, 2, 0, 10,   // tone
+  E4 & 0xFF, E4 >> 8, 2, 1, 10,
+  0, 0, 1, 3, 6,                    // noise burst (rate=0, vol=6)
+  G4 & 0xFF, G4 >> 8, 2, 0, 10,
+  C5 & 0xFF, C5 >> 8, 2, 1, 10,
+  0, 0, 1, 3, 6,                    // noise burst
   0, 0, 0, 0, 0xFF
 
-// Playback routine using busy-wait delay
-PROCEDURE play_song(song DATA)
-  DECLARE idx WORD
-  DECLARE freq WORD
-  LET idx = 0
-  WHILE 1 DO
-    IF song[idx+4] == 0xFF THEN RETURN
-    LET freq = song[idx] | (song[idx+1] << 8)
-    CALL psg_freq(song[idx+3], freq)
-    CALL psg_vol(song[idx+3], song[idx+4])
-    CALL delay(song[idx+2] * 8000)
-    CALL psg_vol(song[idx+3], 15)
-    LET idx = idx + 5
-  END
+// ---------------------------------------------------------------
+// Playback tasks
+// ---------------------------------------------------------------
+
+// Play "Mary Had a Little Lamb" once
+TASK mary_task PRIORITY 4
+  CALL psg_silence()
+  CALL play_song(mary)
+  WHILE 1 DO YIELD END
 END
 
-TASK music PRIORITY 4
-  CALL play_song(my_song)
-  HALT
+// Play a looping sustain demo
+TASK sustain_task PRIORITY 4
+  CALL psg_silence()
+  CALL play_song_loop(sustain_demo, 0)
+  WHILE 1 DO YIELD END
 END
+
+// Play noise demo once
+TASK noise_task PRIORITY 4
+  CALL psg_silence()
+  CALL play_song(noise_demo)
+  WHILE 1 DO YIELD END
+END
+
+// ---------------------------------------------------------------
+// Setup instructions (uncomment in your main program):
+//
+//   INTERRUPT PROCEDURE tick()
+//     CALL _plz_scheduler
+//   END
+//
+//   ENABLE
+//   OUTPUT 0xBF 0xE0   // VDP reg 1: display + VBlank int enable
+//   OUTPUT 0xBF 0x81   // select reg 1
+//
+// Then SLEEP 60 ≈ 1 second (60 Hz NTSC VBlank).
+// ---------------------------------------------------------------
+
+// (psg_vol, delay, and old play_song are now in INCLUDE "music.plz")

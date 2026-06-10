@@ -4,19 +4,88 @@
 // Note frequency constants for SN76489 at 3.579545 MHz:
 //   divider = 111861 / frequency
 // These are the divider values (10-bit) to load into the PSG tone registers.
-CONSTANT C4 = 0x1AB   // 261.63 Hz
+//
+// Three octaves (C3-C6) to cover melody and bass lines.
+
+// Octave 3
+CONSTANT C3  = 0x358  // 130.81 Hz
+CONSTANT CS3 = 0x328  // 138.59 Hz
+CONSTANT D3  = 0x2FB  // 146.83 Hz
+CONSTANT DS3 = 0x2D1  // 155.56 Hz
+CONSTANT E3  = 0x2A8  // 164.81 Hz
+CONSTANT F3  = 0x282  // 174.61 Hz
+CONSTANT FS3 = 0x25E  // 185.00 Hz
+CONSTANT G3  = 0x23C  // 196.00 Hz
+CONSTANT GS3 = 0x21C  // 207.65 Hz
+CONSTANT A3  = 0x1FD  // 220.00 Hz
+CONSTANT AS3 = 0x1E1  // 233.08 Hz
+CONSTANT B3  = 0x1C6  // 246.94 Hz
+
+// Octave 4 (middle)
+CONSTANT C4  = 0x1AB  // 261.63 Hz
 CONSTANT CS4 = 0x194  // 277.18 Hz
-CONSTANT D4 = 0x17D   // 293.66 Hz
+CONSTANT D4  = 0x17D  // 293.66 Hz
 CONSTANT DS4 = 0x168  // 311.13 Hz
-CONSTANT E4 = 0x153   // 329.63 Hz
-CONSTANT F4 = 0x140   // 349.23 Hz
+CONSTANT E4  = 0x153  // 329.63 Hz
+CONSTANT F4  = 0x140  // 349.23 Hz
 CONSTANT FS4 = 0x12E  // 369.99 Hz
-CONSTANT G4 = 0x11D   // 392.00 Hz
+CONSTANT G4  = 0x11D  // 392.00 Hz
 CONSTANT GS4 = 0x10D  // 415.30 Hz
-CONSTANT A4 = 0xFE    // 440.00 Hz
-CONSTANT AS4 = 0xF0   // 466.16 Hz
-CONSTANT B4 = 0xE2    // 493.88 Hz
-CONSTANT C5 = 0xD5    // 523.25 Hz
+CONSTANT A4  = 0x0FE  // 440.00 Hz
+CONSTANT AS4 = 0x0F0  // 466.16 Hz
+CONSTANT B4  = 0x0E2  // 493.88 Hz
+
+// Octave 5
+CONSTANT C5  = 0x0D5  // 523.25 Hz
+CONSTANT CS5 = 0x0CA  // 554.37 Hz
+CONSTANT D5  = 0x0BE  // 587.33 Hz
+CONSTANT DS5 = 0x0B4  // 622.25 Hz
+CONSTANT E5  = 0x0AA  // 659.25 Hz
+CONSTANT F5  = 0x0A0  // 698.46 Hz
+CONSTANT FS5 = 0x098  // 739.99 Hz
+CONSTANT G5  = 0x08F  // 783.99 Hz
+CONSTANT GS5 = 0x087  // 830.61 Hz
+CONSTANT A5  = 0x07F  // 880.00 Hz
+CONSTANT AS5 = 0x078  // 932.33 Hz
+CONSTANT B5  = 0x071  // 987.77 Hz
+
+// Octave 6
+CONSTANT C6  = 0x06B  // 1046.50 Hz
+CONSTANT CS6 = 0x065  // 1108.73 Hz
+CONSTANT D6  = 0x05F  // 1174.66 Hz
+CONSTANT DS6 = 0x05A  // 1244.51 Hz
+CONSTANT E6  = 0x055  // 1318.51 Hz
+CONSTANT F6  = 0x050  // 1396.91 Hz
+CONSTANT FS6 = 0x04C  // 1479.98 Hz
+CONSTANT G6  = 0x047  // 1567.98 Hz
+CONSTANT GS6 = 0x044  // 1661.22 Hz
+CONSTANT A6  = 0x040  // 1760.00 Hz
+CONSTANT AS6 = 0x03C  // 1864.66 Hz
+CONSTANT B6  = 0x039  // 1975.53 Hz
+
+// -------------------------------------------------------------------
+// Song data format
+// -------------------------------------------------------------------
+// Each entry is 5 bytes:
+//   [0-1] freq: little-endian WORD (10-bit divider value)
+//         0x0000 = rest (silent, wait duration ticks)
+//         0xFFFF = sustain (keep previous freq/vol, just wait)
+//         other  = set frequency and play
+//   [2]   duration: duration in scheduler ticks
+//         0xFF = end marker (when freq==0 and volume==0xFF)
+//   [3]   channel: 0-2 = tone channels, 3 = noise
+//   [4]   volume: 0=loudest, 15=silent
+//         0xFF = terminator (only when freq==0 and duration==0)
+//
+// Song format examples:
+//   my_song: DATA
+//     C4 & 0xFF, C4 >> 8, 10, 0, 8,    // C4 on ch0, dur=10, vol=8
+//     0, 0, 5, 0, 15,                   // rest for 5 ticks
+//     0xFF, 0xFF, 10, 0, 0,             // sustain 10 ticks on ch0
+//     0, 0, 0, 0, 0xFF                  // end marker
+//
+// To loop a song, use play_song_loop or append a repeat marker:
+//   NOTE: for repeat, set song start address as loop point.
 
 // -------------------------------------------------------------------
 // PSG register helpers
@@ -34,6 +103,13 @@ PROCEDURE psg_vol(channel BYTE, vol BYTE)
   OUTPUT 0x7F 0x90 | (channel << 5) | vol
 END
 
+// Set noise channel frequency and mode.
+// mode: 0=periodic (hiss), 1=white noise (static)
+// freq: 0-3 (3-bit noise divider rate: 0=high, 3=low pitch)
+PROCEDURE psg_noise(mode BYTE, rate BYTE)
+  OUTPUT 0x7F 0xE0 | (mode << 2) | (rate & 0x03)
+END
+
 // Silence all tone channels and noise.
 PROCEDURE psg_silence()
   CALL psg_vol(0, 15)
@@ -46,26 +122,76 @@ END
 // Song data player
 // -------------------------------------------------------------------
 
-// Play a song from a DATA block. Call this from a task context.
-// Each note occupies 5 bytes:
-//   [0-1] freq as little-endian WORD (10-bit divider value)
-//   [2]   duration in scheduler ticks
-//   [3]   channel (0-2)
-//   [4]   volume (0=loudest, 15=silent)
-// A terminator of 5 zero bytes ends the song.
+// Play a song from a DATA block once. Call this from a task context.
+// See song data format above.
+// A song ends when it hits freq=0, duration=0, vol in {0, 0xFF}.
 PROCEDURE play_song(song DATA)
   DECLARE idx WORD
   DECLARE freq WORD
+  DECLARE vol BYTE
   LET idx = 0
-  WHILE TRUE DO
-    IF song[idx] == 0 AND song[idx+1] == 0 AND song[idx+2] == 0 THEN
-      RETURN
-    END
+  WHILE 1 DO
     LET freq = song[idx] | (song[idx+1] << 8)
-    CALL psg_freq(song[idx+3], freq)
-    CALL psg_vol(song[idx+3], song[idx+4])
-    SLEEP song[idx+2]
-    CALL psg_vol(song[idx+3], 15)
+    LET vol = song[idx+4]
+    // End marker: freq=0, duration=0, vol=0 or 0xFF
+    IF freq == 0 THEN
+      IF song[idx+2] == 0 THEN DO
+        IF vol == 0 THEN RETURN
+        IF vol == 0xFF THEN RETURN
+      END
+    // Sustain, rest, or normal note
+    IF freq == 0xFFFF THEN
+      SLEEP song[idx+2]
+    ELSE
+      IF freq == 0 THEN DO
+        CALL psg_vol(song[idx+3], 15)
+        SLEEP song[idx+2]
+      END ELSE DO
+        CALL psg_freq(song[idx+3], freq)
+        CALL psg_vol(song[idx+3], vol)
+        SLEEP song[idx+2]
+        CALL psg_vol(song[idx+3], 15)
+      END
     LET idx = idx + 5
   END
+END
+
+// Play a song in a loop. play_song above but jumps back to `loop_start`
+// when it hits the end marker. `loop_start` is the byte offset into the
+// DATA block (0 = beginning of song).
+PROCEDURE play_song_loop(song DATA, loop_start WORD)
+  DECLARE idx WORD
+  DECLARE freq WORD
+  DECLARE vol BYTE
+  LET idx = loop_start
+_loop:
+  LET freq = song[idx] | (song[idx+1] << 8)
+  LET vol = song[idx+4]
+  // End marker → loop back
+  IF freq == 0 THEN
+    IF song[idx+2] == 0 THEN DO
+      IF vol == 0 THEN DO
+        LET idx = loop_start
+        GOTO _loop
+      END
+      IF vol == 0xFF THEN DO
+        LET idx = loop_start
+        GOTO _loop
+      END
+    END
+  // Sustain, rest, or normal note
+  IF freq == 0xFFFF THEN
+    SLEEP song[idx+2]
+  ELSE
+    IF freq == 0 THEN DO
+      CALL psg_vol(song[idx+3], 15)
+      SLEEP song[idx+2]
+    END ELSE DO
+      CALL psg_freq(song[idx+3], freq)
+      CALL psg_vol(song[idx+3], vol)
+      SLEEP song[idx+2]
+      CALL psg_vol(song[idx+3], 15)
+    END
+  LET idx = idx + 5
+  GOTO _loop
 END
