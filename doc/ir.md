@@ -9,7 +9,7 @@ This abstract machine is called the PAM for PLZ Abstract Machine.
 The intermediate representation is named PIR.
 
 The PAM has a return stack (for CALL/RETURN), a data stack (for expression
-evaluation), and named variable locations.
+evaluation), named variable locations, and named ROM locations.
 
 This IR will then be translated to the target architecture (initially Z80).
 
@@ -496,6 +496,12 @@ DATA_TILE [string]
         DATA_B 20
         DATA_B 30
 
+PUSH_D [name]
+
+	Pushes the 16-bit hardware memory ROM address of the DATA that name refers
+	to onto the data stack.
+
+
 ## Pragma
 
 PRAGMA [number]
@@ -719,11 +725,49 @@ syntax requirements:
 - **Expressions** support `<expr` (low byte) and `>expr` (high byte)
   as unary operators.
 
+### NES Target (`-arch nes`)
+
+When targeting the NES, the backend uses the following layout:
+
+| Region     | Address       | Description                           |
+|------------|---------------|---------------------------------------|
+| iNES header| $0000 (file)  | 16-byte iNES 1.0 header              |
+| PRG-ROM    | $C000-$FFFF   | 16 KB of code (2× 8KB banks, NROM)   |
+| CPU RAM    | $0000-$07FF   | 2 KB internal RAM                     |
+| Zero page  | $0000-$00FF   | Data stack ptr ($00-$01) and scratch  |
+| Stack      | $0100-$01FF   | Hardware stack (SP initialized to $FF)|
+| Data stack | $0200-$02FF   | Data stack area (grows upward)        |
+| Variables  | $0300-$07FF   | Static variable storage               |
+| SRAM (MMC5)| $6000-$7FFF   | 8 KB battery-backed SRAM              |
+| Vectors    | $FFFA-$FFFF   | NMI, RESET, IRQ vectors               |
+
+The iNES header and vector table are post-processed by `Assemble6502`
+after assembly. The header is prepended and the vectors are appended
+at $FFFA-$FFFF.
+
+**MMC5 SRAM**: When `SRAM_ON` is emitted on the NES target, the
+backend writes $02 to $5104 to enable the 8 KB SRAM window at
+$6000-$7FFF. `SRAM_OFF` writes $00 to $5104 to disable it.
+SRAM uses an MMC5 mapper with NROM-256 compatibility.
+
+### Compilation Pipeline (`-arch` flag)
+
+The CLI `-arch` flag selects the target:
+
+| Flag       | Backend      | Assembler                    | Output       |
+|------------|--------------|------------------------------|--------------|
+| `z80`      | PIR → Z80Gen | paulhankin/z80asm            | .bin / .sms  |
+| `6502`     | PIR → Gen6502| beevik/go6502/asm            | .bin         |
+| `nes`      | PIR → Gen6502| beevik/go6502/asm + iNES hdr | .nes         |
+
+The `-legacy` flag uses the original direct tree-walking Z80 generator
+instead of the PIR pipeline (Z80 only).
+
 # To Do & Work In Progress
 
 * 6502 multiply/divide/modulo runtime helpers not yet implemented
 * 6502 frame pointer for reentrant procedures not implemented
 * 6502 task scheduler not implemented
-* 6502 SRAM save/load not implemented
-
+* 6502 SAVE/LOAD (block copy) not implemented
+* SRAM_ON should push a 16 bits destination address of the SRAM onto the top of stack.
 
