@@ -53,11 +53,20 @@ PUSH_W [val]
 
 Pushes 8-bit or 16-bit literal onto the data stack.
 
-VAR_B [name]
-VAR_W [name]
+VAR [name]
 
-Defines an 8-bit or 16-bit variable. Variables have global scope.
+Defines a variable. Variables have global scope.
+By default the size is 1 byte.
+However if it is preceded by ALLOC then the size of the ALLOC is used.
 It is allowed to refer to a variable defined later in the IR.
+
+
+ALLOC [val]
+
+One-shot directive. When placed immediately before VAR,
+sets the size of that variable allocation in bytes.
+Only the next VAR declaration is affected.
+
 
 AT [address]
 

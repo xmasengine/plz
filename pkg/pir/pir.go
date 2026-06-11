@@ -19,8 +19,8 @@ const (
 	NOP    Instruction = iota // no operation
 	PUSH_B                    // [number] Push 8-bit literal onto the data stack.
 	PUSH_W                    // [number] Push 16-bit literal onto the data stack.
-	VAR_B                     // [name] Define an 8-bit global variable.
-	VAR_W                     // [name] Define a 16-bit global variable.
+	ALLOC                     // [number] One-shot: set allocation size (bytes) for next VAR.
+	VAR                       // [name] Define a global variable (size set by preceding ALLOC, default 1).
 	AT                        // [number] One-shot: assign next VAR/DATA/ROUTE/JOB to this hardware address.
 	GET_B                     // [name] Fetch 8-bit variable value; push to data stack.
 	GET_W                     // [name] Fetch 16-bit variable value; push to data stack.
@@ -225,8 +225,8 @@ var instructionNames = map[Instruction]string{
 	NOP:            "NOP",
 	PUSH_B:         "PUSH_B",
 	PUSH_W:         "PUSH_W",
-	VAR_B:          "VAR_B",
-	VAR_W:          "VAR_W",
+	ALLOC:          "ALLOC",
+	VAR:            "VAR",
 	AT:             "AT",
 	GET_B:          "GET_B",
 	GET_W:          "GET_W",
@@ -366,10 +366,10 @@ func expectedOperand(op Instruction) OperandType {
 		HLT, DII, ENI, SEED, SWITCH,
 		SAVE, LOAD, SRAM_ON, SRAM_OFF:
 		return OpNone
-	case PUSH_B, PUSH_W, AT, FRAME, PRIORITY,
+	case PUSH_B, PUSH_W, AT, ALLOC, FRAME, PRIORITY,
 		BANK, DATA_B, DATA_W, PRAGMA:
 		return OpNumber
-	case VAR_B, VAR_W, GET_B, GET_W, PUT_B, PUT_W,
+	case VAR, GET_B, GET_W, PUT_B, PUT_W,
 		PUSH_A, PUSH_D, TAG, GO, GO_IF,
 		ROUTE, RUN, LOCAL_B, LOCAL_W,
 		JOB, STOP, START,

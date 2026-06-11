@@ -62,7 +62,7 @@ func TestGen6502NOP(t *testing.T) {
 
 func TestGen6502VarByte(t *testing.T) {
 	prog := &Program{Instrs: []Instr{
-		{Op: VAR_B, Operand: Operand{Type: OpName, Name: "x"}},
+		{Op: VAR, Operand: Operand{Type: OpName, Name: "x"}},
 		{Op: PUSH_B, Operand: Operand{Type: OpNumber, Num: 42}},
 		{Op: PUT_B, Operand: Operand{Type: OpName, Name: "x"}},
 	}}
@@ -80,7 +80,8 @@ func TestGen6502VarByte(t *testing.T) {
 
 func TestGen6502VarWord(t *testing.T) {
 	prog := &Program{Instrs: []Instr{
-		{Op: VAR_W, Operand: Operand{Type: OpName, Name: "x"}},
+		{Op: ALLOC, Operand: Operand{Type: OpNumber, Num: 2}},
+		{Op: VAR, Operand: Operand{Type: OpName, Name: "x"}},
 		{Op: PUSH_W, Operand: Operand{Type: OpNumber, Num: 0x1234}},
 		{Op: PUT_W, Operand: Operand{Type: OpName, Name: "x"}},
 	}}
@@ -98,8 +99,9 @@ func TestGen6502VarWord(t *testing.T) {
 
 func TestGen6502GetPut(t *testing.T) {
 	prog := &Program{Instrs: []Instr{
-		{Op: VAR_B, Operand: Operand{Type: OpName, Name: "a"}},
-		{Op: VAR_W, Operand: Operand{Type: OpName, Name: "b"}},
+		{Op: VAR, Operand: Operand{Type: OpName, Name: "a"}},
+		{Op: ALLOC, Operand: Operand{Type: OpNumber, Num: 2}},
+		{Op: VAR, Operand: Operand{Type: OpName, Name: "b"}},
 		{Op: PUSH_B, Operand: Operand{Type: OpNumber, Num: 10}},
 		{Op: PUT_B, Operand: Operand{Type: OpName, Name: "a"}},
 		{Op: PUSH_W, Operand: Operand{Type: OpNumber, Num: 0xAABB}},
@@ -314,7 +316,7 @@ func TestGen6502DataEmission(t *testing.T) {
 func TestGen6502ATVar(t *testing.T) {
 	prog := &Program{Instrs: []Instr{
 		{Op: AT, Operand: Operand{Type: OpNumber, Num: 0x3000}},
-		{Op: VAR_B, Operand: Operand{Type: OpName, Name: "io_port"}},
+		{Op: VAR, Operand: Operand{Type: OpName, Name: "io_port"}},
 		{Op: PUSH_B, Operand: Operand{Type: OpNumber, Num: 0xFF}},
 		{Op: PUT_B, Operand: Operand{Type: OpName, Name: "io_port"}},
 	}}

@@ -426,7 +426,7 @@ func TestZ80GenBankData(t *testing.T) {
 		{name: "SWITCH", prog: &Program{Instrs: []Instr{{Op: SWITCH}}}, want: []string{"ld a, e", "out (0xfffd), a"}},
 		{name: "DATA_B", prog: &Program{Instrs: []Instr{{Op: DATA_B, Operand: Operand{Type: OpNumber, Num: 255}}}}, want: []string{"db 255"}},
 		{name: "DATA_W", prog: &Program{Instrs: []Instr{{Op: DATA_W, Operand: Operand{Type: OpNumber, Num: 0x1234}}}}, want: []string{"dw 4660"}},
-		{name: "SRAM_ON", prog: &Program{Instrs: []Instr{{Op: SRAM_ON}}}, want: []string{"ld a, 8", "ld (0xfffc), a"}},
+		{name: "SRAM_ON", prog: &Program{Instrs: []Instr{{Op: SRAM_ON}}}, want: []string{"ld a, 8", "ld (0xfffc), a", "ld (hl), e", "inc hl", "ld (hl), d", "inc hl", "ld de, 0x8000"}},
 		{name: "SRAM_OFF", prog: &Program{Instrs: []Instr{{Op: SRAM_OFF}}}, want: []string{"ld a, 0", "ld (0xfffc), a"}},
 	}
 	for _, tc := range tests {
@@ -472,8 +472,9 @@ func TestZ80GenInline(t *testing.T) {
 
 func TestZ80GenVars(t *testing.T) {
 	prog := &Program{Instrs: []Instr{
-		{Op: VAR_B, Operand: Operand{Type: OpName, Name: "x"}},
-		{Op: VAR_W, Operand: Operand{Type: OpName, Name: "y"}},
+		{Op: VAR, Operand: Operand{Type: OpName, Name: "x"}},
+		{Op: ALLOC, Operand: Operand{Type: OpNumber, Num: 2}},
+		{Op: VAR, Operand: Operand{Type: OpName, Name: "y"}},
 		{Op: PUSH_B, Operand: Operand{Type: OpNumber, Num: 1}},
 	}}
 	var gen Z80Gen
@@ -538,7 +539,7 @@ func TestZ80GenRuntimeHelpers(t *testing.T) {
 func TestZ80GenConfig(t *testing.T) {
 	cfg := Z80Config{StackBase: 0xFF00, HeapBase: 0xE000}
 	prog := &Program{Instrs: []Instr{
-		{Op: VAR_B, Operand: Operand{Type: OpName, Name: "x"}},
+		{Op: VAR, Operand: Operand{Type: OpName, Name: "x"}},
 		{Op: PUSH_W, Operand: Operand{Type: OpNumber, Num: 0}},
 	}}
 	var gen Z80Gen
@@ -694,8 +695,9 @@ DONE
 
 func TestZ80GenRoundTrip(t *testing.T) {
 	// Parse a complex program, generate Z80, verify structure
-	src := `VAR_B x
-VAR_W y
+	src := `VAR x
+ALLOC 2
+VAR y
 PUSH_B 42
 PUT_B x
 PUSH_W 1000

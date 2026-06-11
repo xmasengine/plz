@@ -72,6 +72,7 @@ func TestInstrStringNumber(t *testing.T) {
 		{PUSH_B, 42, "PUSH_B 42"},
 		{PUSH_W, 65535, "PUSH_W 65535"},
 		{AT, 0xC000, "AT 49152"},
+		{ALLOC, 4, "ALLOC 4"},
 		{FRAME, 6, "FRAME 6"},
 		{PRIORITY, 4, "PRIORITY 4"},
 		{BANK, 1, "BANK 1"},
@@ -93,8 +94,7 @@ func TestInstrStringName(t *testing.T) {
 		name string
 		want string
 	}{
-		{VAR_B, "x", "VAR_B x"},
-		{VAR_W, "y", "VAR_W y"},
+		{VAR, "x", "VAR x"},
 		{GET_B, "x", "GET_B x"},
 		{GET_W, "y", "GET_W y"},
 		{PUT_B, "x", "PUT_B x"},

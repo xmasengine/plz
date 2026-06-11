@@ -49,8 +49,9 @@ type Z80Gen struct {
 	tags   map[string]bool
 	needHL int // label counter for unique locals
 
-	// one-shot AT directive tracking
-	pendingAT int // >=0 when AT is active, the target address; -1 when none
+	// one-shot directive tracking
+	pendingAT   int // >=0 when AT is active, the target address; -1 when none
+	pendingSize int // >0 overrides size for next VAR; 0 when none
 
 	// usage tracking — which helpers we actually need
 	needMul   bool
@@ -62,6 +63,7 @@ type Z80Gen struct {
 	needSave  bool
 	needLoad  bool
 	taskCount int
+	taskNames map[string]int // name → index mapping for STOP/START
 }
 
 // NewZ80Gen creates a Z80Gen with the given config.
@@ -83,7 +85,9 @@ func (z *Z80Gen) Gen(prog *Program) string {
 	z.varNext = z.cfg.HeapBase
 	z.localOff = make(map[string]int)
 	z.tags = make(map[string]bool)
+	z.taskNames = make(map[string]int)
 	z.pendingAT = -1
+	z.pendingSize = 0
 
 	// Initial scan: collect variable names and tag definitions,
 	// detect which runtime helpers are needed.
@@ -111,32 +115,28 @@ func (z *Z80Gen) scanProg(prog *Program) {
 		switch instr.Op {
 		case AT:
 			z.pendingAT = int(instr.Operand.Num)
+			consumed = true
 
-		case VAR_B:
+		case ALLOC:
+			z.pendingSize = int(instr.Operand.Num)
+			consumed = true
+
+		case VAR:
 			name := z.varName(instr.Operand.Name)
 			if _, ok := z.varAddr[name]; !ok {
-				if z.pendingAT >= 0 {
-					z.varAddr[name] = uint16(z.pendingAT)
-					z.varSizes[name] = 1
-					consumed = true
-				} else {
-					z.varAddr[name] = z.varNext
-					z.varSizes[name] = 1
-					z.varNext += 1
+				size := 1
+				if z.pendingSize > 0 {
+					size = z.pendingSize
+					z.pendingSize = 0
 				}
-			}
-
-		case VAR_W:
-			name := z.varName(instr.Operand.Name)
-			if _, ok := z.varAddr[name]; !ok {
 				if z.pendingAT >= 0 {
 					z.varAddr[name] = uint16(z.pendingAT)
-					z.varSizes[name] = 2
+					z.varSizes[name] = size
 					consumed = true
 				} else {
 					z.varAddr[name] = z.varNext
-					z.varSizes[name] = 2
-					z.varNext += 2
+					z.varSizes[name] = size
+					z.varNext += uint16(size)
 				}
 			}
 
@@ -147,7 +147,9 @@ func (z *Z80Gen) scanProg(prog *Program) {
 			consumed = true
 
 		case JOB:
+			z.needMul = true   // scheduler multiplies TCB index by 8
 			z.needSched = true
+			z.taskNames[instr.Operand.Name] = z.taskCount
 			z.taskCount++
 			consumed = true
 
@@ -163,8 +165,10 @@ func (z *Z80Gen) scanProg(prog *Program) {
 		case IS_B, IS_W:
 			z.needCmp = true
 		case BYE:
+			z.needMul = true   // scheduler multiplies TCB index by 8
 			z.needSched = true
 		case SLEEP:
+			z.needMul = true   // scheduler multiplies TCB index by 8
 			z.needSleep = true
 			z.needSched = true
 		case SAVE:
@@ -552,10 +556,11 @@ func (z *Z80Gen) emitScheduler() {
 	z.emit("\tld de, 8")
 	z.emit("\tcall _plz_mul")
 	z.emit("\tld de, _plz_tcbs")
-	z.emit("\tadd hl, de")
-	z.emit("\tex de, hl      // DE = TCB entry for current task")
-	z.emit("\tpop hl         // HL = saved data stack pointer")
-	z.emit("\tld (de), hl    // save SP (stores bytes in little-endian)")
+	z.emit("\tadd hl, de     // HL = TCB entry for current task")
+	z.emit("\tpop de         // DE = saved data stack pointer")
+	z.emit("\tld (hl), e     // save SP low byte")
+	z.emit("\tinc hl")
+	z.emit("\tld (hl), d     // save SP high byte")
 	z.emit("")
 	z.emit("\t// Decrement sleep counters")
 	z.emit("\tld hl, _plz_tcbs+3")
@@ -662,12 +667,16 @@ func (z *Z80Gen) emitProg(prog *Program) {
 			z.pendingAT = int(instr.Operand.Num)
 			continue
 		}
+		if instr.Op == ALLOC {
+			z.pendingSize = int(instr.Operand.Num)
+			continue
+		}
 		// If a pending AT precedes this instruction, emit org for
 		// qualifying declarations. AT is one-shot — once consumed
 		// (or passed to a non-declaration) it is cleared.
 		if z.pendingAT >= 0 {
 			switch instr.Op {
-			case VAR_B, VAR_W:
+			case VAR:
 				// handled by scanProg + emitVars
 			case DATA_B, DATA_W, DATA_STR, ROUTE, JOB:
 				z.emitf("org %d", z.pendingAT)
@@ -698,7 +707,7 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.spill()
 		z.emitf("\tld de, %d", o.Num)
 
-	case VAR_B, VAR_W:
+	case VAR:
 	// Handled in scan phase; no code emitted here.
 
 	case GET_B:
@@ -1193,11 +1202,18 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 	case STOP:
 		z.emitf("\t// STOP %s: set state to SUSPENDED", o.Name)
 		z.emitf("\tld a, 1")
-		z.emitf("\tld (_plz_tcbs+2), a") // FIXME: this should target the correct task
+		if idx, ok := z.taskNames[o.Name]; ok {
+			z.emitf("\tld hl, _plz_tcbs+%d", idx*8+2)
+			z.emit("\tld (hl), a")
+		}
 
 	case START:
 		z.emitf("\t// START %s: set state to READY", o.Name)
 		z.emitf("\tld a, 0")
+		if idx, ok := z.taskNames[o.Name]; ok {
+			z.emitf("\tld hl, _plz_tcbs+%d", idx*8+2)
+			z.emit("\tld (hl), a")
+		}
 
 	// ── Port I/O ──
 	case IN_B:
@@ -1286,6 +1302,8 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 	case SRAM_ON:
 		z.emit("\tld a, 8")
 		z.emit("\tld (0xfffc), a")
+		z.spill()
+		z.emit("\tld de, 0x8000")
 
 	case SRAM_OFF:
 		z.emit("\tld a, 0")

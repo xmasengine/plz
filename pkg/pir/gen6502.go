@@ -74,8 +74,9 @@ type Gen6502 struct {
 	taskCount        int
 	taskEntryLabels  []string
 
-	// one-shot AT tracking
-	pendingAT int
+	// one-shot directive tracking
+	pendingAT   int // >=0 when AT is active; -1 when none
+	pendingSize int // >0 overrides size for next VAR; 0 when none
 }
 
 // NewGen6502 creates a Gen6502 with the given config.
@@ -95,6 +96,7 @@ func (z *Gen6502) Gen(prog *Program) string {
 	z.varNext = z.cfg.VarBase
 	z.tags = make(map[string]bool)
 	z.pendingAT = -1
+	z.pendingSize = 0
 
 	z.scanProg(prog)
 
@@ -114,30 +116,26 @@ func (z *Gen6502) scanProg(prog *Program) {
 		switch instr.Op {
 		case AT:
 			z.pendingAT = int(instr.Operand.Num)
-		case VAR_B:
+			consumed = true
+		case ALLOC:
+			z.pendingSize = int(instr.Operand.Num)
+			consumed = true
+		case VAR:
 			name := z.varName(instr.Operand.Name)
 			if _, ok := z.varAddr[name]; !ok {
-				if z.pendingAT >= 0 {
-					z.varAddr[name] = uint16(z.pendingAT)
-					z.varSizes[name] = 1
-					consumed = true
-				} else {
-					z.varAddr[name] = z.varNext
-					z.varSizes[name] = 1
-					z.varNext += 1
+				size := 1
+				if z.pendingSize > 0 {
+					size = z.pendingSize
+					z.pendingSize = 0
 				}
-			}
-		case VAR_W:
-			name := z.varName(instr.Operand.Name)
-			if _, ok := z.varAddr[name]; !ok {
 				if z.pendingAT >= 0 {
 					z.varAddr[name] = uint16(z.pendingAT)
-					z.varSizes[name] = 2
+					z.varSizes[name] = size
 					consumed = true
 				} else {
 					z.varAddr[name] = z.varNext
-					z.varSizes[name] = 2
-					z.varNext += 2
+					z.varSizes[name] = size
+					z.varNext += uint16(size)
 				}
 			}
 		case DATA_B, DATA_W, DATA_STR:
@@ -200,6 +198,15 @@ func (z *Gen6502) emitStart() {
 	z.emit("\tcld")
 	z.emit("\tldx #$ff")
 	z.emit("\ttxs")
+
+	if z.cfg.NES {
+		// MMC5: set PRG mode to 16KB fixed at $C000, selectable at $8000
+		z.emit("\tlda #$01")
+		z.emit("\tsta $5100")
+		// MMC5: enable SRAM writes by default
+		z.emit("\tlda #$02")
+		z.emit("\tsta $5104")
+	}
 
 	// Init data stack pointer
 	z.emitf("\tlda #<%d", z.cfg.StackBase)
@@ -602,9 +609,13 @@ func (z *Gen6502) emitProg(prog *Program) {
 			z.pendingAT = int(instr.Operand.Num)
 			continue
 		}
+		if instr.Op == ALLOC {
+			z.pendingSize = int(instr.Operand.Num)
+			continue
+		}
 		if z.pendingAT >= 0 {
 			switch instr.Op {
-			case VAR_B, VAR_W:
+			case VAR:
 				// handled by emitVars
 			case DATA_B, DATA_W, DATA_STR, ROUTE:
 				z.emitf("\t; AT $%04x", z.pendingAT)
@@ -633,8 +644,8 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitf("\tldx #%d", (o.Num>>8)&0xFF)
 		z.emitSpillW()
 
-	case VAR_B, VAR_W:
-		// andled in scan phase
+	case VAR:
+	// Handled in scan phase
 
 	case GET_B:
 		z.emitf("\tlda %s", z.varName(o.Name))
@@ -1302,9 +1313,19 @@ func (z *Gen6502) emitInstr(instr Instr) {
 
 	// ── Bank Switching ──
 	case BANK:
-		z.emitf("\t; BANK %d not implemented", o.Num)
+		if z.cfg.NES {
+			z.emitf("\t; BANK %d (MMC5 compile-time bank directive — assembler does not yet support multi-bank)", o.Num)
+		} else {
+			z.emitf("\t; BANK %d not implemented", o.Num)
+		}
 	case SWITCH:
-		z.emit("\t; SWITCH not implemented")
+		if z.cfg.NES {
+			// Pop bank number (word) from data stack, write low byte to MMC5 $5113 (16KB PRG bank select)
+			z.emitFillW()
+			z.emit("\tsta $5113       ; MMC5: select PRG bank at $8000")
+		} else {
+			z.emit("\t; SWITCH not implemented")
+		}
 
 	// ── Data Emission ──
 	case DATA_B:
@@ -1328,9 +1349,12 @@ func (z *Gen6502) emitInstr(instr Instr) {
 	// ── Battery RAM ──
 	case SRAM_ON:
 		if z.cfg.NES {
-			// MMC5: 8KB SRAM at $6000-$7FFF, enable via $5104
+			// MMC5: 8KB SRAM at $6000-$7FFF, enable via $5104, push base address
 			z.emit("\tlda #$02")
 			z.emit("\tsta $5104")
+			z.emit("\tlda #$00")
+			z.emit("\tldx #$60")
+			z.emitSpillW()
 		} else {
 			z.emit("\t; SRAM_ON not implemented on 6502")
 		}
