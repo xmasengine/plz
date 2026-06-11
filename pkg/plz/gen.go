@@ -36,6 +36,7 @@ type Gen struct {
 	boundsErrorEmitted bool                      // tracks whether _plz_bounds_error label has been emitted
 	strings            []strEntry                // string literal labels and content for ROM emission
 	forTemps           []string                  // FOR loop temp variable labels (step/end), emitted in data section
+	loopStack          []struct{ start, end string } // loop label stack for BREAK/CONTINUE
 }
 
 // strEntry records a string literal that needs to be emitted as ROM data.
@@ -934,7 +935,7 @@ func (i Infix) Gen(g *Gen) error {
 		g.genInfixShiftLeft(i.Operands[1])
 	case OperatorShiftRight:
 		g.genInfixShiftRight(i.Operands[1])
-	case OperatorAND, OperatorOR, OperatorXOR:
+	case OperatorAND, OperatorLAnd, OperatorOR, OperatorLOr, OperatorXOR:
 		g.genInfixBitwiseOp(&i)
 	case OperatorMUL:
 		g.Emitln("\tcall _plz_mul")
@@ -973,13 +974,13 @@ func (g *Gen) genInfixSub() {
 // otherwise it uses 16-bit operations via genInfixBitwise.
 func (g *Gen) genInfixBitwiseOp(i *Infix) {
 	switch i.Operator {
-	case OperatorAND:
+	case OperatorAND, OperatorLAnd:
 		if g.isByteInfix(i) {
 			g.genInfixBitwise8("\tand e")
 		} else {
 			g.genInfixBitwise("\tand e", "\tand d")
 		}
-	case OperatorOR:
+	case OperatorOR, OperatorLOr:
 		if g.isByteInfix(i) {
 			g.genInfixBitwise8("\tor e")
 		} else {
@@ -1724,8 +1725,12 @@ func (s Group) Gen(g *Gen) error {
 
 func (g *Gen) genWhileGroup(s Group) error {
 	n := g.nextLabel()
-	g.Emitf("_while_%d:\n", n)
-	if err := g.genCondBranch(s.While.Expression, fmt.Sprintf("_end_%d", n)); err != nil {
+	startTag := fmt.Sprintf("_while_%d", n)
+	endTag := fmt.Sprintf("_end_%d", n)
+	g.loopStack = append(g.loopStack, struct{ start, end string }{startTag, endTag})
+	defer func() { g.loopStack = g.loopStack[:len(g.loopStack)-1] }()
+	g.Emitf("%s:\n", startTag)
+	if err := g.genCondBranch(s.While.Expression, endTag); err != nil {
 		return err
 	}
 	g.pushScope()
@@ -1735,17 +1740,21 @@ func (g *Gen) genWhileGroup(s Group) error {
 			return err
 		}
 	}
-	g.Emitf("\tjmp _while_%d\n", n)
-	g.Emitf("_end_%d:\n", n)
+	g.Emitf("\tjmp %s\n", startTag)
+	g.Emitf("%s:\n", endTag)
 	return nil
 }
 
 func (g *Gen) genForGroup(s Group) error {
 	n := g.nextLabel()
-	stepLabel := fmt.Sprintf("_for_step_%d", n)
+	loopTag := fmt.Sprintf("_for_%d", n)
 	endLabel := fmt.Sprintf("_for_end_%d", n)
+	endTag := fmt.Sprintf("_end_%d", n)
+	stepLabel := fmt.Sprintf("_for_step_%d", n)
 	g.addForTemp(stepLabel)
 	g.addForTemp(endLabel)
+	g.loopStack = append(g.loopStack, struct{ start, end string }{loopTag, endTag})
+	defer func() { g.loopStack = g.loopStack[:len(g.loopStack)-1] }()
 
 	// Determine if the loop variable is BYTE so we use correct load/store size.
 	isByte := false
@@ -1780,7 +1789,7 @@ func (g *Gen) genForGroup(s Group) error {
 		g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
 	}
 
-	g.Emitf("_for_%d:\n", n)
+	g.Emitf("%s:\n", loopTag)
 	// Compare var with end (hl = end - var)
 	g.Emitf("\tld hl, (%s)\n", endLabel)
 	if isByte {
@@ -1792,7 +1801,7 @@ func (g *Gen) genForGroup(s Group) error {
 	}
 	g.Emitln("\tor a")
 	g.Emitln("\tsbc hl, de")
-	g.Emitf("\tjmp c, _end_%d\n", n)
+	g.Emitf("\tjmp c, %s\n", endTag)
 
 	// Body
 	g.pushScope()
@@ -1819,8 +1828,8 @@ func (g *Gen) genForGroup(s Group) error {
 	} else {
 		g.Emitf("\tld (%s), hl\n", g.localSym(s.For.Reference.Identifier))
 	}
-	g.Emitf("\tjmp _for_%d\n", n)
-	g.Emitf("_end_%d:\n", n)
+	g.Emitf("\tjmp %s\n", loopTag)
+	g.Emitf("%s:\n", endTag)
 	return nil
 }
 
@@ -2327,6 +2336,22 @@ func (s Halt) Gen(g *Gen) error {
 	return nil
 }
 
+func (s Break) Gen(g *Gen) error {
+	if len(g.loopStack) == 0 {
+		return nil
+	}
+	g.Emitf("\tjmp %s\n", g.loopStack[len(g.loopStack)-1].end)
+	return nil
+}
+
+func (s Continue) Gen(g *Gen) error {
+	if len(g.loopStack) == 0 {
+		return nil
+	}
+	g.Emitf("\tjmp %s\n", g.loopStack[len(g.loopStack)-1].start)
+	return nil
+}
+
 // Gen generates assembly for an ENABLE statement, emitting an EI instruction.
 func (s Enable) Gen(g *Gen) error {
 	g.Emitln("\tei")
@@ -2611,6 +2636,12 @@ func (s Constant) Gen(g *Gen) error {
 			}
 		}
 	}
+	return nil
+}
+
+// Gen emits assembly for a DEFINE type alias. No code is emitted —
+// type aliases are compile-time only.
+func (s Define) Gen(g *Gen) error {
 	return nil
 }
 

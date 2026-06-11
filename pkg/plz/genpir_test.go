@@ -36,7 +36,7 @@ func TestGenPIR_SimpleLet(t *testing.T) {
 
 func TestGenPIR_LetVariableRef(t *testing.T) {
 	p := genPIR(t, "DECLARE y WORD\nLET x = y")
-	want := "NOP\nGET_W y\nPUT_W x\nHLT\nVAR_W y\n"
+	want := "NOP\nGET_W y\nPUT_W x\nHLT\nALLOC 2\nVAR y\n"
 	if got := p.String(); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -117,8 +117,8 @@ func TestGenPIR_IfThen(t *testing.T) {
 		"PUT_W y\n" +
 		"TAG _else_1\n" +
 		"HLT\n" +
-		"VAR_W x\n" +
-		"VAR_W y\n"
+		"ALLOC 2\nVAR x\n" +
+		"ALLOC 2\nVAR y\n"
 	if got := p.String(); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -139,9 +139,9 @@ func TestGenPIR_IfThenElse(t *testing.T) {
 		"PUT_W z\n" +
 		"TAG _end_1\n" +
 		"HLT\n" +
-		"VAR_W x\n" +
-		"VAR_W y\n" +
-		"VAR_W z\n"
+		"ALLOC 2\nVAR x\n" +
+		"ALLOC 2\nVAR y\n" +
+		"ALLOC 2\nVAR z\n"
 	if got := p.String(); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -162,7 +162,7 @@ func TestGenPIR_WhileLoop(t *testing.T) {
 		"GO _while_1\n" +
 		"TAG _end_1\n" +
 		"HLT\n" +
-		"VAR_W x\n"
+		"ALLOC 2\nVAR x\n"
 	if got := p.String(); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -175,10 +175,10 @@ func TestGenPIR_ForLoop(t *testing.T) {
 		"PUSH_B 1\n" +
 		"PUT_W i\n" +
 		"PUSH_B 10\n" +
-		"VAR_W _plz_for_to_1\n" +
+		"ALLOC 2\nVAR _plz_for_to_1\n" +
 		"PUT_W _plz_for_to_1\n" +
 		"PUSH_W 1\n" +
-		"VAR_W _plz_for_step_1\n" +
+		"ALLOC 2\nVAR _plz_for_step_1\n" +
 		"PUT_W _plz_for_step_1\n" +
 		"TAG _for_1\n" +
 		"GET_W i\n" +
@@ -194,7 +194,7 @@ func TestGenPIR_ForLoop(t *testing.T) {
 		"GO _for_1\n" +
 		"TAG _end_1\n" +
 		"HLT\n" +
-		"VAR_W i\n"
+		"ALLOC 2\nVAR i\n"
 	if got := p.String(); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -220,8 +220,8 @@ func TestGenPIR_ProcedureArgs(t *testing.T) {
 		"NOP\n" +
 		"HLT\n" +
 		"ROUTE foo\n" +
-		"VAR_B a\n" +
-		"VAR_W b\n" +
+		"VAR a\n" +
+		"ALLOC 2\nVAR b\n" +
 		"PUT_W b\n" +
 		"PUT_B a\n" +
 		"GET_B a\n" +
@@ -311,7 +311,7 @@ func TestGenPIR_NestedScope(t *testing.T) {
 		"NOP\n" +
 		"HLT\n" +
 		"ROUTE foo\n" +
-		"VAR_B x\n" +
+		"VAR x\n" +
 		"PUSH_B 42\n" +
 		"PUT_B x\n" +
 		"GET_B x\n" +
@@ -324,7 +324,7 @@ func TestGenPIR_NestedScope(t *testing.T) {
 
 func TestGenPIR_ByteVarLet(t *testing.T) {
 	p := genPIR(t, "DECLARE b BYTE\nLET b = 100")
-	want := "NOP\nPUSH_B 100\nPUT_B b\nHLT\nVAR_B b\n"
+	want := "NOP\nPUSH_B 100\nPUT_B b\nHLT\nVAR b\n"
 	if got := p.String(); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -344,7 +344,7 @@ func TestGenPIR_IfExprCondition(t *testing.T) {
 		"PUT_W y\n" +
 		"TAG _else_1\n" +
 		"HLT\n" +
-		"VAR_W x\n"
+		"ALLOC 2\nVAR x\n"
 	if got := p.String(); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -357,10 +357,10 @@ func TestGenPIR_ForLoopWithStep(t *testing.T) {
 		"PUSH_B 0\n" +
 		"PUT_W i\n" +
 		"PUSH_B 10\n" +
-		"VAR_W _plz_for_to_1\n" +
+		"ALLOC 2\nVAR _plz_for_to_1\n" +
 		"PUT_W _plz_for_to_1\n" +
 		"PUSH_B 2\n" +
-		"VAR_W _plz_for_step_1\n" +
+		"ALLOC 2\nVAR _plz_for_step_1\n" +
 		"PUT_W _plz_for_step_1\n" +
 		"TAG _for_1\n" +
 		"GET_W i\n" +
@@ -376,7 +376,7 @@ func TestGenPIR_ForLoopWithStep(t *testing.T) {
 		"GO _for_1\n" +
 		"TAG _end_1\n" +
 		"HLT\n" +
-		"VAR_W i\n"
+		"ALLOC 2\nVAR i\n"
 	if got := p.String(); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -391,8 +391,8 @@ func TestGenPIR_ProcedureCallWithArgs(t *testing.T) {
 		"RUN foo\n" +
 		"HLT\n" +
 		"ROUTE foo\n" +
-		"VAR_B a\n" +
-		"VAR_W b\n" +
+		"VAR a\n" +
+		"ALLOC 2\nVAR b\n" +
 		"PUT_W b\n" +
 		"PUT_B a\n" +
 		"GET_B a\n" +
@@ -431,7 +431,7 @@ func TestGenPIR_MultipleProcedures(t *testing.T) {
 		"PUT_W a\n" +
 		"HLT\n" +
 		"ROUTE inc\n" +
-		"VAR_W x\n" +
+		"ALLOC 2\nVAR x\n" +
 		"PUT_W x\n" +
 		"GET_W x\n" +
 		"PUSH_B 1\n" +
@@ -439,7 +439,7 @@ func TestGenPIR_MultipleProcedures(t *testing.T) {
 		"DONE\n" +
 		"DONE\n" +
 		"ROUTE dec\n" +
-		"VAR_W x\n" +
+		"ALLOC 2\nVAR x\n" +
 		"PUT_W x\n" +
 		"GET_W x\n" +
 		"PUSH_B 1\n" +
@@ -497,8 +497,8 @@ func TestGenPIR_MultipleStatements(t *testing.T) {
 		"ADD_W\n" +
 		"PUT_W x\n" +
 		"HLT\n" +
-		"VAR_W x\n" +
-		"VAR_W y\n"
+		"ALLOC 2\nVAR x\n" +
+		"ALLOC 2\nVAR y\n"
 	if got := p.String(); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -522,8 +522,8 @@ func TestGenPIR_ProcedureWithLocalDeclares(t *testing.T) {
 		"NOP\n" +
 		"HLT\n" +
 		"ROUTE foo\n" +
-		"VAR_W a\n" +
-		"VAR_B b\n" +
+		"ALLOC 2\nVAR a\n" +
+		"VAR b\n" +
 		"PUSH_B 100\n" +
 		"PUT_W a\n" +
 		"PUSH_B 200\n" +

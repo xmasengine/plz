@@ -86,6 +86,12 @@ const (
 	KeywordLoad                                           // LOAD
 	KeywordPragma                                         // PRAGMA
 	KeywordTemplate                                       // TEMPLATE
+	KeywordBreak                                          // BREAK
+	KeywordContinue                                       // CONTINUE
+	KeywordMod                                            // MOD
+	KeywordAnd                                            // AND
+	KeywordOr                                             // OR
+	KeywordNot                                            // NOT
 )
 
 // Keywords maps keyword strings to their corresponding TokenKind values.
@@ -139,6 +145,12 @@ var Keywords = map[string]TokenKind{
 	"SAVE":      KeywordSave,
 	"PRAGMA":    KeywordPragma,
 	"TEMPLATE":  KeywordTemplate,
+	"BREAK":     KeywordBreak,
+	"CONTINUE":  KeywordContinue,
+	"MOD":       KeywordMod,
+	"AND":       KeywordAnd,
+	"OR":        KeywordOr,
+	"NOT":       KeywordNot,
 }
 
 // String returns the human-readable name for a TokenKind.

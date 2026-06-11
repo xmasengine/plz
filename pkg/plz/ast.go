@@ -66,6 +66,8 @@ func (c BankStmt) Command() Commander      { return c }
 func (c Save) Command() Commander          { return c }
 func (c Load) Command() Commander          { return c }
 func (c Pragma) Command() Commander        { return c }
+func (c Break) Command() Commander         { return c }
+func (c Continue) Command() Commander      { return c }
 
 // Statement is a labeled or unlabeled command within a PL/Z program.
 // Each statement may carry an optional named label and exactly one
@@ -693,8 +695,10 @@ const (
 	OperatorDIV        Operator = '/'          // /
 	OperatorNOT        Operator = '!'          // ! (unary logical NOT)
 	OperatorMUL        Operator = '*'          // *
-	OperatorAND        Operator = '&'          // &
-	OperatorOR         Operator = '|'          // |
+	OperatorAND        Operator = '&'          // & (bitwise AND)
+	OperatorOR         Operator = '|'          // | (bitwise OR)
+	OperatorLAnd       Operator = '&' + '&'<<8 // && (logical AND)
+	OperatorLOr        Operator = '|' + '|'<<8 // || (logical OR)
 	OperatorXOR        Operator = '^'          // ^
 	OperatorINDEX      Operator = '[' + ']'<<8 // [] (array indexing)
 	OperatorCALL       Operator = '(' + ')'<<8 // () (procedure call)
@@ -705,11 +709,17 @@ const (
 
 // Priority returns the precedence of the operator for use in Pratt
 // parsing. Higher values bind tighter. The precedence tiers (from
-// lowest to highest) are: comparison (100-150), additive shift
-// (200-230), multiplicative (310-330), bitwise (410-430), unary
-// (500-510), field access (590), indexing (600), and call (610).
+// lowest to highest) are: logical (50-80), comparison (100-150),
+// additive shift (200-230), multiplicative (310-330), bitwise
+// (410-430), unary (500-510), field access (590), indexing (600),
+// and call (610).
 func (o Operator) Priority() int {
 	switch o {
+	case OperatorLOr:
+		return 50
+	case OperatorLAnd:
+		return 80
+
 	case OperatorEQU:
 		return 100
 	case OperatorGT:
@@ -801,6 +811,15 @@ type Sleep struct {
 // Yield represents a YIELD statement that voluntarily yields control
 // to the task scheduler, allowing another ready task to run.
 type Yield struct {
+}
+
+// Break represents a BREAK statement that exits the current loop.
+type Break struct {
+}
+
+// Continue represents a CONTINUE statement that jumps to the next
+// iteration of the current loop.
+type Continue struct {
 }
 
 // paramByteSize returns the storage size (in bytes) for the i-th parameter of proc.

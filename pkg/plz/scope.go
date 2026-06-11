@@ -11,6 +11,7 @@ type Scope struct {
 	Parent   *Scope                 // Parent scope
 	IsProc   bool                   // IsProc is true when this scope is a procedure body
 	IsTask   bool                   // IsTask is true when this scope is a task body
+	IsLoop   bool                   // IsLoop is true when this scope is a WHILE/FOR body
 	Symbols  map[Identifier]Declare // Symbols in this scope
 	Children []*Scope               // Child scopes forming the persistent scope tree
 	ProcData *ProcData              // Procedure metadata (set for procedure scopes)

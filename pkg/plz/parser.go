@@ -1143,6 +1143,12 @@ func (p *Parser) PeekOperator() Operator {
 			return OperatorShiftRight
 		}
 		return OperatorGT
+	case KeywordMod:
+		return OperatorMOD
+	case KeywordAnd:
+		return OperatorAND
+	case KeywordOr:
+		return OperatorOR
 	}
 	return OperatorNone
 }
@@ -1264,7 +1270,7 @@ func (left *Expression) parsePrefix(p *Parser, minBp int) error {
 			Operand:  Operand{Op: &right},
 		}
 
-	case '!':
+	case '!', KeywordNot:
 		p.Next()
 		var right Expression
 		err := right.ParseExpr(p, OperatorNOT.Priority())

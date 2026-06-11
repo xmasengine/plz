@@ -34,6 +34,9 @@ type GenPIR struct {
 
 	// constant folding cache
 	constValues map[Identifier]*Literal
+
+	// loop label stack for BREAK/CONTINUE
+	loopStack []struct{ start, end string }
 }
 
 // NewGenPIR creates a GenPIR attached to a checker.
@@ -523,6 +526,8 @@ func (g *GenPIR) genPIRWhile(w *While, body []Statement) error {
 	n := g.nextLabel()
 	startTag := fmt.Sprintf("_while_%d", n)
 	endTag := fmt.Sprintf("_end_%d", n)
+	g.loopStack = append(g.loopStack, struct{ start, end string }{startTag, endTag})
+	defer func() { g.loopStack = g.loopStack[:len(g.loopStack)-1] }()
 	g.emitName(pir.TAG, startTag)
 	if err := g.genPIRCondBranch(w.Expression, endTag); err != nil {
 		return err
@@ -541,6 +546,8 @@ func (g *GenPIR) genPIRFor(f *For, body []Statement) error {
 	n := g.nextLabel()
 	loopTag := fmt.Sprintf("_for_%d", n)
 	endTag := fmt.Sprintf("_end_%d", n)
+	g.loopStack = append(g.loopStack, struct{ start, end string }{loopTag, endTag})
+	defer func() { g.loopStack = g.loopStack[:len(g.loopStack)-1] }()
 
 	isByte := g.isByteRef(&f.Reference)
 
@@ -559,7 +566,8 @@ func (g *GenPIR) genPIRFor(f *For, body []Statement) error {
 		return err
 	}
 	toTemp := fmt.Sprintf("_plz_for_to_%d", n)
-	g.emitName(pir.VAR_W, toTemp)
+	g.emitNum(pir.ALLOC, 2)
+	g.emitName(pir.VAR, toTemp)
 	g.emitName(pir.PUT_W, toTemp)
 
 	// Compute and save STEP (default 1)
@@ -571,7 +579,8 @@ func (g *GenPIR) genPIRFor(f *For, body []Statement) error {
 		g.emitNum(pir.PUSH_W, 1)
 	}
 	stepTemp := fmt.Sprintf("_plz_for_step_%d", n)
-	g.emitName(pir.VAR_W, stepTemp)
+	g.emitNum(pir.ALLOC, 2)
+	g.emitName(pir.VAR, stepTemp)
 	g.emitName(pir.PUT_W, stepTemp)
 
 	g.emitName(pir.TAG, loopTag)
@@ -705,9 +714,10 @@ func (s Procedure) genPIR(g *GenPIR) error {
 		// Non-reentrant: declare global vars for params and pop them in
 		for i, p := range s.Parameters {
 			if s.ParamTypes[i].Predeclared() == PredeclaredByte {
-				g.emitName(pir.VAR_B, string(p))
+				g.emitName(pir.VAR, string(p))
 			} else {
-				g.emitName(pir.VAR_W, string(p))
+				g.emitNum(pir.ALLOC, 2)
+				g.emitName(pir.VAR, string(p))
 			}
 		}
 		// Pop params from data stack (first param is TOS)
@@ -838,6 +848,24 @@ func (s Yield) genPIR(g *GenPIR) error {
 	return nil
 }
 
+// Break genPIR — jump to end of current loop
+func (s Break) genPIR(g *GenPIR) error {
+	if len(g.loopStack) == 0 {
+		return nil // checker already rejected this
+	}
+	g.emitName(pir.GO, g.loopStack[len(g.loopStack)-1].end)
+	return nil
+}
+
+// Continue genPIR — jump to start of current loop
+func (s Continue) genPIR(g *GenPIR) error {
+	if len(g.loopStack) == 0 {
+		return nil // checker already rejected this
+	}
+	g.emitName(pir.GO, g.loopStack[len(g.loopStack)-1].start)
+	return nil
+}
+
 // Task genPIR
 func (s Task) genPIR(g *GenPIR) error {
 	// Tasks are handled in Program.GenPIR via TaskDefs()
@@ -857,18 +885,19 @@ func (s InterruptStmt) genPIR(g *GenPIR) error {
 // Save genPIR
 func (s Save) genPIR(g *GenPIR) error {
 	g.emitN(pir.SRAM_ON)
-	// Push src address, then dest address, then length
-	if err := g.genPIRExprOrRef(s.Source); err != nil {
-		return err
-	}
+	// SRAM_ON enables SRAM and pushes the platform-specific base address onto
+	// the data stack as the destination. If a custom AT address is given,
+	// discard the default and push the user's address instead.
 	if s.Location != nil {
+		g.emitN(pir.DROP)
 		if err := s.Location.genPIRExpr(g); err != nil {
 			return err
 		}
-	} else {
-		g.emitNum(pir.PUSH_W, 0x8000) // default SRAM base
 	}
-	// Push length
+	// Push src address, then length
+	if err := g.genPIRExprOrRef(s.Source); err != nil {
+		return err
+	}
 	g.emitNum(pir.PUSH_W, uint16(g.refSize(s.Source)))
 	g.emitN(pir.SAVE)
 	g.emitN(pir.SRAM_OFF)
@@ -878,12 +907,13 @@ func (s Save) genPIR(g *GenPIR) error {
 // Load genPIR
 func (s Load) genPIR(g *GenPIR) error {
 	g.emitN(pir.SRAM_ON)
+	// SRAM_ON pushes the base address as src. If AT given, discard and use
+	// custom address instead.
 	if s.Location != nil {
+		g.emitN(pir.DROP)
 		if err := s.Location.genPIRExpr(g); err != nil {
 			return err
 		}
-	} else {
-		g.emitNum(pir.PUSH_W, 0x8000)
 	}
 	if err := g.genPIRExprOrRef(s.Target); err != nil {
 		return err
@@ -914,21 +944,25 @@ func (s At) genPIR(g *GenPIR) error {
 		// Compile-time AT: need constant value
 		if n, ok := g.constEval(s.Address); ok {
 			g.emitNum(pir.AT, uint16(n))
+		} else {
+			return fmt.Errorf("AT address must be a constant expression")
 		}
 	}
 	return nil
 }
 
-// Declare genPIR — emit VAR_B/VAR_W
+// Declare genPIR
 func (s Declare) genPIR(g *GenPIR) error {
 	if s.ConstantValue != nil {
 		return nil // constants are compile-time
 	}
-	if g.isByteRef(&Reference{Identifier: s.Identifier}) {
-		g.emitName(pir.VAR_B, string(s.Identifier))
-	} else {
-		g.emitName(pir.VAR_W, string(s.Identifier))
+	size := s.StorageSize()
+	if size > 2 || size == 0 {
+		g.emitNum(pir.ALLOC, uint16(size))
+	} else if size == 2 {
+		g.emitNum(pir.ALLOC, 2)
 	}
+	g.emitName(pir.VAR, string(s.Identifier))
 	return nil
 }
 
@@ -941,11 +975,13 @@ func (g *GenPIR) genPIRDeclareConst(d *Declare) {
 
 // genPIRDeclare handles a normal DECLARE.
 func (g *GenPIR) genPIRDeclare(d *Declare) {
-	if g.isByteRef(&Reference{Identifier: d.Identifier}) {
-		g.emitName(pir.VAR_B, string(d.Identifier))
-	} else {
-		g.emitName(pir.VAR_W, string(d.Identifier))
+	size := d.StorageSize()
+	if size > 2 || size == 0 {
+		g.emitNum(pir.ALLOC, uint16(size))
+	} else if size == 2 {
+		g.emitNum(pir.ALLOC, 2)
 	}
+	g.emitName(pir.VAR, string(d.Identifier))
 }
 
 // Data genPIR
@@ -1153,13 +1189,13 @@ func (i Infix) genPIRExpr(g *GenPIR) error {
 		} else {
 			g.emitN(pir.SHR_W)
 		}
-	case OperatorAND:
+	case OperatorAND, OperatorLAnd:
 		if isByte {
 			g.emitN(pir.AND_B)
 		} else {
 			g.emitN(pir.AND_W)
 		}
-	case OperatorOR:
+	case OperatorOR, OperatorLOr:
 		if isByte {
 			g.emitN(pir.OR_B)
 		} else {

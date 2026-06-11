@@ -40,6 +40,17 @@ func NewChecker() *Checker {
 	}
 	c.root = NewScope("global", nil)
 	c.current = c.root
+	// Predefined constants.
+	c.root.Symbols["TRUE"] = Declare{
+		Identifier:    "TRUE",
+		Type:          Type{Typ: &PredeclaredType{Kind: PredeclaredWord}},
+		ConstantValue: &Literal{Lit: &NumberLit{Value: 1}},
+	}
+	c.root.Symbols["FALSE"] = Declare{
+		Identifier:    "FALSE",
+		Type:          Type{Typ: &PredeclaredType{Kind: PredeclaredWord}},
+		ConstantValue: &Literal{Lit: &NumberLit{Value: 0}},
+	}
 	return c
 }
 
@@ -281,8 +292,18 @@ func (c *Checker) evalConstInfix(i *Infix) (int, error) {
 		return l % r, nil
 	case OperatorAND:
 		return l & r, nil
+	case OperatorLAnd:
+		if l != 0 && r != 0 {
+			return 1, nil
+		}
+		return 0, nil
 	case OperatorOR:
 		return l | r, nil
+	case OperatorLOr:
+		if l != 0 || r != 0 {
+			return 1, nil
+		}
+		return 0, nil
 	case OperatorXOR:
 		return l ^ r, nil
 	case OperatorShiftLeft:
@@ -765,6 +786,9 @@ func (s Group) Check(c *Checker) error {
 		return nil
 	}
 	c.pushBlockScope("do")
+	if s.While != nil || s.For != nil {
+		c.current.IsLoop = true
+	}
 	defer c.popScope()
 	for _, stmt := range s.Statements {
 		if err := stmt.Check(c); err != nil {
@@ -1082,6 +1106,29 @@ func (s Halt) Check(c *Checker) error {
 		return c.Errorf("", "HALT not allowed inside a task body (use YIELD instead)")
 	}
 	return nil
+}
+
+func (s Break) Check(c *Checker) error {
+	if !c.inLoop() {
+		return c.Errorf("", "BREAK outside loop")
+	}
+	return nil
+}
+
+func (s Continue) Check(c *Checker) error {
+	if !c.inLoop() {
+		return c.Errorf("", "CONTINUE outside loop")
+	}
+	return nil
+}
+
+func (c *Checker) inLoop() bool {
+	for s := c.current; s != nil; s = s.Parent {
+		if s.IsLoop {
+			return true
+		}
+	}
+	return false
 }
 
 // Check validates an expression by dispatching to the appropriate sub-check
