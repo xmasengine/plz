@@ -134,11 +134,7 @@ PROCEDURE play_song(song DATA)
     LET freq = song[idx] | (song[idx+1] << 8)
     LET vol = song[idx+4]
     // End marker: freq=0, duration=0, vol=0 or 0xFF
-    IF freq == 0 THEN
-      IF song[idx+2] == 0 THEN DO
-        IF vol == 0 THEN RETURN
-        IF vol == 0xFF THEN RETURN
-      END
+    IF freq == 0 && song[idx+2] == 0 && (vol == 0 || vol == 0xFF) THEN RETURN
     // Sustain, rest, or normal note
     IF freq == 0xFFFF THEN
       SLEEP song[idx+2]
@@ -168,17 +164,10 @@ _loop:
   LET freq = song[idx] | (song[idx+1] << 8)
   LET vol = song[idx+4]
   // End marker → loop back
-  IF freq == 0 THEN
-    IF song[idx+2] == 0 THEN DO
-      IF vol == 0 THEN DO
-        LET idx = loop_start
-        GOTO _loop
-      END
-      IF vol == 0xFF THEN DO
-        LET idx = loop_start
-        GOTO _loop
-      END
-    END
+  IF freq == 0 && song[idx+2] == 0 && (vol == 0 || vol == 0xFF) THEN DO
+    LET idx = loop_start
+    GOTO _loop
+  END
   // Sustain, rest, or normal note
   IF freq == 0xFFFF THEN
     SLEEP song[idx+2]
