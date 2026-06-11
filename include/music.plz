@@ -63,6 +63,13 @@ CONSTANT A6  = 0x040  // 1760.00 Hz
 CONSTANT AS6 = 0x03C  // 1864.66 Hz
 CONSTANT B6  = 0x039  // 1975.53 Hz
 
+// Sustain and rest
+CONSTANT SUSTAIN = 0xFFFF
+CONSTANT REST = 0x0000
+// end of the music
+CONSTANT FINE = 0xFF
+
+
 // -------------------------------------------------------------------
 // Song data format
 // -------------------------------------------------------------------
@@ -134,7 +141,7 @@ PROCEDURE play_song(song DATA)
     LET freq = song[idx] | (song[idx+1] << 8)
     LET vol = song[idx+4]
     // End marker: freq=0, duration=0, vol=0 or 0xFF
-    IF freq == 0 && song[idx+2] == 0 && (vol == 0 || vol == 0xFF) THEN RETURN
+    IF freq == 0 AND song[idx+2] == 0 AND (vol == 0 OR vol == 0xFF) THEN RETURN
     // Sustain, rest, or normal note
     IF freq == 0xFFFF THEN
       SLEEP song[idx+2]
@@ -164,7 +171,7 @@ _loop:
   LET freq = song[idx] | (song[idx+1] << 8)
   LET vol = song[idx+4]
   // End marker → loop back
-  IF freq == 0 && song[idx+2] == 0 && (vol == 0 || vol == 0xFF) THEN DO
+  IF freq == 0 AND song[idx+2] == 0 AND (vol == 0 OR vol == 0xFF) THEN DO
     LET idx = loop_start
     GOTO _loop
   END
