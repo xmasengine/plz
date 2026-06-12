@@ -1189,18 +1189,34 @@ func (i Infix) genPIRExpr(g *GenPIR) error {
 		} else {
 			g.emitN(pir.SHR_W)
 		}
-	case OperatorAND, OperatorLAnd:
+	case OperatorAND:
 		if isByte {
 			g.emitN(pir.AND_B)
 		} else {
 			g.emitN(pir.AND_W)
 		}
-	case OperatorOR, OperatorLOr:
+	case OperatorLAnd:
+		if isByte {
+			g.emitN(pir.AND_B)
+		} else {
+			g.emitN(pir.AND_W)
+		}
+		g.emitNum(pir.PUSH_B, 0)
+		g.emitCond(pir.IS_W, pir.CondNE)
+	case OperatorOR:
 		if isByte {
 			g.emitN(pir.OR_B)
 		} else {
 			g.emitN(pir.OR_W)
 		}
+	case OperatorLOr:
+		if isByte {
+			g.emitN(pir.OR_B)
+		} else {
+			g.emitN(pir.OR_W)
+		}
+		g.emitNum(pir.PUSH_B, 0)
+		g.emitCond(pir.IS_W, pir.CondNE)
 	case OperatorXOR:
 		if isByte {
 			g.emitN(pir.XOR_B)

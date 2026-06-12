@@ -935,7 +935,11 @@ func (i Infix) Gen(g *Gen) error {
 		g.genInfixShiftLeft(i.Operands[1])
 	case OperatorShiftRight:
 		g.genInfixShiftRight(i.Operands[1])
-	case OperatorAND, OperatorLAnd, OperatorOR, OperatorLOr, OperatorXOR:
+	case OperatorAND, OperatorXOR:
+		g.genInfixBitwiseOp(&i)
+	case OperatorLAnd:
+		g.genInfixBitwiseOp(&i)
+	case OperatorOR, OperatorLOr:
 		g.genInfixBitwiseOp(&i)
 	case OperatorMUL:
 		g.Emitln("\tcall _plz_mul")
@@ -974,18 +978,32 @@ func (g *Gen) genInfixSub() {
 // otherwise it uses 16-bit operations via genInfixBitwise.
 func (g *Gen) genInfixBitwiseOp(i *Infix) {
 	switch i.Operator {
-	case OperatorAND, OperatorLAnd:
+	case OperatorAND:
 		if g.isByteInfix(i) {
 			g.genInfixBitwise8("\tand e")
 		} else {
 			g.genInfixBitwise("\tand e", "\tand d")
 		}
-	case OperatorOR, OperatorLOr:
+	case OperatorLAnd:
+		if g.isByteInfix(i) {
+			g.genInfixBitwise8("\tand e")
+		} else {
+			g.genInfixBitwise("\tand e", "\tand d")
+		}
+		g.genNormalizeBool()
+	case OperatorOR:
 		if g.isByteInfix(i) {
 			g.genInfixBitwise8("\tor e")
 		} else {
 			g.genInfixBitwise("\tor e", "\tor d")
 		}
+	case OperatorLOr:
+		if g.isByteInfix(i) {
+			g.genInfixBitwise8("\tor e")
+		} else {
+			g.genInfixBitwise("\tor e", "\tor d")
+		}
+		g.genNormalizeBool()
 	case OperatorXOR:
 		if g.isByteInfix(i) {
 			g.genInfixBitwise8("\txor e")
@@ -993,6 +1011,17 @@ func (g *Gen) genInfixBitwiseOp(i *Infix) {
 			g.genInfixBitwise("\txor e", "\txor d")
 		}
 	}
+}
+
+// genNormalizeBool emits code to normalize the value in HL to 0 or 1.
+// Non-zero becomes 1; zero stays 0.
+func (g *Gen) genNormalizeBool() {
+	lab := g.nextLabel()
+	g.Emitf("\tld a, h\n")
+	g.Emitf("\tor l\n")
+	g.Emitf("\tjr z, _lbl_%d\n", lab)
+	g.Emitf("\tld hl, 1\n")
+	g.Emitf("_lbl_%d:\n", lab)
 }
 
 // genInfixCmp emits a single comparison operator (EQU/NEQ/GT/LT/GTE/LTE)

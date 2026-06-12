@@ -89,9 +89,24 @@ const (
 	KeywordBreak                                          // BREAK
 	KeywordContinue                                       // CONTINUE
 	KeywordMod                                            // MOD
-	KeywordAnd                                            // AND
-	KeywordOr                                             // OR
-	KeywordNot                                            // NOT
+	KeywordAnd                                            // AND (logical &&)
+	KeywordOr                                             // OR (logical ||)
+	KeywordNot                                            // NOT (unary !)
+	KeywordBitAnd                                         // BITAND (bitwise &)
+	KeywordBitOr                                          // BITOR (bitwise |)
+	KeywordXor                                            // XOR (bitwise ^)
+	KeywordShl                                            // SHL (<<)
+	KeywordShr                                            // SHR (>>)
+	KeywordPlus                                           // PLUS (+)
+	KeywordMinus                                          // MINUS (-)
+	KeywordTimes                                          // TIMES (*)
+	KeywordDiv                                            // DIV (/)
+	KeywordEq                                             // EQ (==)
+	KeywordNe                                             // NE (!=)
+	KeywordGt                                             // GT (>)
+	KeywordLt                                             // LT (<)
+	KeywordGe                                             // GE (>=)
+	KeywordLe                                             // LE (<=)
 )
 
 // Keywords maps keyword strings to their corresponding TokenKind values.
@@ -151,6 +166,21 @@ var Keywords = map[string]TokenKind{
 	"AND":       KeywordAnd,
 	"OR":        KeywordOr,
 	"NOT":       KeywordNot,
+	"BITAND":    KeywordBitAnd,
+	"BITOR":     KeywordBitOr,
+	"XOR":       KeywordXor,
+	"SHL":       KeywordShl,
+	"SHR":       KeywordShr,
+	"PLUS":      KeywordPlus,
+	"MINUS":     KeywordMinus,
+	"TIMES":     KeywordTimes,
+	"DIV":       KeywordDiv,
+	"EQ":        KeywordEq,
+	"NE":        KeywordNe,
+	"GT":        KeywordGt,
+	"LT":        KeywordLt,
+	"GE":        KeywordGe,
+	"LE":        KeywordLe,
 }
 
 // String returns the human-readable name for a TokenKind.

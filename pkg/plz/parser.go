@@ -447,6 +447,14 @@ func (s *Statement) Parse(parser *Parser) error {
 		cmd := Pragma{}
 		err = cmd.Parse(parser)
 		s.Command = cmd
+	case KeywordBreak:
+		cmd := Break{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
+	case KeywordContinue:
+		cmd := Continue{}
+		err = cmd.Parse(parser)
+		s.Command = cmd
 	default:
 		return tok.Errorf("Statement: unexpected token %v", tok)
 	}
@@ -1115,8 +1123,14 @@ func (p *Parser) PeekOperator() Operator {
 	case '%':
 		return OperatorMOD
 	case '&':
+		if p.PeekAt(1).TokenKind == '&' {
+			return OperatorLAnd
+		}
 		return OperatorAND
 	case '|':
+		if p.PeekAt(1).TokenKind == '|' {
+			return OperatorLOr
+		}
 		return OperatorOR
 	case '^':
 		return OperatorXOR
@@ -1143,12 +1157,42 @@ func (p *Parser) PeekOperator() Operator {
 			return OperatorShiftRight
 		}
 		return OperatorGT
+	case KeywordAnd:
+		return OperatorLAnd
+	case KeywordOr:
+		return OperatorLOr
+	case KeywordBitAnd:
+		return OperatorAND
+	case KeywordBitOr:
+		return OperatorOR
 	case KeywordMod:
 		return OperatorMOD
-	case KeywordAnd:
-		return OperatorAND
-	case KeywordOr:
-		return OperatorOR
+	case KeywordXor:
+		return OperatorXOR
+	case KeywordShl:
+		return OperatorShiftLeft
+	case KeywordShr:
+		return OperatorShiftRight
+	case KeywordPlus:
+		return OperatorADD
+	case KeywordMinus:
+		return OperatorSUB
+	case KeywordTimes:
+		return OperatorMUL
+	case KeywordDiv:
+		return OperatorDIV
+	case KeywordEq:
+		return OperatorEQU
+	case KeywordNe:
+		return OperatorNEQ
+	case KeywordGt:
+		return OperatorGT
+	case KeywordLt:
+		return OperatorLT
+	case KeywordGe:
+		return OperatorGTE
+	case KeywordLe:
+		return OperatorLTE
 	}
 	return OperatorNone
 }
@@ -1158,12 +1202,29 @@ func (p *Parser) PeekOperator() Operator {
 // If no operator is present, it returns OperatorNone and consumes no tokens.
 func (p *Parser) ReadOperator() (op Operator) {
 	op = p.PeekOperator()
-	switch op {
-	case OperatorEQU, OperatorNEQ, OperatorGTE, OperatorLTE, OperatorShiftLeft, OperatorShiftRight:
-		p.Next()
-		p.Next()
-	case OperatorNone:
+	if op == OperatorNone {
 		return OperatorNone
+	}
+	// Multi-character operators consume two tokens when they come from
+	// symbol pairs (e.g. &&, ==, <<) but only one token when from keywords.
+	tok := p.Peek()
+	switch {
+	case tok.TokenKind == '&' && op == OperatorLAnd:
+		p.Next(); p.Next()
+	case tok.TokenKind == '|' && op == OperatorLOr:
+		p.Next(); p.Next()
+	case tok.TokenKind == '=' && op == OperatorEQU:
+		p.Next(); p.Next()
+	case tok.TokenKind == '!' && op == OperatorNEQ:
+		p.Next(); p.Next()
+	case tok.TokenKind == '<':
+		if p.PeekAt(1).TokenKind == '=' { p.Next(); p.Next() } else
+		if p.PeekAt(1).TokenKind == '<' { p.Next(); p.Next() } else
+		{ p.Next() }
+	case tok.TokenKind == '>':
+		if p.PeekAt(1).TokenKind == '=' { p.Next(); p.Next() } else
+		if p.PeekAt(1).TokenKind == '>' { p.Next(); p.Next() } else
+		{ p.Next() }
 	default:
 		p.Next()
 	}
@@ -1738,6 +1799,18 @@ func (s *Sleep) Parse(parser *Parser) error {
 // Parse parses a YIELD statement. It consumes the YIELD keyword and returns.
 func (y *Yield) Parse(parser *Parser) error {
 	_, err := parser.Accept(KeywordYield)
+	return err
+}
+
+// Parse parses a BREAK statement.
+func (b *Break) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordBreak)
+	return err
+}
+
+// Parse parses a CONTINUE statement.
+func (c *Continue) Parse(parser *Parser) error {
+	_, err := parser.Accept(KeywordContinue)
 	return err
 }
 
