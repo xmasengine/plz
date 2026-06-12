@@ -2,7 +2,8 @@
 
 INCLUDE "libplz.plz"
 
-INTERRUPT int_vsync // install the interrupt handler.
+// install the interrupt handler.
+INTERRUPT int_vsync
 
 
 TEMPLATE PRINT_XY `
@@ -172,7 +173,7 @@ start:
     // CALL load_tiles(128, nun_tiles, NUN_TILE_COUNT)
 //	BANK 0
 	DECLARE nun_pattern BYTE
-/*	CALL set_cursor(1,15)
+	CALL set_cursor(1,15)
 	CALL print_char('A')
 	CALL print_char('B')
 	CALL print_char('C')
@@ -199,7 +200,7 @@ start:
 	CALL print_char('X')
 	CALL print_char('Y')
 	CALL print_char('Z')
-*/
+
 	CALL set_cursor(1,16)
 	CALL print_abc()
 

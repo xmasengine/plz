@@ -74,9 +74,8 @@ END
 PROCEDURE copy_vram(dest WORD, source DATA, count WORD)
   DECLARE ii WORD
   CALL set_write_addr(dest)
-  WHILE ii < count DO
+  FOR ii = 0 TO count - 1 DO
     OUTPUT 0xBE source[ii]
-    LET ii = ii + 1
   END
 END
 
