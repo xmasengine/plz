@@ -21,6 +21,8 @@ type Gen6502Config struct {
 	NES bool
 	// TaskLimit limits the number of cooperative tasks (NES zero-page constraint).
 	TaskLimit int
+	// OutputBase is the base address for OUT_B/OUT_W writes (0 = direct port address).
+	OutputBase uint16
 }
 
 // Default6502Config returns a configuration suitable for testing.
@@ -31,6 +33,7 @@ func Default6502Config() Gen6502Config {
 		StackBase: 0x3000,
 		NES:       false,
 		TaskLimit: 16,
+		OutputBase: 0x5000,
 	}
 }
 
@@ -44,6 +47,7 @@ func NES6502Config() Gen6502Config {
 		StackBase: 0x0200,
 		NES:       true,
 		TaskLimit: 8,
+		OutputBase: 0x5000,
 	}
 }
 
@@ -214,6 +218,12 @@ func (z *Gen6502) emitStart() {
 	z.emitf("\tlda #>%d", z.cfg.StackBase)
 	z.emitf("\tsta $01")
 
+	// Init output buffer pointer at $0C-$0D
+	z.emitf("\tlda #<%d", z.cfg.OutputBase)
+	z.emitf("\tsta $0c")
+	z.emitf("\tlda #>%d", z.cfg.OutputBase)
+	z.emitf("\tsta $0d")
+
 	if z.needSched {
 		// JSR to task init (emitted after all code so JOB labels exist)
 		z.emit("\tjsr _plz_init_tasks")
@@ -225,8 +235,10 @@ func (z *Gen6502) emitStart() {
 
 func (z *Gen6502) emitFooter() {
 	z.emit("_6502_all_done:")
+	z.emit("\tbrk")
+	z.emit("_6502_halt:")
 	z.emit("\tsei")
-	z.emit("\tbeq _6502_all_done")
+	z.emit("\tjmp _6502_halt")
 	z.emit("")
 }
 
@@ -327,44 +339,49 @@ func (z *Gen6502) emitDivModHelpers() {
 	z.emit("_plz_div8:")
 	z.emit("_plz_mod8:")
 	z.emit("\tsta $04          ; save dividend")
-	z.emit("\tlda #0           ; remainder = 0")
+	z.emit("\tlda #0")
+	z.emit("\tsta $05          ; quotient = 0")
 	z.emit("\tldx #8")
 	_dm8_loop := z.nextLabel()
 	_dm8_skip := z.nextLabel()
 	z.emitf("_dm8_%d:", _dm8_loop)
-	z.emit("\tasl $04          ; shift dividend left")
-	z.emit("\trol              ; rotate into remainder")
-	z.emit("\tcmp $02          ; compare with divisor")
+	z.emit("\tasl $04          ; shift dividend left, MSB -> carry")
+	z.emit("\trol              ; rotate carry into remainder (A)")
+	z.emit("\tcmp $02          ; compare remainder with divisor")
 	z.emitf("\tbcc _dm8_%d", _dm8_skip)
-	z.emit("\tsbc $02          ; subtract divisor")
-	z.emit("\tsec              ; set carry for quotient")
+	z.emit("\tsbc $02          ; subtract divisor from remainder")
+	z.emit("\tsec              ; set quotient bit")
 	z.emitf("_dm8_%d:", _dm8_skip)
-	z.emit("\trol $04          ; shift carry into quotient")
+	z.emit("\trol $05          ; shift quotient bit into $05")
 	z.emit("\tdex")
 	z.emitf("\tbne _dm8_%d", _dm8_loop)
-	z.emit("\tldx $04          ; quotient in X")
-	z.emit("\tpha              ; save remainder")
-	z.emit("\ttxa              ; A = quotient")
-	z.emit("\tpla              ; restore remainder")
-	z.emit("\ttax              ; X = remainder")
-	z.emit("\trts")
+	z.emit("\tldx $05          ; X = quotient")
+	z.emit("\trts              ; A = remainder, X = quotient")
 	z.emit("")
 
 	// 16-bit divmod: dividend in A,X, divisor in $02,$03
-	// Returns: A = quotient low, X = quotient high
-	// Mod returns remainder (stored in a fixed location)
+	// Uses $04-$08 as scratch
 	z.emit("; 16-bit divmod: A,X = (A,X) / ($02,$03)")
 	z.emit("; Uses $04-$08 as scratch")
-	z.emit("_plz_div16:")
 	z.emit("_plz_mod16:")
+	z.emit("\tjsr _plz_divmod16")
+	z.emit("\tlda $06          ; remainder low")
+	z.emit("\tldx $07          ; remainder high")
+	z.emit("\trts")
+	z.emit("_plz_div16:")
+	z.emit("\tjsr _plz_divmod16")
+	z.emit("\tlda $04          ; quotient low")
+	z.emit("\tldx $05          ; quotient high")
+	z.emit("\trts")
+	_dm16_do := z.nextLabel()
+	_dm16_loop := z.nextLabel()
+	_dm16_skip := z.nextLabel()
+	z.emit("_plz_divmod16:")
 	z.emit("\tsta $04          ; dividend low")
 	z.emit("\tstx $05          ; dividend high")
 	z.emit("\tlda #0")
 	z.emit("\tsta $06          ; remainder low")
 	z.emit("\tsta $07          ; remainder high")
-	_dm16_do := z.nextLabel()
-	_dm16_loop := z.nextLabel()
-	_dm16_skip := z.nextLabel()
 	z.emit("\tlda $02")
 	z.emit("\tora $03")
 	z.emitf("\tbne _dm16_%d", _dm16_do)
@@ -395,8 +412,6 @@ func (z *Gen6502) emitDivModHelpers() {
 	z.emitf("_dm16_next_%d:", _dm16_skip)
 	z.emit("\tdex")
 	z.emitf("\tbne _dm16_%d", _dm16_loop)
-	z.emit("\tlda $04          ; quotient low")
-	z.emit("\tldx $05          ; quotient high")
 	z.emit("\trts")
 	z.emit("")
 }
@@ -637,7 +652,8 @@ func (z *Gen6502) emitInstr(instr Instr) {
 
 	case PUSH_B:
 		z.emitf("\tlda #%d", o.Num)
-		z.emitSpill()
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	case PUSH_W:
 		z.emitf("\tlda #%d", o.Num&0xFF)
@@ -649,7 +665,8 @@ func (z *Gen6502) emitInstr(instr Instr) {
 
 	case GET_B:
 		z.emitf("\tlda %s", z.varName(o.Name))
-		z.emitSpill()
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	case GET_W:
 		z.emitf("\tlda %s", z.varName(o.Name))
@@ -657,7 +674,7 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitSpillW()
 
 	case PUT_B:
-		z.emitFill()
+		z.emitFillW() // A=low, X=high (only low byte stored)
 		z.emitf("\tsta %s", z.varName(o.Name))
 
 	case PUT_W:
@@ -681,7 +698,8 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emit("\tsta $04  ; low byte of address")
 		z.emit("\tldy #0")
 		z.emit("\tlda ($04),y")
-		z.emitSpill()
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	case READ_W:
 		z.emitFillW() // A=low addr, X=high addr
@@ -697,7 +715,7 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitSpillW()
 
 	case WRITE_B:
-		z.emitFill() // A = value
+		z.emitFillW() // A=low(value), X=high(value)
 		z.emit("\tpha")
 		z.emitFillW() // A=low addr, X=high addr
 		z.emit("\tstx $05")
@@ -723,12 +741,13 @@ func (z *Gen6502) emitInstr(instr Instr) {
 
 	// ── Math & Logic ──
 	case ADD_B:
-		z.emitFill()
+		z.emitFillW() // A=low(TOS), X=high(TOS)
 		z.emit("\tsta $02")
-		z.emitFill()
+		z.emitFillW() // A=low(NEXT), X=high(NEXT)
 		z.emit("\tclc")
 		z.emit("\tadc $02")
-		z.emitSpill()
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	case ADD_W:
 		z.emitFillW()
@@ -747,12 +766,13 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitSpillW()
 
 	case SUB_B:
-		z.emitFill()
+		z.emitFillW() // A=low(TOS), X=high(TOS)
 		z.emit("\tsta $02")
-		z.emitFill()
+		z.emitFillW() // A=low(NEXT), X=high(NEXT)
 		z.emit("\tsec")
 		z.emit("\tsbc $02")
-		z.emitSpill()
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	case SUB_W:
 		z.emitFillW()
@@ -770,9 +790,9 @@ func (z *Gen6502) emitInstr(instr Instr) {
 
 	// ── Multiply / Divide / Modulo ──
 	case MUL_B:
-		z.emitFill()              // A = right
+		z.emitFillW()             // A=right low, X=right high
 		z.emit("\tsta $02")       // save right (multiplier)
-		z.emitFill()              // A = left
+		z.emitFillW()             // A=left low, X=left high
 		z.emit("\tjsr _plz_mul8") // A = result
 		z.emit("\tldx #0")
 		z.emitSpillW()
@@ -786,10 +806,11 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitSpillW()            // A=result low, X=result high
 
 	case DIV_B:
-		z.emitFill()              // A = right (divisor)
+		z.emitFillW()             // A=right low, X=right high
 		z.emit("\tsta $02")       // save divisor
-		z.emitFill()              // A = left (dividend)
-		z.emit("\tjsr _plz_div8") // A = quotient, X = remainder
+		z.emitFillW()             // A=left low, X=left high
+		z.emit("\tjsr _plz_div8") // A = remainder, X = quotient
+		z.emit("\ttxa")           // A = quotient
 		z.emit("\tldx #0")
 		z.emitSpillW()
 
@@ -802,9 +823,9 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitSpillW()
 
 	case MOD_B:
-		z.emitFill()              // A = right (divisor)
+		z.emitFillW()             // A=right low, X=right high
 		z.emit("\tsta $02")       // save divisor
-		z.emitFill()              // A = left (dividend)
+		z.emitFillW()             // A=left low, X=left high
 		z.emit("\tjsr _plz_mod8") // A = remainder
 		z.emit("\tldx #0")
 		z.emitSpillW()
@@ -818,11 +839,12 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitSpillW()
 
 	case AND_B:
-		z.emitFill()
+		z.emitFillW() // A=low(TOS), X=high(TOS)
 		z.emit("\tsta $02")
-		z.emitFill()
+		z.emitFillW() // A=low(NEXT), X=high(NEXT)
 		z.emit("\tand $02")
-		z.emitSpill()
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	case AND_W:
 		z.emitFillW()
@@ -838,11 +860,12 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitSpillW()
 
 	case OR_B:
-		z.emitFill()
+		z.emitFillW() // A=low(TOS), X=high(TOS)
 		z.emit("\tsta $02")
-		z.emitFill()
+		z.emitFillW() // A=low(NEXT), X=high(NEXT)
 		z.emit("\tora $02")
-		z.emitSpill()
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	case OR_W:
 		z.emitFillW()
@@ -858,11 +881,12 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitSpillW()
 
 	case XOR_B:
-		z.emitFill()
+		z.emitFillW() // A=low(TOS), X=high(TOS)
 		z.emit("\tsta $02")
-		z.emitFill()
+		z.emitFillW() // A=low(NEXT), X=high(NEXT)
 		z.emit("\teor $02")
-		z.emitSpill()
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	case XOR_W:
 		z.emitFillW()
@@ -878,12 +902,11 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitSpillW()
 
 	case NOT_B:
-		z.emitFill()
+		z.emitFillW() // A=low, X=high
 		z.emit("\teor #$ff")
-		z.emit("\tclc")
-		z.emit("\tadc #1")
 		z.emit("\tand #1")
-		z.emitSpill()
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	case NOT_W:
 		nz := z.nextLabel()
@@ -903,11 +926,12 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitSpillW()
 
 	case NEG_B:
-		z.emitFill()
+		z.emitFillW() // A=low, X=high
 		z.emit("\teor #$ff")
 		z.emit("\tclc")
 		z.emit("\tadc #1")
-		z.emitSpill()
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	case NEG_W:
 		z.emitFillW()
@@ -928,9 +952,9 @@ func (z *Gen6502) emitInstr(instr Instr) {
 	case SHL_B:
 		_shl_b_loop := z.nextLabel()
 		_shl_b_done := z.nextLabel()
-		z.emitFill()              // A = shift count
-		z.emit("\tsta $02")       // save shift count
-		z.emitFill()              // A = value
+		z.emitFillW()             // A=shift count low, X=shift count high
+		z.emit("\tsta $02")       // save shift count (low byte)
+		z.emitFillW()             // A=value low, X=value high
 		z.emit("\tsta $04")       // save value in temp
 		z.emit("\tlda $02")       // A = shift count
 		z.emitf("\tbeq _shl_b_%d", _shl_b_done)
@@ -947,8 +971,8 @@ func (z *Gen6502) emitInstr(instr Instr) {
 	case SHL_W:
 		_shl_w_loop := z.nextLabel()
 		_shl_w_done := z.nextLabel()
-		z.emitFill()              // A = shift count
-		z.emit("\tsta $02")       // save shift count
+		z.emitFillW()             // A=shift count low, X=shift count high
+		z.emit("\tsta $02")       // save shift count (low byte)
 		z.emitFillW()             // A=value low, X=value high
 		z.emit("\tsta $04")       // value low in $04
 		z.emit("\tstx $05")       // value high in $05
@@ -968,9 +992,9 @@ func (z *Gen6502) emitInstr(instr Instr) {
 	case SHR_B:
 		_shr_b_loop := z.nextLabel()
 		_shr_b_done := z.nextLabel()
-		z.emitFill()              // A = shift count
-		z.emit("\tsta $02")       // save shift count
-		z.emitFill()              // A = value
+		z.emitFillW()             // A=shift count low, X=shift count high
+		z.emit("\tsta $02")       // save shift count (low byte)
+		z.emitFillW()             // A=value low, X=value high
 		z.emit("\tsta $04")       // save value in temp
 		z.emit("\tlda $02")       // A = shift count
 		z.emitf("\tbeq _shr_b_%d", _shr_b_done)
@@ -987,8 +1011,8 @@ func (z *Gen6502) emitInstr(instr Instr) {
 	case SHR_W:
 		_shr_w_loop := z.nextLabel()
 		_shr_w_done := z.nextLabel()
-		z.emitFill()              // A = shift count
-		z.emit("\tsta $02")       // save shift count
+		z.emitFillW()             // A=shift count low, X=shift count high
+		z.emit("\tsta $02")       // save shift count (low byte)
 		z.emitFillW()             // A=value low, X=value high
 		z.emit("\tsta $04")       // value low
 		z.emit("\tstx $05")       // value high
@@ -1047,9 +1071,9 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		_is_b_ge := z.nextLabel()
 		_is_b_eq := z.nextLabel()
 		_is_b_done := z.nextLabel()
-		z.emitFill()
-		z.emit("\tsta $02")
-		z.emitFill()
+		z.emitFillW()           // A=low(TOS), X=high(TOS)
+		z.emit("\tsta $02")     // save TOS low byte
+		z.emitFillW()           // A=low(NEXT), X=high(NEXT)
 		z.emit("\tcmp $02")
 		z.emitf("\tbeq _is_b_%d", _is_b_eq)
 		z.emitf("\tbcs _is_b_%d", _is_b_ge)
@@ -1068,7 +1092,7 @@ func (z *Gen6502) emitInstr(instr Instr) {
 			z.emit("\tlda #0")
 			z.emitf("\tjmp _is_b_%d", _is_b_done)
 			z.emitf("_is_b_%d:", _is_b_ge)
-			z.emit("\tlda #0")
+			z.emit("\tlda #1")
 			z.emitf("\tjmp _is_b_%d", _is_b_done)
 			z.emitf("_is_b_%d:", _is_b_eq)
 			z.emit("\tlda #0")
@@ -1110,7 +1134,8 @@ func (z *Gen6502) emitInstr(instr Instr) {
 			z.emit("\tlda #0")
 		}
 		z.emitf("_is_b_%d:", _is_b_done)
-		z.emitSpill()
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	case IS_W:
 		_is_w_lt := z.nextLabel()
@@ -1199,9 +1224,9 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitf("\tjmp %s", o.Name)
 
 	case GO_IF:
-		z.emitFillW()
-		z.emit("\tora $02")
-		z.emit("\tora $03")
+		z.emitFillW()            // A=low, X=high
+		z.emit("\tstx $02")      // $02 = high byte
+		z.emit("\tora $02")      // A |= high byte
 		z.emitf("\tbne %s", o.Name)
 
 	// ── Procedures ──
@@ -1273,25 +1298,45 @@ func (z *Gen6502) emitInstr(instr Instr) {
 
 	// ── Port I/O ──
 	case IN_B:
-		z.emitf("\tlda $%04x", uint16(o.Num))
-		z.emitSpill()
+		z.emitf("\tlda $%04x", z.cfg.OutputBase+uint16(o.Num))
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	case IN_W:
-		z.emitf("\tlda $%04x", uint16(o.Num))
+		z.emitf("\tlda $%04x", z.cfg.OutputBase+uint16(o.Num))
 		z.emit("\tpha")
-		z.emitf("\tlda $%04x", uint16(o.Num+1))
+		z.emitf("\tlda $%04x", z.cfg.OutputBase+uint16(o.Num+1))
 		z.emit("\ttax")
 		z.emit("\tpla")
 		z.emitSpillW()
 
 	case OUT_B:
-		z.emitFill()
-		z.emitf("\tsta $%04x", uint16(o.Num))
+		_out_b_skip := z.nextLabel()
+		z.emitFillW()            // A=low, X=high
+		z.emit("\tldy #0")
+		z.emit("\tsta ($0c),y")  // write to *out_ptr
+		z.emit("\tinc $0c")       // out_ptr++
+		z.emitf("\tbne _out_b_%d", _out_b_skip)
+		z.emit("\tinc $0d")
+		z.emitf("_out_b_%d:", _out_b_skip)
 
 	case OUT_W:
-		z.emitFillW()
-		z.emitf("\tsta $%04x", uint16(o.Num))
-		z.emitf("\tstx $%04x", uint16(o.Num+1))
+		_out_w_skip1 := z.nextLabel()
+		_out_w_skip2 := z.nextLabel()
+		z.emitFillW()            // A=low, X=high
+		z.emit("\tldy #0")
+		z.emit("\tsta ($0c),y")  // write low byte
+		z.emit("\tinc $0c")       // out_ptr++
+		z.emitf("\tbne _out_w_%d", _out_w_skip1)
+		z.emit("\tinc $0d")
+		z.emitf("_out_w_%d:", _out_w_skip1)
+		z.emit("\ttxa")
+		z.emit("\tldy #0")
+		z.emit("\tsta ($0c),y")  // write high byte
+		z.emit("\tinc $0c")
+		z.emitf("\tbne _out_w_%d", _out_w_skip2)
+		z.emit("\tinc $0d")
+		z.emitf("_out_w_%d:", _out_w_skip2)
 
 	// ── Interrupts ──
 	case INT:
@@ -1299,7 +1344,7 @@ func (z *Gen6502) emitInstr(instr Instr) {
 	case NMI:
 		z.emitf("\t; NMI %s not yet implemented", o.Name)
 	case HLT:
-		z.emit("\tbeq _6502_all_done")
+		z.emit("\tjmp _6502_all_done")
 	case DII:
 		z.emit("\tsei")
 	case ENI:
@@ -1457,30 +1502,47 @@ func Assemble6502(cfg Gen6502Config, code string) ([]byte, error) {
 	}
 	bin := assembly.Code
 	if cfg.NES {
-		// iNES header: 16 bytes
+		// PRG ROM occupies $8000-$FFFF in CPU address space.
+		// Code starts at cfg.Origin (typically $C000).
+		// We need to pre-pad from $8000 to origin, then post-pad to $FFFF,
+		// then add vectors at $FFFA-$FFFF.
+		const prgStart = 0x8000
+		prgSize := 0x10000 - prgStart // 32KB = 2×16KB banks
+		offset := int(cfg.Origin - prgStart)
+
+		if offset < 0 {
+			return nil, fmt.Errorf("NES origin must be >= $8000, got $%04X", cfg.Origin)
+		}
+		if offset+len(bin) > prgSize-6 {
+			return nil, fmt.Errorf("code+vectors exceed PRG-ROM at $%04X: %d bytes", cfg.Origin, len(bin))
+		}
+
+		prgData := make([]byte, prgSize)
+		copy(prgData[offset:], bin) // code at its CPU address
+
+		resetVec := cfg.Origin
+		prgData[prgSize-6] = 0x00 // NMI low
+		prgData[prgSize-5] = 0x00 // NMI high
+		prgData[prgSize-4] = byte(resetVec)
+		prgData[prgSize-3] = byte(resetVec >> 8)
+		prgData[prgSize-2] = 0x00 // IRQ low
+		prgData[prgSize-1] = 0x00 // IRQ high
+
+		prgBanks := prgSize / 0x4000 // 2 banks for 32KB
+		// iNES header byte 6: flags6[3:0] = mapper low nibble, [7:4] = flags
+		// flags: bit0=1 for vertical mirroring (MMC5 uses vertical by default)
+		flags6 := byte(0x01 | ((5 & 0x0F) << 4)) // vertical mirroring | MMC5 low nibble
+		flags7 := byte((5 >> 4) & 0x0F)           // MMC5 high nibble
 		header := []byte{
 			0x4e, 0x45, 0x53, 0x1a, // "NES" + MS-DOS EOF
-			0x02,       // 2× 16KB PRG banks
-			0x00,       // 0× 8KB CHR banks (CHR-RAM)
-			0x00,       // flags: horizontal mirroring, NROM
-			0x00,       // no mapper
+			byte(prgBanks), // PRG banks
+			0x00,           // CHR-RAM (0 banks)
+			flags6,
+			flags7,
 			0x00, 0x00, 0x00, 0x00,
 			0x00, 0x00, 0x00, 0x00,
 		}
-		// Pad PRG to fill CPU address space ($C000-$FFFF = 16KB)
-		prgEnd := int(cfg.Origin) + len(bin)
-		padLen := 0x10000 - prgEnd
-		if padLen < 0 {
-			return nil, fmt.Errorf("code exceeds PRG-ROM: %d bytes at $%04X", len(bin), cfg.Origin)
-		}
-		padded := make([]byte, padLen)
-		bin = append(bin, padded...)
-		// Vectors at $FFFA-$FFFF (offset from PRG origin)
-		resetVec := cfg.Origin + uint16(len(bin)-padLen-6)
-		bin = append(bin, 0x00, 0x00) // NMI (dummy)
-		bin = append(bin, byte(resetVec), byte(resetVec>>8)) // RESET
-		bin = append(bin, 0x00, 0x00) // IRQ (dummy)
-		bin = append(header, bin...)
+		bin = append(header, prgData...)
 	}
 	return bin, nil
 }
