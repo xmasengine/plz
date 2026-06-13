@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/beevik/go6502/cpu"
-	asm "github.com/beevik/go6502/asm"
+	"github.com/xmasengine/plz/pkg/cpu6502"
+	asm "github.com/xmasengine/plz/pkg/asm6502"
 	"github.com/xmasengine/plz/pkg/pir"
 )
 

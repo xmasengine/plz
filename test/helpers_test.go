@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beevik/go6502/cpu"
+	"github.com/xmasengine/plz/pkg/cpu6502"
 	"github.com/user-none/go-chip-sn76489"
 	"github.com/xmasengine/plz/pkg/pir"
 	"github.com/xmasengine/plz/pkg/plz"

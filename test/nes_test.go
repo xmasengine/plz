@@ -3,7 +3,7 @@ package plz_test
 import (
 	"testing"
 
-	"github.com/beevik/go6502/cpu"
+	"github.com/xmasengine/plz/pkg/cpu6502"
 	"github.com/xmasengine/plz/pkg/pir"
 )
 

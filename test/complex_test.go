@@ -1,13 +1,9 @@
 package plz_test
 
-import (
-	"testing"
-)
+import "testing"
 
-// TestIntegrationBubbleSort exercises nested FOR loops and array writes with
-// computed indices (inline swap since parameters are by-value).
 func TestIntegrationBubbleSort(t *testing.T) {
-	io := compileAndRun(t, `
+	testArchs(t, `
 DECLARE arr ARRAY [6] BYTE
 DECLARE ii WORD
 DECLARE jj WORD
@@ -36,22 +32,21 @@ OUTPUT 0 arr[2]
 OUTPUT 0 arr[3]
 OUTPUT 0 arr[4]
 OUTPUT 0 arr[5]
-HALT`)
-	if len(io.OutBytes[0]) != 6 {
-		t.Fatalf("expected 6 outputs, got %d: %v", len(io.OutBytes[0]), io.OutBytes[0])
-	}
-	expected := []byte{1, 2, 3, 5, 8, 9}
-	for i, v := range expected {
-		if io.OutBytes[0][i] != v {
-			t.Errorf("arr[%d] = %d, expected %d", i, io.OutBytes[0][i], v)
+HALT`, func(t *testing.T, res *RunResult) {
+		if len(res.OutBytes[0]) != 6 {
+			t.Fatalf("expected 6 outputs, got %d: %v", len(res.OutBytes[0]), res.OutBytes[0])
 		}
-	}
+		expected := []byte{1, 2, 3, 5, 8, 9}
+		for i, v := range expected {
+			if res.OutBytes[0][i] != v {
+				t.Errorf("arr[%d] = %d, expected %d", i, res.OutBytes[0][i], v)
+			}
+		}
+	})
 }
 
-// TestIntegrationFactorial computes 5! using an iterative factorial procedure
-// with a FOR loop, demonstrating multi-call arithmetic.
 func TestIntegrationFactorial(t *testing.T) {
-	io := compileAndRun(t, `
+	testArchs(t, `
 DECLARE result WORD
 
 PROCEDURE fact(n WORD) WORD
@@ -66,19 +61,18 @@ END
 
 LET result = fact(5)
 OUTPUT 0 result
-HALT`)
-	if len(io.OutBytes[0]) < 1 {
-		t.Fatal("expected output")
-	}
-	if io.OutBytes[0][0] != 120 { // 5! = 120
-		t.Errorf("expected 120, got %d", io.OutBytes[0][0])
-	}
+HALT`, func(t *testing.T, res *RunResult) {
+		if len(res.OutBytes[0]) < 1 {
+			t.Fatal("expected output")
+		}
+		if res.OutBytes[0][0] != 120 {
+			t.Errorf("expected 120, got %d", res.OutBytes[0][0])
+		}
+	})
 }
 
-// TestIntegrationArraySum computes the sum of array elements using a procedure
-// with global array access.
 func TestIntegrationArraySum(t *testing.T) {
-	io := compileAndRun(t, `
+	testArchs(t, `
 DECLARE arr ARRAY [5] WORD
 DECLARE total WORD
 DECLARE len WORD
@@ -102,20 +96,18 @@ LET len = 4
 
 LET total = sum()
 OUTPUT 0 total
-HALT`)
-	if len(io.OutBytes[0]) < 1 {
-		t.Fatal("expected output")
-	}
-	// 10+20+30+40+50 = 150
-	if io.OutBytes[0][0] != 150 {
-		t.Errorf("expected 150, got %d", io.OutBytes[0][0])
-	}
+HALT`, func(t *testing.T, res *RunResult) {
+		if len(res.OutBytes[0]) < 1 {
+			t.Fatal("expected output")
+		}
+		if res.OutBytes[0][0] != 150 {
+			t.Errorf("expected 150, got %d", res.OutBytes[0][0])
+		}
+	})
 }
 
-// TestIntegrationCallChain tests a chain of procedure calls:
-// main → outer → inner, with parameters and return values.
 func TestIntegrationCallChain(t *testing.T) {
-	io := compileAndRun(t, `
+	testArchs(t, `
 DECLARE result WORD
 
 PROCEDURE add(x WORD, y WORD) WORD
@@ -136,20 +128,18 @@ END
 
 LET result = compute(10)
 OUTPUT 0 result
-HALT`)
-	if len(io.OutBytes[0]) < 1 {
-		t.Fatal("expected output")
-	}
-	// compute(10): a=double(10)=20, b=add(20,5)=25
-	if io.OutBytes[0][0] != 25 {
-		t.Errorf("expected 25, got %d", io.OutBytes[0][0])
-	}
+HALT`, func(t *testing.T, res *RunResult) {
+		if len(res.OutBytes[0]) < 1 {
+			t.Fatal("expected output")
+		}
+		if res.OutBytes[0][0] != 25 {
+			t.Errorf("expected 25, got %d", res.OutBytes[0][0])
+		}
+	})
 }
 
-// TestIntegrationNestedForArray builds a multiplication table in an array
-// using nested FOR loops with computed indices.
 func TestIntegrationNestedForArray(t *testing.T) {
-	io := compileAndRun(t, `
+	testArchs(t, `
 DECLARE table ARRAY [16] BYTE
 DECLARE ii WORD
 DECLARE jj WORD
@@ -160,38 +150,36 @@ FOR ii = 0 TO 3 DO
   END
 END
 
-OUTPUT 0 table[0]  // 1*1 = 1
-OUTPUT 0 table[1]  // 1*2 = 2
-OUTPUT 0 table[4]  // 2*1 = 2
-OUTPUT 0 table[5]  // 2*2 = 4
-OUTPUT 0 table[15] // 4*4 = 16
-HALT`)
-	if len(io.OutBytes[0]) != 5 {
-		t.Fatalf("expected 5 outputs, got %d: %v", len(io.OutBytes[0]), io.OutBytes[0])
-	}
-	// Outputs are: table[0], table[1], table[4], table[5], table[15]
-	checks := []struct {
-		name string
-		got  byte
-		want byte
-	}{
-		{"table[0]", io.OutBytes[0][0], 1},   // ii=0,jj=0: (1)*(1) = 1
-		{"table[1]", io.OutBytes[0][1], 2},   // ii=0,jj=1: (1)*(2) = 2
-		{"table[4]", io.OutBytes[0][2], 2},   // ii=1,jj=0: (2)*(1) = 2
-		{"table[5]", io.OutBytes[0][3], 4},   // ii=1,jj=1: (2)*(2) = 4
-		{"table[15]", io.OutBytes[0][4], 16}, // ii=3,jj=3: (4)*(4) = 16
-	}
-	for _, c := range checks {
-		if c.got != c.want {
-			t.Errorf("%s = %d, expected %d", c.name, c.got, c.want)
+OUTPUT 0 table[0]
+OUTPUT 0 table[1]
+OUTPUT 0 table[4]
+OUTPUT 0 table[5]
+OUTPUT 0 table[15]
+HALT`, func(t *testing.T, res *RunResult) {
+		if len(res.OutBytes[0]) != 5 {
+			t.Fatalf("expected 5 outputs, got %d: %v", len(res.OutBytes[0]), res.OutBytes[0])
 		}
-	}
+		checks := []struct {
+			name string
+			got  byte
+			want byte
+		}{
+			{"table[0]", res.OutBytes[0][0], 1},
+			{"table[1]", res.OutBytes[0][1], 2},
+			{"table[4]", res.OutBytes[0][2], 2},
+			{"table[5]", res.OutBytes[0][3], 4},
+			{"table[15]", res.OutBytes[0][4], 16},
+		}
+		for _, c := range checks {
+			if c.got != c.want {
+				t.Errorf("%s = %d, expected %d", c.name, c.got, c.want)
+			}
+		}
+	})
 }
 
-// TestIntegrationProcWithForAndVars tests a procedure with local BYTE/WORD
-// variables, a FOR loop, arithmetic, and a CALL inside the loop body.
 func TestIntegrationProcWithForAndVars(t *testing.T) {
-	io := compileAndRun(t, `
+	testArchs(t, `
 DECLARE result WORD
 
 PROCEDURE accumulate(base WORD, n BYTE) WORD
@@ -206,20 +194,18 @@ END
 
 LET result = accumulate(10, 5)
 OUTPUT 0 result
-HALT`)
-	if len(io.OutBytes[0]) < 1 {
-		t.Fatal("expected output")
-	}
-	// 10 + 1 + 2 + 3 + 4 + 5 = 25
-	if io.OutBytes[0][0] != 25 {
-		t.Errorf("expected 25, got %d", io.OutBytes[0][0])
-	}
+HALT`, func(t *testing.T, res *RunResult) {
+		if len(res.OutBytes[0]) < 1 {
+			t.Fatal("expected output")
+		}
+		if res.OutBytes[0][0] != 25 {
+			t.Errorf("expected 25, got %d", res.OutBytes[0][0])
+		}
+	})
 }
 
-// TestIntegrationFibonacci computes the 10th Fibonacci number iteratively
-// using a FOR loop with two accumulator variables.
 func TestIntegrationFibonacci(t *testing.T) {
-	io := compileAndRun(t, `
+	testArchs(t, `
 DECLARE result WORD
 
 PROCEDURE fib(n WORD) WORD
@@ -242,20 +228,18 @@ END
 LET result = fib(10)
 OUTPUT 0 result
 OUTPUT 1 result >> 8
-HALT`)
-	if len(io.OutBytes[0]) < 1 {
-		t.Fatal("expected output")
-	}
-	// fib(10) = 55
-	if io.OutBytes[0][0] != 55 {
-		t.Errorf("expected 55 (low byte), got %d", io.OutBytes[0][0])
-	}
+HALT`, func(t *testing.T, res *RunResult) {
+		if len(res.OutBytes[0]) < 1 {
+			t.Fatal("expected output")
+		}
+		if res.OutBytes[0][0] != 55 {
+			t.Errorf("expected 55 (low byte), got %d", res.OutBytes[0][0])
+		}
+	})
 }
 
-// TestIntegrationArrayCopy copies one array to another using a procedure with
-// a FOR loop.
 func TestIntegrationArrayCopy(t *testing.T) {
-	io := compileAndRun(t, `
+	testArchs(t, `
 DECLARE src ARRAY [5] BYTE
 DECLARE dst ARRAY [5] BYTE
 
@@ -279,14 +263,15 @@ OUTPUT 0 dst[1]
 OUTPUT 0 dst[2]
 OUTPUT 0 dst[3]
 OUTPUT 0 dst[4]
-HALT`)
-	if len(io.OutBytes[0]) != 5 {
-		t.Fatalf("expected 5 outputs, got %d: %v", len(io.OutBytes[0]), io.OutBytes[0])
-	}
-	expected := []byte{11, 22, 33, 44, 55}
-	for i, v := range expected {
-		if io.OutBytes[0][i] != v {
-			t.Errorf("dst[%d] = %d, expected %d", i, io.OutBytes[0][i], v)
+HALT`, func(t *testing.T, res *RunResult) {
+		if len(res.OutBytes[0]) != 5 {
+			t.Fatalf("expected 5 outputs, got %d: %v", len(res.OutBytes[0]), res.OutBytes[0])
 		}
-	}
+		expected := []byte{11, 22, 33, 44, 55}
+		for i, v := range expected {
+			if res.OutBytes[0][i] != v {
+				t.Errorf("dst[%d] = %d, expected %d", i, res.OutBytes[0][i], v)
+			}
+		}
+	})
 }

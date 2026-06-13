@@ -41,7 +41,7 @@ func (o *optimizer) run() {
 
 		case ADD_B, ADD_W:
 			o.foldBinop(i, func(a, b uint16) uint16 { return a + b },
-				func(a, b uint16) bool { return a == 0 || b == 0 })
+				func(a, b uint16) bool { return b == 0 })
 		case SUB_B, SUB_W:
 			o.foldBinop(i, func(a, b uint16) uint16 { return a - b },
 				func(a, b uint16) bool { return b == 0 })

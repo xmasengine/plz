@@ -124,6 +124,16 @@ func (g *GenPIR) isByteRef(r *Reference) bool {
 		}
 		return false
 	}
+	if len(r.Subscripts) > 0 {
+		t, ok := g.localType(r.Identifier)
+		if !ok {
+			return false
+		}
+		if arr := t.Array(); arr != nil {
+			return arr.ElemType.Predeclared() == PredeclaredByte
+		}
+		return false
+	}
 	t, ok := g.localType(r.Identifier)
 	if !ok {
 		return false
@@ -1322,14 +1332,40 @@ func (g *GenPIR) genPIRIndexRead(operands []Operand) error {
 			if err := g.genPIRFieldAddr(s.Operands); err != nil {
 				return err
 			}
+		} else if ref := baseExpr.Ref(); ref != nil && len(ref.Subscripts) == 0 {
+			// Simple reference inside Expression — push address
+			// Array indexing uses the variable's address as base, not its value.
+			if g.checker != nil && g.currentScope != nil {
+				if d, ok := g.currentScope.Lookup(ref.Identifier); ok && d.DataValue != nil {
+					g.emitName(pir.PUSH_D, string(ref.Identifier))
+				} else {
+					g.emitName(pir.PUSH_A, string(ref.Identifier))
+				}
+			} else {
+				g.emitName(pir.PUSH_A, string(ref.Identifier))
+			}
 		} else {
 			if err := baseExpr.genPIRExpr(g); err != nil {
 				return err
 			}
 		}
 	} else {
-		if err := operands[0].genPIRExpr(g); err != nil {
-			return err
+		// Simple operand (no nested expression) — for references, push
+		// address (PUSH_A/PUSH_D) instead of value (GET_W/GET_B).
+		if ref := operands[0].Ref(); ref != nil && len(ref.Subscripts) == 0 {
+			if g.checker != nil && g.currentScope != nil {
+				if d, ok := g.currentScope.Lookup(ref.Identifier); ok && d.DataValue != nil {
+					g.emitName(pir.PUSH_D, string(ref.Identifier))
+				} else {
+					g.emitName(pir.PUSH_A, string(ref.Identifier))
+				}
+			} else {
+				g.emitName(pir.PUSH_A, string(ref.Identifier))
+			}
+		} else {
+			if err := operands[0].genPIRExpr(g); err != nil {
+				return err
+			}
 		}
 	}
 	// Evaluate index
@@ -1354,6 +1390,24 @@ func (g *GenPIR) genPIRIndexRead(operands []Operand) error {
 // indexBaseSize returns the element size for the base of an index expression.
 func (g *GenPIR) indexBaseSize(operands []Operand) int {
 	baseExpr := operands[0].Expr()
+	// Try to find a simple reference (may be inside Expression wrapping)
+	ref := operands[0].Ref()
+	if ref != nil && len(ref.Subscripts) == 0 {
+		if g.isByteRef(ref) {
+			return 1
+		}
+		// Check for array-of-byte type (e.g. DECLARE arr ARRAY [N] BYTE)
+		if g.checker != nil && g.currentScope != nil {
+			if d, ok := g.currentScope.Lookup(ref.Identifier); ok {
+				if arr := d.Type.Array(); arr != nil {
+					if arr.ElemType.Predeclared() == PredeclaredByte {
+						return 1
+					}
+				}
+			}
+		}
+		return 2
+	}
 	if baseExpr == nil {
 		return 2
 	}
@@ -1395,7 +1449,6 @@ func (g *GenPIR) indexBaseSize(operands []Operand) int {
 		}
 		return 2
 	}
-	// Simple reference or expression — default to word.
 	return 2
 }
 
@@ -1504,6 +1557,18 @@ func (g *GenPIR) constEval(e Expression) (int, bool) {
 func (g *GenPIR) refSize(e Expression) int {
 	if op := e.Operand(); op != nil {
 		if ref := op.Reference(); ref != nil {
+			// For DATA references, return the actual byte count of the values.
+			if g.checker != nil && g.currentScope != nil {
+				if d, ok := g.currentScope.Lookup(ref.Identifier); ok && d.DataValue != nil {
+					if d.DataValue.Text != nil {
+						return len(d.DataValue.Text.Value)
+					}
+					if d.DataValue.Tile != nil {
+						return len(d.DataValue.Tile.Tiles) * 64
+					}
+					return len(d.DataValue.Values)
+				}
+			}
 			t, ok := g.localType(ref.Identifier)
 			if !ok {
 				return 1

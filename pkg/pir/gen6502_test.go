@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/beevik/go6502/asm"
+	"github.com/xmasengine/plz/pkg/asm6502"
 )
 
 func Inst(op Instruction, args ...interface{}) Instr {

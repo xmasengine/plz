@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/beevik/go6502/asm"
+	"github.com/xmasengine/plz/pkg/asm6502"
 )
 
 // Gen6502Config holds platform-specific parameters for the 6502 backend.
@@ -580,7 +580,7 @@ func (z *Gen6502) emitScheduler() {
 
 	// TCB storage in zero page
 	z.emit("_plz_tcbs:")
-	z.emitf("\t.ds %d", z.taskCount*8)
+	z.emitf("\t.pad 0, %d", z.taskCount*8)
 	z.emit("")
 }
 
@@ -604,7 +604,7 @@ func (z *Gen6502) emitVars() {
 	z.emit("; -------------------------------------------------------------------")
 	for _, kv := range sorted {
 		z.emitf("%s:", kv.name)
-		z.emitf("\t.ds %d", z.varSize(kv.name))
+		z.emitf("\t.pad 0, %d", z.varSize(kv.name))
 	}
 	z.emit("")
 }
@@ -683,8 +683,8 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitf("\tstx %s+1", z.varName(o.Name))
 
 	case PUSH_A:
-		z.emitf("\tlda #<%s", o.Name)
-		z.emitf("\tldx #>%s", o.Name)
+		z.emitf("\tlda #<%s", z.varName(o.Name))
+		z.emitf("\tldx #>%s", z.varName(o.Name))
 		z.emitSpillW()
 
 	case PUSH_D:
@@ -1227,7 +1227,10 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitFillW()            // A=low, X=high
 		z.emit("\tstx $02")      // $02 = high byte
 		z.emit("\tora $02")      // A |= high byte
-		z.emitf("\tbne %s", o.Name)
+		_goif_skip := z.nextLabel()
+		z.emitf("\tbeq _goif_skip_%d", _goif_skip)
+		z.emitf("\tjmp %s", o.Name)
+		z.emitf("_goif_skip_%d:", _goif_skip)
 
 	// ── Procedures ──
 	case ROUTE:

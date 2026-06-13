@@ -1067,10 +1067,12 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.fill()  // DE = NEXT (a). HL -= 2.
 		z.spill() // push a to stack slot. HL back to original position.
 		// Overwrite the stack top with BC (old TOS):
+		// Data stack is little-endian: low at HL-2, high at HL-1.
+		// B = low byte, C = high byte.
 		z.emit("\tdec hl")
-		z.emit("\tld (hl), b      // high byte")
+		z.emit("\tld (hl), c      // high byte")
 		z.emit("\tdec hl")
-		z.emit("\tld (hl), c      // low byte")
+		z.emit("\tld (hl), b      // low byte")
 		z.emit("\tinc hl")
 		z.emit("\tinc hl          // HL = original position")
 		// DE = a (old NEXT, new TOS). Stack has b (old TOS) at HL-2. Correct!
