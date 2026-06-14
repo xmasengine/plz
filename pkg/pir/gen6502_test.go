@@ -234,15 +234,15 @@ func TestGen6502Procedures(t *testing.T) {
 
 func TestGen6502Pointers(t *testing.T) {
 	prog := &Program{Instrs: []Instr{
-		{Op: PUSH_A, Operand: Operand{Type: OpName, Name: "data"}},
+		{Op: PUSH_D, Operand: Operand{Type: OpName, Name: "data"}},
 		{Op: READ_B},
-		{Op: PUSH_A, Operand: Operand{Type: OpName, Name: "data"}},
+		{Op: PUSH_D, Operand: Operand{Type: OpName, Name: "data"}},
 		{Op: READ_W},
 		{Op: PUSH_W, Operand: Operand{Type: OpNumber, Num: 42}},
-		{Op: PUSH_A, Operand: Operand{Type: OpName, Name: "data"}},
+		{Op: PUSH_D, Operand: Operand{Type: OpName, Name: "data"}},
 		{Op: WRITE_B},
 		{Op: PUSH_W, Operand: Operand{Type: OpNumber, Num: 0x1234}},
-		{Op: PUSH_A, Operand: Operand{Type: OpName, Name: "data"}},
+		{Op: PUSH_D, Operand: Operand{Type: OpName, Name: "data"}},
 		{Op: WRITE_W},
 		{Op: TAG, Operand: Operand{Type: OpName, Name: "data"}},
 		{Op: DATA_B, Operand: Operand{Type: OpNumber, Num: 10}},

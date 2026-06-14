@@ -222,8 +222,8 @@ func TestGenPIR_ProcedureArgs(t *testing.T) {
 		"ROUTE foo\n" +
 		"VAR a\n" +
 		"ALLOC 2\nVAR b\n" +
-		"PUT_W b\n" +
 		"PUT_B a\n" +
+		"PUT_W b\n" +
 		"GET_B a\n" +
 		"DONE\n" +
 		"DONE\n"
@@ -393,8 +393,8 @@ func TestGenPIR_ProcedureCallWithArgs(t *testing.T) {
 		"ROUTE foo\n" +
 		"VAR a\n" +
 		"ALLOC 2\nVAR b\n" +
-		"PUT_W b\n" +
 		"PUT_B a\n" +
+		"PUT_W b\n" +
 		"GET_B a\n" +
 		"DONE\n" +
 		"DONE\n"

@@ -276,8 +276,8 @@ func readOutBytes(mem *cpu.FlatMemory, outputBase uint16, maxBytes int) map[int]
 	out := map[int][]byte{}
 	for i := 0; i < maxBytes; i++ {
 		b := mem.LoadByte(outputBase + uint16(i))
-		if b == 0 && i > 0 && mem.LoadByte(outputBase+uint16(i)-1) == 0 {
-			break // stop at first run of zeros (probably uninitialized)
+		if b == 0 && i > 0 && i+1 < maxBytes && mem.LoadByte(outputBase+uint16(i)+1) == 0 {
+			break // stop before a run of consecutive zeros
 		}
 		out[0] = append(out[0], b)
 	}
