@@ -1042,9 +1042,11 @@ func (z *Gen6502) emitInstr(instr Instr) {
 
 	// ── Stack ──
 	case DUP:
-		z.emitFillW()
-		z.emitSpillW()
-		z.emitSpillW()
+		z.emitFillW()     // A=low, X=high
+		z.emit("\tpha")   // save low byte
+		z.emitSpillW()    // push copy 1 (A clobbered to high byte)
+		z.emit("\tpla")   // restore low byte
+		z.emitSpillW()    // push copy 2 (A=low, correct)
 
 	case DROP:
 		z.emitFillW()
@@ -1156,8 +1158,24 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitf("\tbne _is_w_%d", _is_w_gt)
 		z.emit("\tpla")
 		z.emitf("\tbeq _is_w_%d", _is_w_eq)
-		z.emitf("\tbcs _is_w_%d", _is_w_gt)
-		z.emitf("\tjmp _is_w_%d", _is_w_lt)
+		// High bytes equal, low bytes differ. Since we only reach this
+		// code when there was no borrow (C=1), low(NEXT) > low(TOS).
+		// Evaluate condition inline to avoid extra PLA in _is_w_gt.
+		switch o.Cond {
+		case CondLT:
+			z.emit("\tlda #0")
+		case CondGT:
+			z.emit("\tlda #1")
+		case CondLE:
+			z.emit("\tlda #0")
+		case CondGE:
+			z.emit("\tlda #1")
+		case CondEQ:
+			z.emit("\tlda #0")
+		case CondNE:
+			z.emit("\tlda #1")
+		}
+		z.emitf("\tjmp _is_w_%d", _is_w_done)
 		z.emit("")
 		z.emitf("_is_w_%d:", _is_w_lt)
 		z.emit("\tpla")

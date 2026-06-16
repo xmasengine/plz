@@ -152,6 +152,10 @@ func (g *GenPIR) isByteRef(r *Reference) bool {
 			if d, ok2 := g.currentScope.Lookup(r.Identifier); ok2 && d.DataValue != nil {
 				return true
 			}
+			// DATA parameters (ParamRef, PredeclaredData) are also byte-sized
+			if d, ok2 := g.currentScope.Lookup(r.Identifier); ok2 && d.ParamRef && d.Type.Predeclared() == PredeclaredData {
+				return true
+			}
 		}
 		return false
 	}
@@ -198,7 +202,7 @@ func (g *GenPIR) isByteExpression(e *Expression) bool {
 		inf := e.Infix()
 		switch inf.Operator {
 		case OperatorShiftLeft, OperatorShiftRight:
-			return false
+			return g.isByteOperand(&inf.Operands[0])
 		}
 		return g.isByteOperand(&inf.Operands[0]) && g.isByteOperand(&inf.Operands[1])
 	case e.Suffix() != nil:
@@ -495,17 +499,18 @@ func (g *GenPIR) genPIRPutRef(r *Reference) error {
 
 // genPIRRefAddr pushes the hardware address of a reference onto the data stack.
 func (g *GenPIR) genPIRRefAddr(r *Reference) {
-	isData := g.checker != nil && g.currentScope != nil && func() bool {
+	if g.checker != nil && g.currentScope != nil {
 		if d, ok := g.currentScope.Lookup(r.Identifier); ok && d.DataValue != nil {
-			return true
+			g.emitName(pir.PUSH_D, string(r.Identifier))
+			goto doOffsets
 		}
-		return false
-	}()
-	pushOp := pir.PUSH_A
-	if isData {
-		pushOp = pir.PUSH_D
+		if d, ok := g.currentScope.Lookup(r.Identifier); ok && d.ParamRef && d.Type.Predeclared() == PredeclaredData {
+			g.emitName(pir.GET_W, string(r.Identifier))
+			goto doOffsets
+		}
 	}
-	g.emitName(pushOp, string(r.Identifier))
+	g.emitName(pir.PUSH_A, string(r.Identifier))
+doOffsets:
 	// Add field offset first (if any)
 	if len(r.Fields) > 0 {
 		t, _ := g.localType(r.Identifier)
@@ -620,8 +625,9 @@ func (g *GenPIR) genPIRWhile(w *While, body []Statement) error {
 func (g *GenPIR) genPIRFor(f *For, body []Statement) error {
 	n := g.nextLabel()
 	loopTag := fmt.Sprintf("_for_%d", n)
+	contTag := fmt.Sprintf("_for_cont_%d", n)
 	endTag := fmt.Sprintf("_end_%d", n)
-	g.loopStack = append(g.loopStack, struct{ start, end string }{loopTag, endTag})
+	g.loopStack = append(g.loopStack, struct{ start, end string }{contTag, endTag})
 	defer func() { g.loopStack = g.loopStack[:len(g.loopStack)-1] }()
 
 	isByte := g.isByteRef(&f.Reference)
@@ -680,6 +686,8 @@ func (g *GenPIR) genPIRFor(f *For, body []Statement) error {
 			return err
 		}
 	}
+
+	g.emitName(pir.TAG, contTag)
 
 	// var = var + step
 	if isByte {
@@ -1333,6 +1341,8 @@ func (g *GenPIR) genPIRFieldAddr(operands []Operand) error {
 		if g.checker != nil && g.currentScope != nil {
 			if d, ok := g.currentScope.Lookup(baseRef.Identifier); ok && d.DataValue != nil {
 				g.emitName(pir.PUSH_D, string(baseRef.Identifier))
+			} else if d, ok := g.currentScope.Lookup(baseRef.Identifier); ok && d.ParamRef && d.Type.Predeclared() == PredeclaredData {
+				g.emitName(pir.GET_W, string(baseRef.Identifier))
 			} else {
 				g.emitName(pir.PUSH_A, string(baseRef.Identifier))
 			}
@@ -1421,6 +1431,8 @@ func (g *GenPIR) genPIRIndexAddr(operands []Operand) error {
 			if g.checker != nil && g.currentScope != nil {
 				if d, ok := g.currentScope.Lookup(ref.Identifier); ok && d.DataValue != nil {
 					g.emitName(pir.PUSH_D, string(ref.Identifier))
+				} else if d, ok := g.currentScope.Lookup(ref.Identifier); ok && d.ParamRef && d.Type.Predeclared() == PredeclaredData {
+					g.emitName(pir.GET_W, string(ref.Identifier))
 				} else {
 					g.emitName(pir.PUSH_A, string(ref.Identifier))
 				}
@@ -1437,6 +1449,8 @@ func (g *GenPIR) genPIRIndexAddr(operands []Operand) error {
 			if g.checker != nil && g.currentScope != nil {
 				if d, ok := g.currentScope.Lookup(ref.Identifier); ok && d.DataValue != nil {
 					g.emitName(pir.PUSH_D, string(ref.Identifier))
+				} else if d, ok := g.currentScope.Lookup(ref.Identifier); ok && d.ParamRef && d.Type.Predeclared() == PredeclaredData {
+					g.emitName(pir.GET_W, string(ref.Identifier))
 				} else {
 					g.emitName(pir.PUSH_A, string(ref.Identifier))
 				}
@@ -1490,6 +1504,9 @@ func (g *GenPIR) indexBaseSize(operands []Operand) int {
 		if g.checker != nil && g.currentScope != nil {
 			if d, ok := g.currentScope.Lookup(ref.Identifier); ok {
 				if d.DataValue != nil {
+					return 1
+				}
+				if d.ParamRef && d.Type.Predeclared() == PredeclaredData {
 					return 1
 				}
 				if arr := d.Type.Array(); arr != nil {

@@ -3,7 +3,6 @@ package plz_test
 import "testing"
 
 func TestIntegrationBreak(t *testing.T) {
-	// BREAK only supported on Z80 PIR backend currently
 	testArchs(t, `DECLARE idx WORD
 DECLARE result WORD
 LET result = 0
@@ -19,11 +18,29 @@ HALT`, func(t *testing.T, res *RunResult) {
 		if res.OutBytes[0][0] != 5 {
 			t.Errorf("expected 5, got %d", res.OutBytes[0][0])
 		}
-	}, "z80")
+	})
+}
+
+func TestIntegrationContinue(t *testing.T) {
+	testArchs(t, `DECLARE idx WORD
+DECLARE result WORD
+LET result = 0
+FOR idx = 0 TO 10 DO
+  IF idx == 5 THEN CONTINUE
+  LET result = result + 1
+END
+OUTPUT 0 result
+HALT`, func(t *testing.T, res *RunResult) {
+		if len(res.OutBytes[0]) < 1 {
+			t.Fatal("expected output")
+		}
+		if res.OutBytes[0][0] != 10 {
+			t.Errorf("expected 10, got %d", res.OutBytes[0][0])
+		}
+	})
 }
 
 func TestIntegrationCase(t *testing.T) {
-	// CASE only supported on Z80 PIR backend currently
 	testArchs(t, `DECLARE cx BYTE
 DECLARE result BYTE
 FOR cx = 0 TO 3 DO
@@ -45,7 +62,7 @@ HALT`, func(t *testing.T, res *RunResult) {
 				t.Errorf("cx=%d: expected %d, got %d", i, v, got[i])
 			}
 		}
-	}, "z80")
+	})
 }
 
 func TestIntegrationLogicalAnd(t *testing.T) {

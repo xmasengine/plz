@@ -73,6 +73,7 @@ func (io *SMSIO) Out(port byte, val byte) {
 		} else {
 			io.VDP.WriteControl(val)
 		}
+		io.ByteIO.Out(port, val)
 	case port == 0x7F:
 		if io.PSG != nil {
 			io.PSG.Write(val)

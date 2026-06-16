@@ -1777,12 +1777,13 @@ func (g *Gen) genWhileGroup(s Group) error {
 func (g *Gen) genForGroup(s Group) error {
 	n := g.nextLabel()
 	loopTag := fmt.Sprintf("_for_%d", n)
+	contTag := fmt.Sprintf("_for_cont_%d", n)
 	endLabel := fmt.Sprintf("_for_end_%d", n)
 	endTag := fmt.Sprintf("_end_%d", n)
 	stepLabel := fmt.Sprintf("_for_step_%d", n)
 	g.addForTemp(stepLabel)
 	g.addForTemp(endLabel)
-	g.loopStack = append(g.loopStack, struct{ start, end string }{loopTag, endTag})
+	g.loopStack = append(g.loopStack, struct{ start, end string }{contTag, endTag})
 	defer func() { g.loopStack = g.loopStack[:len(g.loopStack)-1] }()
 
 	// Determine if the loop variable is BYTE so we use correct load/store size.
@@ -1842,6 +1843,7 @@ func (g *Gen) genForGroup(s Group) error {
 	}
 
 	// var += step
+	g.Emitf("%s:\n", contTag)
 	g.Emitf("\tld hl, (%s)\n", stepLabel)
 	if isByte {
 		g.Emitf("\tld a, (%s)\n", g.localSym(s.For.Reference.Identifier))

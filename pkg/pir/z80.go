@@ -40,6 +40,7 @@ type Z80Gen struct {
 
 	// procedure / frame tracking
 	procName string
+	inProc   bool
 	inFrame  bool
 	frameSz  int
 	localOff map[string]int
@@ -48,6 +49,10 @@ type Z80Gen struct {
 	// tag tracking for forward references
 	tags   map[string]bool
 	needHL int // label counter for unique locals
+
+	// allDoneEmitted tracks whether _plz_all_done has been output
+	// (emitted before the first procedure to prevent fall-through).
+	allDoneEmitted bool
 
 	// one-shot directive tracking
 	pendingAT   int // >=0 when AT is active, the target address; -1 when none
@@ -99,7 +104,9 @@ func (z *Z80Gen) Gen(prog *Program) string {
 	dataStackBase := z.varNext
 	z.emitStart(dataStackBase)
 	z.emitProg(prog)
-	z.emitFooter()
+	if !z.allDoneEmitted {
+		z.emitFooter()
+	}
 	z.emitScheduler()
 	z.emitVars()
 	z.emitTaskStacks()
@@ -899,7 +906,8 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.fill()
 		z.emit("\tpush hl")
 		z.emit("\tex de, hl       // HL = value")
-		z.emit("\tor a")
+		z.emit("\tld a, h")
+		z.emit("\tor l")
 		li := z.nextLabel()
 		z.emitf("\tjr z, _shlw_%d", li)
 		z.emitf("_shlw_loop_%d:", li)
@@ -928,7 +936,8 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.fill()
 		z.emit("\tpush hl")
 		z.emit("\tex de, hl       // HL = value")
-		z.emit("\tor a")
+		z.emit("\tld a, h")
+		z.emit("\tor l")
 		li := z.nextLabel()
 		z.emitf("\tjr z, _shrw_%d", li)
 		z.emitf("_shrw_loop_%d:", li)
@@ -1128,7 +1137,12 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 
 	// ── Procedures ──
 	case ROUTE:
+		if !z.allDoneEmitted {
+			z.emitFooter()
+			z.allDoneEmitted = true
+		}
 		z.procName = o.Name
+		z.inProc = true
 		z.inFrame = false
 		z.frameSz = 0
 		z.localOff = make(map[string]int)
@@ -1139,6 +1153,7 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.emitf("\tcall _plz_%s", o.Name)
 
 	case DONE:
+		z.inProc = false
 		if z.inFrame {
 			z.emit("\tld sp, ix")
 			z.emit("\tpop ix")
@@ -1146,6 +1161,7 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.emit("\tret")
 
 	case DONE_INTERRUPT:
+		z.inProc = false
 		if z.inFrame {
 			z.emit("\tld sp, ix")
 			z.emit("\tpop ix")
@@ -1153,6 +1169,7 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.emit("\treti")
 
 	case DONE_NMI:
+		z.inProc = false
 		if z.inFrame {
 			z.emit("\tld sp, ix")
 			z.emit("\tpop ix")
@@ -1228,19 +1245,25 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.emit("\tld a, e")
 		z.emitf("\tout (%d), a", o.Num)
 		z.emit("\tld a, d")
-		z.emitf("\tout (%d), a", o.Num+1)
+		z.emitf("\tout (%d), a", o.Num)
 		z.fill()
 
 	// ── Interrupts ──
 	case INT:
 		z.emitf("\t// INT %s: install interrupt handler", o.Name)
-		z.emitf("\tld hl, _plz_%s", o.Name)
-		z.emit("\tld (0x0038), hl")
+		li := z.nextLabel()
+		z.emitf("_plz_org_%d:", li)
+		z.emit("\torg 0x0038")
+		z.emitf("\tjp _plz_%s", o.Name)
+		z.emitf("\torg _plz_org_%d", li)
 
 	case NMI:
 		z.emitf("\t// NMI %s: install NMI handler", o.Name)
-		z.emitf("\tld hl, _plz_%s", o.Name)
-		z.emit("\tld (0x0066), hl")
+		li := z.nextLabel()
+		z.emitf("_plz_org_%d:", li)
+		z.emit("\torg 0x0066")
+		z.emitf("\tjp _plz_%s", o.Name)
+		z.emitf("\torg _plz_org_%d", li)
 
 	case HLT:
 		z.emit("\thalt")

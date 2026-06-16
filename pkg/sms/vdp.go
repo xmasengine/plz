@@ -501,6 +501,7 @@ func (v *VDP) setPixel(x, y uint16, r, g, b byte) {
 func (v *VDP) Reg(i int) byte          { return v.reg[i] }
 func (v *VDP) AddrReg() uint16         { return v.addrReg }
 func (v *VDP) CodeReg() byte           { return v.codeReg }
+func (v *VDP) SecondByte() bool        { return v.secondByte }
 func (v *VDP) VRAMAt(addr uint16) byte { return v.VRAM[addr] }
 func (v *VDP) CRAMAt(addr uint16) byte { return v.CRAM[addr] }
 func (v *VDP) Scanline() uint16        { return v.scanline }

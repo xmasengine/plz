@@ -374,7 +374,7 @@ func TestZ80GenPortIO(t *testing.T) {
 		{
 			name: "OUT_W",
 			prog: &Program{Instrs: []Instr{{Op: OUT_W, Operand: Operand{Type: OpNumber, Num: 0xBE}}}},
-			want: []string{"ld a, e", "out (190), a", "out (191), a"},
+			want: []string{"ld a, e", "out (190), a", "ld a, d", "out (190), a"},
 		},
 	}
 	for _, tc := range tests {
@@ -396,8 +396,8 @@ func TestZ80GenInterrupts(t *testing.T) {
 		prog *Program
 		want []string
 	}{
-		{name: "INT", prog: &Program{Instrs: []Instr{{Op: INT, Operand: Operand{Type: OpName, Name: "tick"}}}}, want: []string{"ld hl, _plz_tick", "ld (0x0038), hl"}},
-		{name: "NMI", prog: &Program{Instrs: []Instr{{Op: NMI, Operand: Operand{Type: OpName, Name: "pause"}}}}, want: []string{"ld hl, _plz_pause", "ld (0x0066), hl"}},
+		{name: "INT", prog: &Program{Instrs: []Instr{{Op: INT, Operand: Operand{Type: OpName, Name: "tick"}}}}, want: []string{"org 0x0038", "jp _plz_tick"}},
+		{name: "NMI", prog: &Program{Instrs: []Instr{{Op: NMI, Operand: Operand{Type: OpName, Name: "pause"}}}}, want: []string{"org 0x0066", "jp _plz_pause"}},
 		{name: "HLT", prog: &Program{Instrs: []Instr{{Op: HLT}}}, want: []string{"halt"}},
 		{name: "DII", prog: &Program{Instrs: []Instr{{Op: DII}}}, want: []string{"di"}},
 		{name: "ENI", prog: &Program{Instrs: []Instr{{Op: ENI}}}, want: []string{"ei"}},

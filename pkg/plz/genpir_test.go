@@ -187,6 +187,7 @@ func TestGenPIR_ForLoop(t *testing.T) {
 		"GO_IF _end_1\n" +
 		"GET_W i\n" +
 		"PUT_W x\n" +
+		"TAG _for_cont_1\n" +
 		"GET_W i\n" +
 		"GET_W _plz_for_step_1\n" +
 		"ADD_W\n" +
@@ -369,6 +370,7 @@ func TestGenPIR_ForLoopWithStep(t *testing.T) {
 		"GO_IF _end_1\n" +
 		"GET_W i\n" +
 		"PUT_W x\n" +
+		"TAG _for_cont_1\n" +
 		"GET_W i\n" +
 		"GET_W _plz_for_step_1\n" +
 		"ADD_W\n" +
