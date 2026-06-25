@@ -23,6 +23,10 @@ type Gen6502Config struct {
 	TaskLimit int
 	// OutputBase is the base address for OUT_B/OUT_W writes (0 = direct port address).
 	OutputBase uint16
+	// IntHandlerName is the PL/Z name of the INT handler, set by Gen6502 during Gen().
+	IntHandlerName string
+	// NmiHandlerName is the PL/Z name of the NMI handler, set by Gen6502 during Gen().
+	NmiHandlerName string
 }
 
 // Default6502Config returns a configuration suitable for testing.
@@ -61,6 +65,7 @@ type Gen6502 struct {
 	varAddr  map[string]uint16
 	varSizes map[string]int
 	varNext  uint16
+	atVars   map[string]bool // variables placed via AT directive
 
 	// ag tracking
 	tags    map[string]bool
@@ -73,26 +78,61 @@ type Gen6502 struct {
 	needCmp   bool
 	needShift bool
 	needSched bool
+	needSave  bool
+	needLoad  bool
+	needSeed  bool
 
 	// task tracking
 	taskCount        int
 	taskEntryLabels  []string
+	taskNames        map[string]int // task name → index
+	taskPriorities   []int          // one per task, set by PRIORITY before JOB
+	pendingPriority  int            // -1 when none
+
+	// reentrant procedure (frame) tracking
+	inFrame  bool
+	frameSz  int
+	localOff map[string]int // local name → offset from FP
+	localNxt int            // next local offset
+
+	// interrupt handler tracking
+	intHandler string // name set by INT instruction
+	nmiHandler string // name set by NMI instruction
 
 	// one-shot directive tracking
 	pendingAT   int // >=0 when AT is active; -1 when none
 	pendingSize int // >0 overrides size for next VAR; 0 when none
+
+	// bank tracking
+	currentBank int            // current bank (0 = code bank)
+	bankLines   map[int][]string // bank -> its assembly lines (bank 0 is main code)
 }
+
+// IntHandler returns the PL/Z name of the INT handler, or empty if none.
+func (z *Gen6502) IntHandler() string { return z.intHandler }
+
+// NmiHandler returns the PL/Z name of the NMI handler, or empty if none.
+func (z *Gen6502) NmiHandler() string { return z.nmiHandler }
 
 // NewGen6502 creates a Gen6502 with the given config.
 func NewGen6502(cfg Gen6502Config) *Gen6502 {
-	return &Gen6502{cfg: cfg, varSizes: make(map[string]int), pendingAT: -1}
+	return &Gen6502{cfg: cfg, varSizes: make(map[string]int), pendingAT: -1, localOff: make(map[string]int), bankLines: make(map[int][]string), atVars: make(map[string]bool)}
 }
 
 func (z *Gen6502) varName(name string) string {
 	return "_v_" + name
 }
 
+// localOff returns the frame offset for a local variable, or -1 if not a local.
+func (z *Gen6502) localAddr(name string) int {
+	if off, ok := z.localOff[name]; ok {
+		return off
+	}
+	return -1
+}
+
 // Gen translates a PIR programme into 6502 assembly text.
+// After Gen(), BankLines() returns per-bank assembly texts for banks > 0.
 func (z *Gen6502) Gen(prog *Program) string {
 	z.lines = nil
 	z.varAddr = make(map[string]uint16)
@@ -101,12 +141,16 @@ func (z *Gen6502) Gen(prog *Program) string {
 	z.tags = make(map[string]bool)
 	z.pendingAT = -1
 	z.pendingSize = 0
+	z.currentBank = 0
+	z.bankLines = make(map[int][]string)
+	z.atVars = make(map[string]bool)
 
 	z.scanProg(prog)
 
 	z.emitHeader()
 	z.emitStart()
 	z.emitProg(prog)
+	z.currentBank = 0 // reset after emitProg so runtime/footer/vars stay in bank 0
 	z.emitRuntime()
 	z.emitFooter()
 	z.emitVars()
@@ -114,7 +158,21 @@ func (z *Gen6502) Gen(prog *Program) string {
 	return strings.Join(z.lines, "\n")
 }
 
+// BankLines returns per-bank assembly texts (key = bank number, 1+).
+// Each text is a complete 6502 assembly snippet for that bank.
+func (z *Gen6502) BankLines() map[int]string {
+	result := make(map[int]string)
+	for n, lines := range z.bankLines {
+		if n > 0 && len(lines) > 0 {
+			result[n] = strings.Join(lines, "\n")
+		}
+	}
+	return result
+}
+
 func (z *Gen6502) scanProg(prog *Program) {
+	z.pendingPriority = -1
+	z.taskNames = make(map[string]int)
 	for _, instr := range prog.Instrs {
 		consumed := false
 		switch instr.Op {
@@ -135,6 +193,7 @@ func (z *Gen6502) scanProg(prog *Program) {
 				if z.pendingAT >= 0 {
 					z.varAddr[name] = uint16(z.pendingAT)
 					z.varSizes[name] = size
+					z.atVars[name] = true
 					consumed = true
 				} else {
 					z.varAddr[name] = z.varNext
@@ -158,12 +217,34 @@ func (z *Gen6502) scanProg(prog *Program) {
 			z.needShift = true
 		case IS_B, IS_W:
 			z.needCmp = true
+		case PRIORITY:
+			z.pendingPriority = int(instr.Operand.Num)
+			consumed = true
 		case JOB:
 			z.needSched = true
 			z.taskEntryLabels = append(z.taskEntryLabels, instr.Operand.Name)
+			z.taskNames[instr.Operand.Name] = z.taskCount
+			if z.pendingPriority >= 0 {
+				z.taskPriorities = append(z.taskPriorities, z.pendingPriority)
+				z.pendingPriority = -1
+			} else {
+				z.taskPriorities = append(z.taskPriorities, 0) // default
+			}
 			z.taskCount++
-		case BYE, SLEEP, STOP, START:
+		case BYE, YIELD, SLEEP, STOP, START:
 			z.needSched = true
+		case SAVE:
+			z.needSave = true
+		case LOAD:
+			z.needLoad = true
+		case SEED:
+			z.needSeed = true
+			// Register _plz_seed as a variable if not already
+			if _, ok := z.varAddr["_plz_seed"]; !ok {
+				z.varAddr["_plz_seed"] = z.varNext
+				z.varSizes["_plz_seed"] = 1
+				z.varNext++
+			}
 		}
 		if !consumed && z.pendingAT >= 0 {
 			z.pendingAT = -1
@@ -179,6 +260,19 @@ func (z *Gen6502) emitf(format string, args ...interface{}) {
 
 func (z *Gen6502) emit(s string) {
 	z.lines = append(z.lines, s)
+}
+
+// emitBank appends a line to the current bank's buffer instead of bank 0.
+func (z *Gen6502) emitBank(line string) {
+	if z.currentBank > 0 {
+		z.bankLines[z.currentBank] = append(z.bankLines[z.currentBank], line)
+	} else {
+		z.lines = append(z.lines, line)
+	}
+}
+
+func (z *Gen6502) emitBankf(format string, args ...interface{}) {
+	z.emitBank(fmt.Sprintf(format, args...))
 }
 
 // nextLabel returns a unique numeric label suffix.
@@ -227,7 +321,7 @@ func (z *Gen6502) emitStart() {
 	if z.needSched {
 		// JSR to task init (emitted after all code so JOB labels exist)
 		z.emit("\tjsr _plz_init_tasks")
-		// After init, RTS to task 0
+		// After init, RTS to highest priority task
 	}
 
 	z.emit("")
@@ -271,6 +365,38 @@ func (z *Gen6502) emitRuntime() {
 		z.emit("\trts")
 		z.emit("")
 	}
+
+	if z.needSave || z.needLoad {
+		z.emit("; Block copy: ($0a-$0b) → ($02-$03), length $08-$09")
+		z.emit("_plz_memcpy:")
+		mcLoop := z.nextLabel()
+		mcS1 := z.nextLabel()
+		mcS2 := z.nextLabel()
+		mcDec := z.nextLabel()
+		z.emitf("_mc_%d:", mcLoop)
+		z.emit("\tldy #0")
+		z.emit("\tlda ($0a),y")
+		z.emit("\tsta ($02),y")
+		z.emit("\tinc $0a")
+		z.emitf("\tbne _mc_%d", mcS1)
+		z.emit("\tinc $0b")
+		z.emitf("_mc_%d:", mcS1)
+		z.emit("\tinc $02")
+		z.emitf("\tbne _mc_%d", mcS2)
+		z.emit("\tinc $03")
+		z.emitf("_mc_%d:", mcS2)
+		z.emit("\tlda $08")
+		z.emitf("\tbne _mc_%d", mcDec)
+		z.emit("\tdec $09")
+		z.emitf("_mc_%d:", mcDec)
+		z.emit("\tdec $08")
+		z.emit("\tlda $08")
+		z.emit("\tora $09")
+		z.emitf("\tbne _mc_%d", mcLoop)
+		z.emit("\trts")
+		z.emit("")
+	}
+
 }
 
 func (z *Gen6502) emitMulHelpers() {
@@ -424,7 +550,7 @@ func (z *Gen6502) emitScheduler() {
 	z.emit("; Task scheduler")
 	z.emit("; -------------------------------------------------------------------")
 	z.emit("")
-	z.emit("; TCB layout (8 bytes per task, zero-page at _plz_tcbs):")
+	z.emit("; TCB layout (8 bytes per task, zero-page at $80):")
 	z.emit("; +0: SP_low (1 byte)")
 	z.emit("; +1: SP_high (1 byte)")
 	z.emit("; +2: state (1 byte: 0=READY, 1=SUSPENDED, 2=SLEEPING, 3=DEAD)")
@@ -447,9 +573,9 @@ func (z *Gen6502) emitScheduler() {
 	z.emit("\tasl")
 	z.emit("\ttay               ; Y = task_index * 8")
 	z.emit("\ttxa               ; A = SP")
-	z.emit("\tsta _plz_tcbs,y   ; save SP low")
+	z.emit("\tsta $80,y         ; save SP low")
 	z.emit("\tlda #$01")
-	z.emit("\tsta _plz_tcbs+1,y ; save SP high (always page $01)")
+	z.emit("\tsta $81,y         ; save SP high (always page $01)")
 	z.emit("")
 
 	// Decrement all sleep counters
@@ -458,16 +584,16 @@ func (z *Gen6502) emitScheduler() {
 	sch_slp := z.nextLabel()
 	sch_skip := z.nextLabel()
 	z.emitf("_sch_slp_%d:", sch_slp)
-	z.emit("\tlda _plz_tcbs+3,x  ; sleep counter")
+	z.emit("\tlda $83,x          ; sleep counter")
 	z.emitf("\tbeq _sch_sk_%d", sch_skip)
-	z.emit("\tdec _plz_tcbs+3,x")
+	z.emit("\tdec $83,x")
 	z.emitf("\tbne _sch_sk_%d", sch_skip)
 	z.emit("\t; Reached 0 — wake up if SLEEPING")
-	z.emit("\tlda _plz_tcbs+2,x")
+	z.emit("\tlda $82,x")
 	z.emit("\tcmp #2")
 	z.emitf("\tbne _sch_sk_%d", sch_skip)
 	z.emit("\tlda #0")
-	z.emit("\tsta _plz_tcbs+2,x  ; state = READY")
+	z.emit("\tsta $82,x          ; state = READY")
 	z.emitf("_sch_sk_%d:", sch_skip)
 	z.emit("\ttxa")
 	z.emit("\tclc")
@@ -478,13 +604,14 @@ func (z *Gen6502) emitScheduler() {
 	z.emit("")
 
 	// Scan for best READY task (lowest priority value, round-robin)
+	// $07 = candidate byte offset (task_idx * 8), $08 = best priority found
 	z.emit("\t; Scan for best READY task")
 	sch_start := z.nextLabel()
 	sch_loop := z.nextLabel()
 	sch_next := z.nextLabel()
 	sch_wrap := z.nextLabel()
 	sch_done := z.nextLabel()
-	// candidate starts at current+1 (with wrap)
+	// candidate starts at current+1 (with wrap), stored as byte offset
 	z.emit("\tlda $06")
 	z.emit("\tclc")
 	z.emit("\tadc #1")
@@ -492,21 +619,28 @@ func (z *Gen6502) emitScheduler() {
 	z.emitf("\tbcc _sch_st_%d", sch_start)
 	z.emit("\tlda #0")
 	z.emitf("_sch_st_%d:", sch_start)
-	z.emit("\tsta $07           ; candidate")
+	z.emit("\tasl")              // *2
+	z.emit("\tasl")              // *4
+	z.emit("\tasl")              // *8
+	z.emit("\tsta $07           ; candidate byte offset")
 	z.emit("\tlda #15           ; best priority = worst")
 	z.emit("\tsta $08")
 	z.emit("\tldx #0            ; iteration count")
 	z.emitf("_sch_lp_%d:", sch_loop)
-	// Check candidate at $07
+	// Check candidate at byte offset $07
 	z.emit("\tldy $07")
-	z.emit("\tlda _plz_tcbs+2,y  ; state")
+	z.emit("\tlda $82,y          ; state (at TCB_base + 2)")
 	z.emitf("\tbne _sch_nx_%d", sch_next)
 	z.emit("\t; READY — check priority")
-	z.emit("\tlda _plz_tcbs+4,y")
+	z.emit("\tlda $84,y          ; priority")
 	z.emit("\tcmp $08")
 	z.emitf("\tbcs _sch_nx_%d", sch_next)
 	z.emit("\tsta $08           ; new best priority")
+	// Convert byte offset back to task index for $06
 	z.emit("\tlda $07")
+	z.emit("\tlsr")              // /2
+	z.emit("\tlsr")              // /4
+	z.emit("\tlsr")              // /8
 	z.emit("\tsta $06           ; current_task = candidate")
 	z.emitf("_sch_nx_%d:", sch_next)
 	// Advance to next candidate
@@ -515,8 +649,8 @@ func (z *Gen6502) emitScheduler() {
 	z.emitf("\tbeq _sch_dn_%d", sch_done)
 	z.emit("\tlda $07")
 	z.emit("\tclc")
-	z.emit("\tadc #1")
-	z.emitf("\tcmp #%d", z.taskCount)
+	z.emit("\tadc #8")           // advance by 8 bytes
+	z.emitf("\tcmp #%d", z.taskCount*8)
 	z.emitf("\tbcc _sch_wr_%d", sch_wrap)
 	z.emit("\tlda #0")
 	z.emitf("_sch_wr_%d:", sch_wrap)
@@ -525,18 +659,29 @@ func (z *Gen6502) emitScheduler() {
 	z.emitf("_sch_dn_%d:", sch_done)
 	z.emit("")
 
-	// Restore chosen task's SP
-	z.emit("\t; Restore chosen task")
+	// Check if chosen task is DEAD — if so, halt
+	z.emit("\t; Check if chosen task is DEAD")
 	z.emit("\tlda $06")
 	z.emit("\tasl")
 	z.emit("\tasl")
 	z.emit("\tasl")
 	z.emit("\ttay")
-	z.emit("\tlda _plz_tcbs,y    ; SP low")
+	z.emit("\tlda $82,y          ; state")
+	z.emit("\tcmp #3")
+	z.emit("\tbeq _6502_sch_halt")
+	z.emit("")
+	// Restore chosen task's SP
+	z.emit("\t; Restore chosen task")
+	z.emit("\tlda $80,y          ; SP low")
 	z.emit("\ttax")
 	z.emit("\ttxs")
 	z.emit("\tcli")
 	z.emit("\trts                ; jump to chosen task")
+	z.emit("")
+	z.emit("_6502_sch_halt:")
+	z.emit("\t; No runnable task — halt")
+	z.emit("\tsei")
+	z.emit("\tbrk")
 	z.emit("")
 
 	// Task init routine (called from _6502_main)
@@ -548,10 +693,18 @@ func (z *Gen6502) emitScheduler() {
 	z.emit("\tlda #0")
 	z_clr := z.nextLabel()
 	z.emitf("_init_clr_%d:", z_clr)
-	z.emit("\tsta _plz_tcbs,x")
+	z.emit("\tsta $80,x")
 	z.emit("\tinx")
 	z.emitf("\tcpx #%d", z.taskCount*8)
 	z.emitf("\tbne _init_clr_%d", z_clr)
+	z.emit("")
+	// Set priorities from stored values (TCBs zeroed above, so all priority=0 by default)
+	for i, p := range z.taskPriorities {
+		if p != 0 {
+			z.emitf("\tlda #%d", p)
+			z.emitf("\tsta $%02x", 0x80+i*8+4)
+		}
+	}
 	z.emit("")
 	// For each task, set SP to top of its stack area, push entry address,
 	// and save SP in TCB
@@ -560,36 +713,38 @@ func (z *Gen6502) emitScheduler() {
 		z.emitf("\t; Task %d: %s", i, name)
 		z.emitf("\tldx #%d", spOffset)
 		z.emit("\ttxs")
-		z.emitf("\tlda #>_plz_task_entry_%s", name)
+		z.emitf("\tlda #>(_plz_task_entry_%s - 1)", name)
 		z.emit("\tpha")
-		z.emitf("\tlda #<_plz_task_entry_%s", name)
+		z.emitf("\tlda #<(_plz_task_entry_%s - 1)", name)
 		z.emit("\tpha")
 		z.emit("\ttsx")
-		z.emitf("\tstx _plz_tcbs+%d", i*8)
+		z.emitf("\tstx $%02x", 0x80+i*8)
 		z.emit("\tlda #$01")
-		z.emitf("\tsta _plz_tcbs+%d", i*8+1)
+		z.emitf("\tsta $%02x", 0x80+i*8+1)
 		z.emit("")
 	}
-	// Restore SP for task 0
-	z.emit("\tldx _plz_tcbs+0")
+	// Pick the task with the lowest priority number (highest priority)
+	bestIdx := 0
+	bestPri := 15
+	for i, p := range z.taskPriorities {
+		if p < bestPri {
+			bestPri = p
+			bestIdx = i
+		}
+	}
+	z.emitf("\t; Start task %d (highest priority)", bestIdx)
+	z.emitf("\tldx $%02x", 0x80+bestIdx*8)
 	z.emit("\ttxs")
-	z.emit("\tlda #0")
-	z.emit("\tsta $06           ; current task = 0")
-	z.emit("\trts               ; return to main -> RTS into task 0")
+	z.emitf("\tlda #%d", bestIdx)
+	z.emit("\tsta $06           ; current task = best priority")
+	z.emit("\trts               ; RTS into best task")
 	z.emit("")
 
-	// TCB storage in zero page
-	z.emit("_plz_tcbs:")
-	z.emitf("\t.pad 0, %d", z.taskCount*8)
-	z.emit("")
 }
 
 // ── Variables ──
 
 func (z *Gen6502) emitVars() {
-	if len(z.varAddr) == 0 {
-		return
-	}
 	type kv struct {
 		name string
 		addr uint16
@@ -599,10 +754,16 @@ func (z *Gen6502) emitVars() {
 		sorted = append(sorted, kv{name, addr})
 	}
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].addr < sorted[j].addr })
+	if len(sorted) == 0 {
+		return
+	}
 	z.emit("; -------------------------------------------------------------------")
 	z.emit("; Variable storage")
 	z.emit("; -------------------------------------------------------------------")
 	for _, kv := range sorted {
+		if z.atVars[kv.name] {
+			z.emitf("\t.org $%04x", kv.addr)
+		}
 		z.emitf("%s:", kv.name)
 		z.emitf("\t.pad 0, %d", z.varSize(kv.name))
 	}
@@ -632,8 +793,8 @@ func (z *Gen6502) emitProg(prog *Program) {
 			switch instr.Op {
 			case VAR:
 				// handled by emitVars
-			case DATA_B, DATA_W, DATA_STR, ROUTE:
-				z.emitf("\t; AT $%04x", z.pendingAT)
+			case DATA_B, DATA_W, DATA_STR, ROUTE, JOB:
+				z.emitf("\t.org $%04x", z.pendingAT)
 			}
 			z.pendingAT = -1
 		}
@@ -650,6 +811,37 @@ func (z *Gen6502) emitInstr(instr Instr) {
 	case NOP:
 		z.emit("\tnop")
 
+	// ── Stack Frame (Reentrant Procedures) ──
+	case FRAME:
+		z.inFrame = true
+		z.frameSz = int(o.Num)
+		// Save old frame pointer to hardware stack
+		z.emit("\tlda $0e")
+		z.emit("\tpha")
+		z.emit("\tlda $0f")
+		z.emit("\tpha")
+		// Allocate N bytes (SP -= N)
+		if o.Num > 0 {
+			z.emit("\ttsx")
+			z.emit("\ttxa")
+			z.emitf("\tsec\n\tsbc #%d", o.Num)
+			z.emit("\ttax")
+			z.emit("\ttxs")
+		}
+		// Set frame pointer to current SP (first local byte)
+		z.emit("\ttsx")
+		z.emit("\tstx $0f")
+		z.emit("\tlda #$01")
+		z.emit("\tsta $0e")
+
+	case LOCAL_B:
+		z.localOff[o.Name] = z.localNxt
+		z.localNxt += 1
+
+	case LOCAL_W:
+		z.localOff[o.Name] = z.localNxt
+		z.localNxt += 2
+
 	case PUSH_B:
 		z.emitf("\tlda #%d", o.Num)
 		z.emit("\tldx #0")
@@ -664,23 +856,51 @@ func (z *Gen6502) emitInstr(instr Instr) {
 	// Handled in scan phase
 
 	case GET_B:
-		z.emitf("\tlda %s", z.varName(o.Name))
+		if off := z.localAddr(o.Name); off >= 0 {
+			z.emitf("\tldy #%d", off)
+			z.emit("\tlda ($0e),y")
+		} else {
+			z.emitf("\tlda %s", z.varName(o.Name))
+		}
 		z.emit("\tldx #0")
 		z.emitSpillW()
 
 	case GET_W:
-		z.emitf("\tlda %s", z.varName(o.Name))
-		z.emitf("\tldx %s+1", z.varName(o.Name))
+		if off := z.localAddr(o.Name); off >= 0 {
+			z.emitf("\tldy #%d", off)
+			z.emit("\tlda ($0e),y")
+			z.emit("\tsta $02        ; save low byte")
+			z.emitf("\tldy #%d", off+1)
+			z.emit("\tlda ($0e),y")
+			z.emit("\ttax")
+			z.emit("\tlda $02")
+		} else {
+			z.emitf("\tlda %s", z.varName(o.Name))
+			z.emitf("\tldx %s+1", z.varName(o.Name))
+		}
 		z.emitSpillW()
 
 	case PUT_B:
 		z.emitFillW() // A=low, X=high (only low byte stored)
-		z.emitf("\tsta %s", z.varName(o.Name))
+		if off := z.localAddr(o.Name); off >= 0 {
+			z.emitf("\tldy #%d", off)
+			z.emit("\tsta ($0e),y")
+		} else {
+			z.emitf("\tsta %s", z.varName(o.Name))
+		}
 
 	case PUT_W:
 		z.emitFillW() // A=low, X=high
-		z.emitf("\tsta %s", z.varName(o.Name))
-		z.emitf("\tstx %s+1", z.varName(o.Name))
+		if off := z.localAddr(o.Name); off >= 0 {
+			z.emitf("\tldy #%d", off)
+			z.emit("\tsta ($0e),y")
+			z.emit("\ttxa")
+			z.emitf("\tldy #%d", off+1)
+			z.emit("\tsta ($0e),y")
+		} else {
+			z.emitf("\tsta %s", z.varName(o.Name))
+			z.emitf("\tstx %s+1", z.varName(o.Name))
+		}
 
 	case PUSH_A:
 		z.emitf("\tlda #<%s", z.varName(o.Name))
@@ -1031,14 +1251,14 @@ func (z *Gen6502) emitInstr(instr Instr) {
 
 	// ── Cast ──
 	case CAST_W:
-		z.emitFill()
+		z.emitFillW()
 		z.emit("\tldx #0")
 		z.emitSpillW()
 
 	case CAST_B:
 		z.emitFillW()
-		//  already has the low byte
-		z.emitSpill()
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	// ── Stack ──
 	case DUP:
@@ -1236,7 +1456,12 @@ func (z *Gen6502) emitInstr(instr Instr) {
 
 	// ── Control Flow ──
 	case TAG:
-		z.emitf("%s:", o.Name)
+		if z.currentBank > 0 {
+			z.emitBankf("\t.export %s", o.Name)
+			z.emitBankf("%s:", o.Name)
+		} else {
+			z.emitf("%s:", o.Name)
+		}
 
 	case GO:
 		z.emitf("\tjmp %s", o.Name)
@@ -1252,21 +1477,32 @@ func (z *Gen6502) emitInstr(instr Instr) {
 
 	// ── Procedures ──
 	case ROUTE:
+		z.inFrame = false
+		z.frameSz = 0
+		z.localOff = make(map[string]int)
+		z.localNxt = 0
 		z.emitf("%s:", o.Name)
 
 	case RUN:
 		z.emitf("\tjsr %s", o.Name)
 
-	case FRAME:
-		// 6502 has no frame pointer — skip for now
-		z.emit("\t; FRAME not yet implemented")
-
-	case LOCAL_B, LOCAL_W:
-		// 6502 has no frame pointer — skip for now
-		z.emit("\t; LOCAL not yet implemented")
-
 	case DONE:
+		if z.inFrame {
+			z.emitFrameRestore()
+		}
 		z.emit("\trts")
+
+	case DONE_INTERRUPT:
+		if z.inFrame {
+			z.emitFrameRestore()
+		}
+		z.emit("\trti")
+
+	case DONE_NMI:
+		if z.inFrame {
+			z.emitFrameRestore()
+		}
+		z.emit("\trti")
 
 	// ── Tasks ──
 	case JOB:
@@ -1278,7 +1514,7 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emitf("_plz_task_entry_%s:", o.Name)
 
 	case PRIORITY:
-		z.emitf("\t; PRIORITY %d", o.Num)
+		// Handled in scanProg; no code emission needed.
 
 	case BYE:
 		// Mark current task DEAD (3), then call scheduler
@@ -1291,8 +1527,12 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emit("\tadc #2")           // +2 (state offset)
 		z.emit("\ttax")
 		z.emit("\tlda #3")           // DEAD
-		z.emit("\tsta _plz_tcbs,x")
+		z.emit("\tsta $80,x")
 		z.emit("\tjmp _plz_scheduler")
+
+	case YIELD:
+		// Yield: call scheduler (task stays READY)
+		z.emit("\tjsr _plz_scheduler")
 
 	case SLEEP:
 		// Pop sleep duration from data stack, store in current task's
@@ -1306,16 +1546,24 @@ func (z *Gen6502) emitInstr(instr Instr) {
 		z.emit("\tadc #3")            // +3 (sleep offset)
 		z.emit("\ttax")
 		z.emit("\tpla")
-		z.emit("\tsta _plz_tcbs,x")
+		z.emit("\tsta $80,x")
 		z.emit("\tjmp _plz_scheduler")
 
 	case STOP:
-		// Suspend named task
-		z.emitf("\t; STOP %s", o.Name)
+		// Suspend named task: set state to 1 (SUSPENDED)
+		z.emitf("\t; STOP %s: set state to SUSPENDED", o.Name)
+		if idx, ok := z.taskNames[o.Name]; ok {
+			z.emitf("\tlda #1")
+		z.emitf("\tsta $%02x", 0x80+idx*8+2)
+	}
 
 	case START:
-		// Resume named task
-		z.emitf("\t; START %s", o.Name)
+		// Resume named task: set state to 0 (READY)
+		z.emitf("\t; START %s: set state to READY", o.Name)
+		if idx, ok := z.taskNames[o.Name]; ok {
+			z.emitf("\tlda #0")
+			z.emitf("\tsta $%02x", 0x80+idx*8+2)
+		}
 
 	// ── Port I/O ──
 	case IN_B:
@@ -1361,9 +1609,11 @@ func (z *Gen6502) emitInstr(instr Instr) {
 
 	// ── Interrupts ──
 	case INT:
-		z.emitf("\t; INT %s not yet implemented", o.Name)
+		z.intHandler = o.Name
+		z.emitf("\t.export %s", o.Name)
 	case NMI:
-		z.emitf("\t; NMI %s not yet implemented", o.Name)
+		z.nmiHandler = o.Name
+		z.emitf("\t.export %s", o.Name)
 	case HLT:
 		z.emit("\tjmp _6502_all_done")
 	case DII:
@@ -1373,16 +1623,28 @@ func (z *Gen6502) emitInstr(instr Instr) {
 
 	// ── Random ──
 	case SEED:
-		z.emit("\t; SEED not yet implemented")
-		z.emit("\tlda #42")
-		z.emitSpill()
+		// LCG: seed = seed * 5 + 1
+		// Compute 4*seed in A, save to scratch, then add seed back
+		z.emit("\tlda _plz_seed")
+		z.emit("\tasl")           // *2
+		z.emit("\tasl")           // *4
+		z.emit("\tsta $04")       // save 4*seed
+		z.emit("\tlda _plz_seed")
+		z.emit("\tclc")
+		z.emit("\tadc $04")       // + seed = *5
+		z.emit("\tadc #1")        // +1
+		z.emit("\tsta _plz_seed") // store new seed
+		z.emit("\tldx #0")
+		z.emitSpillW()
 
 	// ── Bank Switching ──
 	case BANK:
+		z.currentBank = int(o.Num)
 		if z.cfg.NES {
-			z.emitf("\t; BANK %d (MMC5 compile-time bank directive — assembler does not yet support multi-bank)", o.Num)
-		} else {
-			z.emitf("\t; BANK %d not implemented", o.Num)
+			if z.currentBank > 0 {
+				z.emitf("\t.export _plz_bank_%d", z.currentBank)
+				z.emitf("_plz_bank_%d:", z.currentBank)
+			}
 		}
 	case SWITCH:
 		if z.cfg.NES {
@@ -1390,18 +1652,36 @@ func (z *Gen6502) emitInstr(instr Instr) {
 			z.emitFillW()
 			z.emit("\tsta $5113       ; MMC5: select PRG bank at $8000")
 		} else {
-			z.emit("\t; SWITCH not implemented")
+			z.emitFillW() // pop bank number (keep stack balanced)
+			z.emit("\t; SWITCH (runtime bank switching) not supported on non-NES 6502")
+			z.emit("\t.byte <_switch_not_supported_on_non_nes_6502")
 		}
 
 	// ── Data Emission ──
 	case DATA_B:
-		z.emitf("\t.byte %d", o.Num)
+		if z.currentBank > 0 {
+			z.emitBankf("\t.byte %d", o.Num)
+		} else {
+			z.emitf("\t.byte %d", o.Num)
+		}
 	case DATA_W:
-		z.emitf("\t.word %d", o.Num)
+		if z.currentBank > 0 {
+			z.emitBankf("\t.word %d", o.Num)
+		} else {
+			z.emitf("\t.word %d", o.Num)
+		}
 	case DATA_STR:
-		z.emitf("\t.byte %d", len(o.Str))
-		for _, ch := range o.Str {
-			z.emitf("\t.byte %d", byte(ch))
+		{
+			lines := make([]string, 0, len(o.Str)+1)
+			lines = append(lines, fmt.Sprintf("\t.byte %d", len(o.Str)))
+			for _, ch := range o.Str {
+				lines = append(lines, fmt.Sprintf("\t.byte %d", byte(ch)))
+			}
+			if z.currentBank > 0 {
+				z.bankLines[z.currentBank] = append(z.bankLines[z.currentBank], lines...)
+			} else {
+				z.lines = append(z.lines, lines...)
+			}
 		}
 
 	// ── Pragma ──
@@ -1422,7 +1702,10 @@ func (z *Gen6502) emitInstr(instr Instr) {
 			z.emit("\tldx #$60")
 			z.emitSpillW()
 		} else {
-			z.emit("\t; SRAM_ON not implemented on 6502")
+			// Push VarBase as SRAM base for memory copy
+			z.emitf("\tlda #<%d", z.cfg.VarBase)
+			z.emitf("\tldx #>%d", z.cfg.VarBase)
+			z.emitSpillW()
 		}
 	case SRAM_OFF:
 		if z.cfg.NES {
@@ -1430,12 +1713,32 @@ func (z *Gen6502) emitInstr(instr Instr) {
 			z.emit("\tlda #$00")
 			z.emit("\tsta $5104")
 		} else {
-			z.emit("\t; SRAM_OFF not implemented on 6502")
+			z.emit("\t; SRAM_OFF: no-op on non-NES 6502")
 		}
 	case SAVE:
-		z.emit("\t; SAVE not yet implemented")
+		// Stack: [dest, src, len] — pop len, src, dest; copy src→dest
+		z.emitFillW()
+		z.emit("\tsta $08")
+		z.emit("\tstx $09")
+		z.emitFillW()
+		z.emit("\tsta $0a")
+		z.emit("\tstx $0b")
+		z.emitFillW()
+		z.emit("\tsta $02")
+		z.emit("\tstx $03")
+		z.emit("\tjsr _plz_memcpy")
 	case LOAD:
-		z.emit("\t; LOAD not yet implemented")
+		// Stack: [src, dest, len] — pop len, dest, src; copy src→dest
+		z.emitFillW()
+		z.emit("\tsta $08")
+		z.emit("\tstx $09")
+		z.emitFillW()
+		z.emit("\tsta $02")
+		z.emit("\tstx $03")
+		z.emitFillW()
+		z.emit("\tsta $0a")
+		z.emit("\tstx $0b")
+		z.emit("\tjsr _plz_memcpy")
 
 	default:
 		z.emitf("\t; UNKNOWN INSTR %d", op)
@@ -1510,11 +1813,31 @@ func (z *Gen6502) emitFillW() {
 	z.emit("\tlda ($00),y")
 }
 
+// emitFrameRestore restores the frame pointer and stack for a reentrant procedure.
+func (z *Gen6502) emitFrameRestore() {
+	// SP = FP + frameSz (skip past locals to saved FP)
+	z.emit("\tlda $0f")
+	z.emitf("\tclc\n\tadc #%d", z.frameSz)
+	z.emit("\ttax")
+	z.emit("\ttxs")
+	// Pop old frame pointer
+	z.emit("\tpla")
+	z.emit("\tsta $0f")
+	z.emit("\tpla")
+	z.emit("\tsta $0e")
+	z.inFrame = false
+	z.frameSz = 0
+	z.localOff = make(map[string]int)
+	z.localNxt = 0
+}
+
 // Assemble6502 assembles 6502 assembly text into binary code.
 // For NES configs, the iNES header and vector table are prepended/appended.
-func Assemble6502(cfg Gen6502Config, code string) ([]byte, error) {
+// bankLines is per-bank assembly texts (key = bank number, 1+ for data banks).
+func Assemble6502(cfg Gen6502Config, code string, bankLines map[int]string) ([]byte, error) {
+	// Assemble code bank at cfg.Origin (typically $C000 for NES).
 	r := bytes.NewReader([]byte(code))
-	assembly, _, err := asm.Assemble(r, "plz", cfg.Origin, nil, 0)
+	assembly, sourceMap, err := asm.Assemble(r, "plz", cfg.Origin, nil, 0)
 	if err != nil {
 		return nil, fmt.Errorf("assembly failed: %w", err)
 	}
@@ -1523,35 +1846,96 @@ func Assemble6502(cfg Gen6502Config, code string) ([]byte, error) {
 	}
 	bin := assembly.Code
 	if cfg.NES {
-		// PRG ROM occupies $8000-$FFFF in CPU address space.
-		// Code starts at cfg.Origin (typically $C000).
-		// We need to pre-pad from $8000 to origin, then post-pad to $FFFF,
-		// then add vectors at $FFFA-$FFFF.
+		const bankSize = 0x4000 // 16KB per PRG bank
 		const prgStart = 0x8000
-		prgSize := 0x10000 - prgStart // 32KB = 2×16KB banks
-		offset := int(cfg.Origin - prgStart)
+		const dataBankOrigin = 0x8000
 
-		if offset < 0 {
-			return nil, fmt.Errorf("NES origin must be >= $8000, got $%04X", cfg.Origin)
+		// Assemble data banks and store their binaries.
+		type dataBankBin struct {
+			bankNum int
+			code    []byte
 		}
-		if offset+len(bin) > prgSize-6 {
-			return nil, fmt.Errorf("code+vectors exceed PRG-ROM at $%04X: %d bytes", cfg.Origin, len(bin))
+		var dataBanks []dataBankBin
+		if len(bankLines) > 0 {
+			for bankNum := 1; bankNum <= highestBank(bankLines); bankNum++ {
+				bk, ok := bankLines[bankNum]
+				if !ok || bk == "" {
+					continue
+				}
+				bankAsm := "\t.org $8000\n" + bk
+				bankR := bytes.NewReader([]byte(bankAsm))
+				bankAssembly, bankSM, err := asm.Assemble(bankR, "plz", dataBankOrigin, nil, 0)
+				if err != nil {
+					return nil, fmt.Errorf("data bank %d assembly failed: %w", bankNum, err)
+				}
+				if len(bankAssembly.Errors) > 0 {
+					return nil, fmt.Errorf("data bank %d assembly errors: %s", bankNum, strings.Join(bankAssembly.Errors, "; "))
+				}
+				dataBanks = append(dataBanks, dataBankBin{bankNum: bankNum, code: bankAssembly.Code})
+				// Merge source map from this bank.
+				sourceMap.Merge(bankSM)
+			}
 		}
 
+		// Determine total PRG size in banks.
+		// The last bank is always the fixed bank at $C000 (contains code and vectors).
+		// Data banks (if any) go into switchable slots before the fixed bank.
+		// Minimum is 2 banks (one switchable bank 0, one fixed bank 1) even without data.
+		maxDataBank := 0
+		for _, db := range dataBanks {
+			if db.bankNum > maxDataBank {
+				maxDataBank = db.bankNum
+			}
+		}
+		prgBanks := maxDataBank + 2 // data banks + fixed bank, minimum 2
+		prgSize := prgBanks * bankSize
+
+		// The code bank is the fixed bank at $C000-$FFFF.
+		// Its offset within the PRG data is the start of the last bank.
+		fixedBankStart := (prgBanks - 1) * bankSize
+		codeInBankOffset := int(cfg.Origin - 0xC000)
+		codePRGOffset := fixedBankStart + codeInBankOffset
+		if codeInBankOffset < 0 || codePRGOffset+len(bin) > prgSize-6 {
+			return nil, fmt.Errorf("code bank at $%04X too large: %d bytes, PRG size %d", cfg.Origin, len(bin), prgSize)
+		}
+
+		// Allocate PRG data. Each bank is bankSize bytes.
 		prgData := make([]byte, prgSize)
-		copy(prgData[offset:], bin) // code at its CPU address
 
+		// Copy code bank into its PRG slot (fixed bank at $C000).
+		copy(prgData[codePRGOffset:], bin)
+
+		// Copy data banks into their PRG slots.
+		for _, db := range dataBanks {
+			bankSlot := db.bankNum * bankSize
+			if bankSlot+bankSize <= prgSize {
+				copy(prgData[bankSlot:], db.code)
+			}
+		}
+
+		// Look up handler addresses from source map exports.
+		var nmiAddr, irqAddr uint16
+		for _, ex := range sourceMap.Exports {
+			if cfg.NmiHandlerName != "" && ex.Label == cfg.NmiHandlerName {
+				nmiAddr = ex.Address
+			}
+			if cfg.IntHandlerName != "" && ex.Label == cfg.IntHandlerName {
+				irqAddr = ex.Address
+			}
+		}
+		// NMI vector at $FFFA (within the last PRG bank)
+		vecOffset := fixedBankStart + bankSize - 6
+		prgData[vecOffset] = byte(nmiAddr)
+		prgData[vecOffset+1] = byte(nmiAddr >> 8)
+		// Reset vector at $FFFC
 		resetVec := cfg.Origin
-		prgData[prgSize-6] = 0x00 // NMI low
-		prgData[prgSize-5] = 0x00 // NMI high
-		prgData[prgSize-4] = byte(resetVec)
-		prgData[prgSize-3] = byte(resetVec >> 8)
-		prgData[prgSize-2] = 0x00 // IRQ low
-		prgData[prgSize-1] = 0x00 // IRQ high
+		prgData[vecOffset+2] = byte(resetVec)
+		prgData[vecOffset+3] = byte(resetVec >> 8)
+		// IRQ vector at $FFFE
+		prgData[vecOffset+4] = byte(irqAddr)
+		prgData[vecOffset+5] = byte(irqAddr >> 8)
 
-		prgBanks := prgSize / 0x4000 // 2 banks for 32KB
-		// iNES header byte 6: flags6[3:0] = mapper low nibble, [7:4] = flags
-		// flags: bit0=1 for vertical mirroring (MMC5 uses vertical by default)
+		// iNES header
 		flags6 := byte(0x01 | ((5 & 0x0F) << 4)) // vertical mirroring | MMC5 low nibble
 		flags7 := byte((5 >> 4) & 0x0F)           // MMC5 high nibble
 		header := []byte{
@@ -1566,4 +1950,15 @@ func Assemble6502(cfg Gen6502Config, code string) ([]byte, error) {
 		bin = append(header, prgData...)
 	}
 	return bin, nil
+}
+
+// highestBank returns the highest bank number in the bankLines map.
+func highestBank(bankLines map[int]string) int {
+	max := 0
+	for n := range bankLines {
+		if n > max {
+			max = n
+		}
+	}
+	return max
 }

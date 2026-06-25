@@ -1560,14 +1560,30 @@ func (g *Group) Parse(parser *Parser) error {
 		if err := g.While.Expression.Parse(parser); err != nil {
 			return err
 		}
-		parser.Skip(KeywordDo)
+		if parser.Skip(KeywordDo) == nil {
+			// Single-statement form: parse one statement, no END
+			var s Statement
+			if err := s.Parse(parser); err != nil {
+				return err
+			}
+			g.Statements = append(g.Statements, s)
+			return nil
+		}
 	case KeywordFor:
 		parser.Next()
 		g.For = &For{}
 		if err := g.For.Parse(parser); err != nil {
 			return err
 		}
-		parser.Skip(KeywordDo)
+		if parser.Skip(KeywordDo) == nil {
+			// Single-statement form: parse one statement, no END
+			var s Statement
+			if err := s.Parse(parser); err != nil {
+				return err
+			}
+			g.Statements = append(g.Statements, s)
+			return nil
+		}
 	case KeywordCase:
 		parser.Next()
 		g.Case = &Case{}

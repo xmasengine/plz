@@ -67,8 +67,11 @@ type Z80Gen struct {
 	needSleep bool
 	needSave  bool
 	needLoad  bool
-	taskCount int
-	taskNames map[string]int // name → index mapping for STOP/START
+	taskCount        int
+	taskNames        map[string]int // name → index mapping for STOP/START
+	taskEntryLabels  []string       // entry labels in task index order
+	taskPriorities   []int          // one per task, in task index order
+	pendingPriority  int            // -1 when none
 }
 
 // NewZ80Gen creates a Z80Gen with the given config.
@@ -116,6 +119,7 @@ func (z *Z80Gen) Gen(prog *Program) string {
 
 // scanProg does a first pass to collect variable names and detect requirements.
 func (z *Z80Gen) scanProg(prog *Program) {
+	z.pendingPriority = -1
 	for _, instr := range prog.Instrs {
 		consumed := false
 
@@ -153,10 +157,21 @@ func (z *Z80Gen) scanProg(prog *Program) {
 		case ROUTE:
 			consumed = true
 
+		case PRIORITY:
+			z.pendingPriority = int(instr.Operand.Num)
+			consumed = true
+
 		case JOB:
 			z.needMul = true   // scheduler multiplies TCB index by 8
 			z.needSched = true
 			z.taskNames[instr.Operand.Name] = z.taskCount
+			z.taskEntryLabels = append(z.taskEntryLabels, instr.Operand.Name)
+			if z.pendingPriority >= 0 {
+				z.taskPriorities = append(z.taskPriorities, z.pendingPriority)
+				z.pendingPriority = -1
+			} else {
+				z.taskPriorities = append(z.taskPriorities, 0)
+			}
 			z.taskCount++
 			consumed = true
 
@@ -171,12 +186,14 @@ func (z *Z80Gen) scanProg(prog *Program) {
 			z.needMod = true
 		case IS_B, IS_W:
 			z.needCmp = true
-		case BYE:
+		case BYE, YIELD:
 			z.needMul = true   // scheduler multiplies TCB index by 8
 			z.needSched = true
 		case SLEEP:
 			z.needMul = true   // scheduler multiplies TCB index by 8
 			z.needSleep = true
+			z.needSched = true
+		case STOP, START:
 			z.needSched = true
 		case SAVE:
 			z.needSave = true
@@ -228,7 +245,7 @@ func (z *Z80Gen) localAddr(name string) string {
 		if off == 0 {
 			return "(ix)"
 		}
-		return fmt.Sprintf("(ix+%d)", off)
+		return fmt.Sprintf("(ix%+d)", off)
 	}
 	return ""
 }
@@ -268,6 +285,9 @@ func (z *Z80Gen) emitStart(dataStackBase uint16) {
 	z.emit("\tim 1")
 	z.emitf("\tld sp, %d", z.cfg.StackBase)
 	z.emitf("\tld hl, %d", dataStackBase)
+	if z.needSched {
+		z.emit("\tcall _plz_init_tasks")
+	}
 }
 
 func (z *Z80Gen) emitRuntime() {
@@ -422,61 +442,55 @@ func (z *Z80Gen) emitRuntime() {
 
 	if z.needSave {
 		z.emit("_plz_save:")
-		z.emit("\t// Stack: [dest, src, len] — 16-bit values stored little-endian")
-		z.emit("\t// Pop length into BC")
+		z.emit("\t// TOS in DE = len, stack: [..., dest, src]")
+		z.emit("\tld b, d")
+		z.emit("\tld c, e          // BC = length")
+		z.emit("\t// Pop src from stack")
 		z.emit("\tdec hl")
-		z.emit("\tld b, (hl)      // B = len_high")
+		z.emit("\tld d, (hl)       // D = src_high")
 		z.emit("\tdec hl")
-		z.emit("\tld c, (hl)      // C = len_low  → BC = length")
-		z.emit("\t// Pop src into IX")
-		z.emit("\tdec hl")
-		z.emit("\tld d, (hl)      // D = src_high")
-		z.emit("\tdec hl")
-		z.emit("\tld e, (hl)      // E = src_low  → DE = src")
+		z.emit("\tld e, (hl)       // E = src_low  → DE = src")
 		z.emit("\tpush de")
-		z.emit("\tpop ix          // IX = src")
-		z.emit("\t// Pop dest into DE")
+		z.emit("\tpop ix           // IX = src")
+		z.emit("\t// Pop dest from stack")
 		z.emit("\tdec hl")
-		z.emit("\tld d, (hl)      // D = dest_high")
+		z.emit("\tld d, (hl)       // D = dest_high")
 		z.emit("\tdec hl")
-		z.emit("\tld e, (hl)      // E = dest_low  → DE = dest")
-		z.emit("\t// Save data stack pointer HL, set HL=src from IX, copy")
+		z.emit("\tld e, (hl)       // E = dest_low  → DE = dest")
+		z.emit("\t// Copy src→dest, BC bytes")
 		z.emit("\tpush hl")
 		z.emit("\tpush ix")
-		z.emit("\tpop hl          // HL = src")
-		z.emit("\tldir            // copy (HL)→(DE), BC bytes")
-		z.emit("\tpop hl          // HL = data stack pointer (restored)")
+		z.emit("\tpop hl           // HL = src")
+		z.emit("\tldir             // copy (HL)→(DE), BC bytes")
+		z.emit("\tpop hl           // HL = data stack pointer (restored)")
 		z.emit("\tret")
 		z.emit("")
 	}
 
 	if z.needLoad {
 		z.emit("_plz_load:")
-		z.emit("\t// Stack: [src, dest, len] — 16-bit values stored little-endian")
-		z.emit("\t// Pop length into BC")
+		z.emit("\t// TOS in DE = len, stack: [..., dest, src]")
+		z.emit("\tld b, d")
+		z.emit("\tld c, e          // BC = length")
+		z.emit("\t// Pop dest from stack")
 		z.emit("\tdec hl")
-		z.emit("\tld b, (hl)      // B = len_high")
+		z.emit("\tld d, (hl)       // D = dest_high")
 		z.emit("\tdec hl")
-		z.emit("\tld c, (hl)      // C = len_low  → BC = length")
-		z.emit("\t// Pop dest into IX")
-		z.emit("\tdec hl")
-		z.emit("\tld d, (hl)      // D = dest_high")
-		z.emit("\tdec hl")
-		z.emit("\tld e, (hl)      // E = dest_low  → DE = dest")
+		z.emit("\tld e, (hl)       // E = dest_low  → DE = dest")
 		z.emit("\tpush de")
-		z.emit("\tpop ix          // IX = dest")
-		z.emit("\t// Pop src into DE")
+		z.emit("\tpop ix           // IX = dest")
+		z.emit("\t// Pop src from stack")
 		z.emit("\tdec hl")
-		z.emit("\tld d, (hl)      // D = src_high")
+		z.emit("\tld d, (hl)       // D = src_high")
 		z.emit("\tdec hl")
-		z.emit("\tld e, (hl)      // E = src_low  → DE = src")
-		z.emit("\t// Save data stack pointer, set HL=src, DE=dest, copy")
+		z.emit("\tld e, (hl)       // E = src_low  → DE = src")
+		z.emit("\t// Copy src→dest, BC bytes")
 		z.emit("\tpush hl")
-		z.emit("\tex de, hl       // HL = src, DE = (old HL)")
+		z.emit("\tex de, hl        // HL = src, DE = (old HL)")
 		z.emit("\tpush ix")
-		z.emit("\tpop de          // DE = dest")
-		z.emit("\tldir            // copy (HL)→(DE), BC bytes")
-		z.emit("\tpop hl          // HL = data stack pointer (restored)")
+		z.emit("\tpop de           // DE = dest")
+		z.emit("\tldir             // copy (HL)→(DE), BC bytes")
+		z.emit("\tpop hl           // HL = data stack pointer (restored)")
 		z.emit("\tret")
 		z.emit("")
 	}
@@ -550,29 +564,44 @@ func (z *Z80Gen) emitScheduler() {
 	z.emit("// -------------------------------------------------------------------")
 	z.emit("")
 	z.emit(`// TCB layout (8 bytes per task):
-// +0: SP (2 bytes)
+// +0: SP_low (1 byte) — CPU stack pointer
+// +1: SP_high (1 byte) — CPU stack pointer
 // +2: state (1 byte: 0=READY, 1=SUSPENDED, 2=SLEEPING, 3=DEAD)
 // +3: sleep counter (1 byte)
 // +4: priority (1 byte)
-// +5: stack base (2 bytes, reserved)
+// +5: DP_low (1 byte) — data stack pointer (HL)
+// +6: DP_high (1 byte) — data stack pointer (HL)
 // +7: reserved`)
 	z.emit("")
 	z.emit("_plz_scheduler:")
-	z.emit("\tpush hl        // save data stack pointer in TCB")
+	z.emit("\tld (_plz_sp_save), sp   // save CPU stack pointer")
+	z.emit("\tpush hl                 // save data stack pointer")
+	z.emit("")
+	z.emit("\t// Compute TCB address for current task")
 	z.emit("\tld hl, (_plz_current_task)")
 	z.emit("\tld h, 0")
 	z.emit("\tld de, 8")
 	z.emit("\tcall _plz_mul")
 	z.emit("\tld de, _plz_tcbs")
-	z.emit("\tadd hl, de     // HL = TCB entry for current task")
-	z.emit("\tpop de         // DE = saved data stack pointer")
-	z.emit("\tld (hl), e     // save SP low byte")
+	z.emit("\tadd hl, de              // HL = &TCB[current_task]")
+	z.emit("")
+	z.emit("\t// Store SP at +0/+1")
+	z.emit("\tld de, (_plz_sp_save)")
+	z.emit("\tld (hl), e")
 	z.emit("\tinc hl")
-	z.emit("\tld (hl), d     // save SP high byte")
+	z.emit("\tld (hl), d              // HL now at +1")
+	z.emit("")
+	z.emit("\t// Store DP at +5/+6 (skip state, sleep, priority)")
+	z.emit("\tld de, 4")
+	z.emit("\tadd hl, de              // HL = &TCB[+5]")
+	z.emit("\tpop de                  // DE = saved data stack pointer")
+	z.emit("\tld (hl), e")
+	z.emit("\tinc hl")
+	z.emit("\tld (hl), d              // DP stored")
 	z.emit("")
 	z.emit("\t// Decrement sleep counters")
 	z.emit("\tld hl, _plz_tcbs+3")
-	z.emit("\tld b, 16")
+	z.emitf("\tld b, %d", z.taskCount)
 	z.emit("_plz_sch_sleep_loop:")
 	z.emit("\tld a, (hl)")
 	z.emit("\tor a")
@@ -596,17 +625,19 @@ func (z *Z80Gen) emitScheduler() {
 	z.emit("")
 	z.emit("\t// Scan for the best READY task")
 	z.emit("\tld hl, (_plz_current_task)")
+	z.emit("\tld h, 0")
 	z.emit("\tinc hl          // start from next slot")
-	z.emit("\tld a, 16")
-	z.emit("\tcp l")
-	z.emit("\tjr nc, _plz_sch_scan")
+	z.emit("\tld a, l")
+	z.emitf("\tcp %d", z.taskCount)
+	z.emit("\tjr c, _plz_sch_scan")  // no wrap if l < taskCount
 	z.emit("\tld hl, 0       // wrap around")
 	z.emit("_plz_sch_scan:")
-	z.emit("\tld c, l         // C = candidate, start with current+1")
+	z.emit("\tld c, l         // C = candidate task index")
+	z.emitf("\tld b, %d        // scan all slots", z.taskCount)
+	z.emit("\t// Store initial best priority (worst)")
 	z.emit("\tld a, 15")
-	z.emit("\tld b, 16        // scan all 16 slots")
+	z.emit("\tld (_plz_best_priority), a")
 	z.emit("_plz_sch_scan_loop:")
-	z.emit("\tld hl, _plz_tcbs+2")
 	z.emit("\tld d, 0")
 	z.emit("\tld e, c")
 	z.emit("\tld hl, 8")
@@ -620,51 +651,121 @@ func (z *Z80Gen) emitScheduler() {
 	z.emit("\t// READY — check priority")
 	z.emit("\tinc hl")
 	z.emit("\tinc hl         // HL = &priority")
-	z.emit("\tld a, (hl)")
-	z.emit("\tcp b")
+	z.emit("\tld a, (hl)     // A = candidate priority")
+	z.emit("\t// Compare with best priority (memory)")
+	z.emit("\tpush hl")
+	z.emit("\tld hl, _plz_best_priority")
+	z.emit("\tcp (hl)        // compare A with best")
+	z.emit("\tpop hl")
 	z.emit("\tjr nc, _plz_sch_skip")
-	z.emit("\tld b, a        // new best priority")
-	z.emit("\tld l, c")
-	z.emit("\tld h, 0")
-	z.emit("\tld (_plz_current_task), hl")
+	z.emit("\tld (_plz_best_priority), a   // new best")
+	z.emit("\tld a, c")
+	z.emit("\tld (_plz_current_task), a")
 	z.emit("_plz_sch_skip:")
+	z.emit("\tpop hl")
 	z.emit("\tinc c")
-	z.emit("\tld a, 16")
+	z.emitf("\tld a, %d", z.taskCount)
 	z.emit("\tcp c")
 	z.emit("\tjr nz, _plz_sch_next")
 	z.emit("\tld c, 0")
 	z.emit("_plz_sch_next:")
 	z.emit("\tdjnz _plz_sch_scan_loop")
 	z.emit("")
+	z.emit("\t// Restore chosen task's SP and DP")
 	z.emit("\tld hl, (_plz_current_task)")
 	z.emit("\tld h, 0")
 	z.emit("\tld de, 8")
 	z.emit("\tcall _plz_mul")
 	z.emit("\tld de, _plz_tcbs")
-	z.emit("\tadd hl, de")
-	z.emit("\tex de, hl      // DE = TCB of chosen task")
-	z.emit("\tld a, (de)")
-	z.emit("\tld l, a")
-	z.emit("\tinc de")
-	z.emit("\tld a, (de)")
-	z.emit("\tld h, a        // HL = saved SP")
-	z.emit("\tdec de")
-	z.emit("\tld a, (de)")
-	z.emit("\tcp 0           // check state — DEAD?")
-	z.emit("\tjr z, _plz_sch_resume")
-	z.emit("\t// If no task can run, halt")
-	z.emit("_plz_sch_halt:")
-	z.emit("\tld sp, hl")
-	z.emit("\tret             // jump to chosen task")
+	z.emit("\tadd hl, de              // HL = &TCB[chosen_task]")
 	z.emit("")
-	z.emit("_plz_sch_resume:")
+	z.emit("\t// Load SP from +0/+1")
+	z.emit("\tld e, (hl)")
+	z.emit("\tinc hl")
+	z.emit("\tld d, (hl)              // DE = saved SP")
+	z.emit("")
+	z.emit("\t// Check state at +2 for DEAD")
+	z.emit("\tinc hl")
+	z.emit("\tld a, (hl)              // A = state")
+	z.emit("\tcp 3                    // DEAD?")
+	z.emit("\tjr z, _plz_sch_halt")
+	z.emit("")
+	z.emit("\t// Load DP from +5/+6")
+	z.emit("\tinc hl") // +3 (sleep)
+	z.emit("\tinc hl") // +4 (priority)
+	z.emit("\tinc hl") // +5 (DP_low)
+	z.emit("\tld a, (hl)")
+	z.emit("\tinc hl")
+	z.emit("\tld h, (hl)")
+	z.emit("\tld l, a                 // HL = saved data stack pointer")
+	z.emit("")
+	z.emit("\t// Restore SP and return")
+	z.emit("\tex de, hl")
 	z.emit("\tld sp, hl")
+	z.emit("\tld h, d")
+	z.emit("\tld l, e")
+	z.emit("\tret")
+	z.emit("")
+	z.emit("_plz_sch_halt:")
+	z.emit("\t// No runnable task — halt")
+	z.emit("\tdi")
+	z.emit("\thalt")
+	z.emit("\tjr _plz_sch_halt")
+	z.emit("")
+	// Task init routine — called once at boot before first scheduler call
+	z.emit("_plz_init_tasks:")
+	z.emit("\tld (_plz_sp_save), hl   // save data stack pointer")
+	z.emitf("\t// Init %d tasks, 128 bytes stack each", z.taskCount)
+	z.emit("\t// Zero TCBs")
+	z.emit("\tld hl, _plz_tcbs")
+	z.emit("\tld de, _plz_tcbs+1")
+	z.emit("\tld bc, 127")
+	z.emit("\tld (hl), 0")
+	z.emit("\tldir")
+	z.emit("")
+	// Set priorities from stored values
+	for i, p := range z.taskPriorities {
+		if p != 0 {
+			z.emitf("\tld a, %d", p)
+			z.emitf("\tld (_plz_tcbs+%d), a", i*8+4)
+		}
+	}
+	z.emit("")
+	z.emitf("\t// Set up stacks and push entry addresses for each task")
+	for i, name := range z.taskEntryLabels {
+		z.emitf("\tld sp, _plz_task%d_stack+127", i)
+		z.emitf("\tld hl, _plz_task_entry_%s", name)
+		z.emit("\tpush hl")
+		z.emit("\t// Save SP in TCB")
+		z.emitf("\tld (_plz_tcbs+%d), sp", i*8)
+		z.emit("\t// Save DP in TCB (data stack base)")
+		z.emit("\tpush hl")
+		z.emitf("\tld hl, (_plz_sp_save)")
+		z.emitf("\tld (_plz_tcbs+%d), hl", i*8+5)
+		z.emit("\tpop hl")
+		z.emit("")
+	}
+	// Pick the task with the lowest priority number (highest priority)
+	bestIdx := 0
+	bestPri := 15
+	for i, p := range z.taskPriorities {
+		if p < bestPri {
+			bestPri = p
+			bestIdx = i
+		}
+	}
+	z.emitf("\t// Start task %d (highest priority)", bestIdx)
+	z.emit("\tld hl, (_plz_sp_save)   // restore data stack pointer")
+	z.emitf("\tld a, %d", bestIdx)
+	z.emit("\tld (_plz_current_task), a")
+	z.emitf("\tld sp, (_plz_tcbs+%d)", bestIdx*8)
 	z.emit("\tret")
 	z.emit("")
 	z.emit("// TCB and current task index")
-	z.emit("_plz_current_task: db 0")
-	z.emit("_plz_tcbs: ds 128")
-	z.emit("")
+z.emit("_plz_current_task: db 0")
+z.emit("_plz_tcbs: ds 128")
+z.emit("_plz_sp_save: ds 2      // temporary for saving SP in scheduler")
+z.emit("_plz_best_priority: ds 1 // temporary for scheduler scan")
 }
 
 // ── Instruction emission ────────────────────────────────────────────
@@ -734,7 +835,7 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		if la := z.localAddr(o.Name); la != "" {
 			z.emitf("\tld e, %s", la)
 			off := z.localOff[o.Name]
-			z.emitf("\tld d, (ix+%d)", off+1)
+			z.emitf("\tld d, (ix%+d)", off+1)
 		} else {
 			z.emitf("\tld de, (%s)", z.varName(o.Name))
 		}
@@ -755,7 +856,7 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 			z.emitf("\tld %s, a", la)
 			off := z.localOff[o.Name]
 			z.emit("\tld a, d")
-			z.emitf("\tld (ix+%d), a", off+1)
+			z.emitf("\tld (ix%+d), a", off+1)
 		} else {
 			z.emitf("\tld (%s), de", z.varName(o.Name))
 		}
@@ -1123,16 +1224,17 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 		z.emit("\tpush ix")
 		z.emit("\tld ix, 0")
 		z.emit("\tadd ix, sp")
-		z.emitf("\tld hl, -%d", o.Num)
-		z.emit("\tadd hl, sp")
-		z.emit("\tld sp, hl")
+		// Allocate frame without clobbering HL (data stack pointer)
+		for i := 0; i < int(o.Num); i++ {
+			z.emit("\tdec sp")
+		}
 
 	case LOCAL_B:
-		z.localOff[o.Name] = z.localNxt
+		z.localOff[o.Name] = -z.frameSz + z.localNxt
 		z.localNxt += 1
 
 	case LOCAL_W:
-		z.localOff[o.Name] = z.localNxt
+		z.localOff[o.Name] = -z.frameSz + z.localNxt
 		z.localNxt += 2
 
 	// ── Procedures ──
@@ -1178,48 +1280,64 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 
 	// ── Tasks ──
 	case JOB:
-		z.emitf("%s:", o.Name)
+		z.emitf("_plz_task_entry_%s:", o.Name)
 
 	case PRIORITY:
 		// Handled at scan/task init time; ignored in code emission.
 
 	case BYE:
+		z.emit("\t// BYE: mark current task DEAD, then call scheduler")
+		z.emit("\tpush hl         // save data stack pointer")
+		z.emit("\tld hl, (_plz_current_task)")
+		z.emit("\tld h, 0")
+		z.emit("\tld de, 8")
+		z.emit("\tcall _plz_mul")
+		z.emit("\tld de, _plz_tcbs+2")
+		z.emit("\tadd hl, de")
+		z.emit("\tld (hl), 3")
+		z.emit("\tpop hl          // restore data stack pointer")
 		z.emit("\tjp _plz_scheduler")
+
+	case YIELD:
+		z.emit("\t// YIELD: call scheduler (task stays READY)")
+		z.emit("\tcall _plz_scheduler")
 
 	case SLEEP:
 		// Pop ticks from data stack, write to TCB sleep counter, call scheduler
-		z.emit("\t// SLEEP: pop tick count from data stack")
-		z.emit("\t// Ticks in DE, write to current TCB sleep counter and call scheduler")
-		z.emit("\tpush hl")
+		z.emit("\t// SLEEP: pop tick count from data stack, write to TCB sleep counter")
+		z.emit("\tld a, e         // A = tick count (low byte)")
+		z.emit("\tpush af         // save tick count")
+		z.emit("\tpush hl         // save data stack pointer")
 		z.emit("\tld hl, (_plz_current_task)")
 		z.emit("\tld h, 0")
 		z.emit("\tld de, 8")
 		z.emit("\tcall _plz_mul")
 		z.emit("\tld de, _plz_tcbs+3")
 		z.emit("\tadd hl, de      // HL = &TCB[current].sleep")
-		z.emit("\tpop de          // DE = saved HL (data stack ptr)")
-		z.emit("\tpush de")
-		z.emit("\tex de, hl       // DE = &sleep, HL = data stack ptr")
-		// TOS (tick count) is in DE cache.
-		z.emit("\tld a, e         // low byte of tick count")
-		z.emit("\tld (de), a      // write sleep counter")
-		z.emit("\tpop hl          // restore data stack pointer")
+		z.emit("\tpop de          // DE = saved data stack pointer")
+		z.emit("\tpop af          // A = tick count")
+		z.emit("\tld (hl), a      // write sleep counter")
+		z.emit("\tld hl, de       // HL = data stack pointer")
 		z.emit("\tcall _plz_scheduler")
 
 	case STOP:
 		z.emitf("\t// STOP %s: set state to SUSPENDED", o.Name)
 		z.emitf("\tld a, 1")
 		if idx, ok := z.taskNames[o.Name]; ok {
+			z.emit("\tpush hl")
 			z.emitf("\tld hl, _plz_tcbs+%d", idx*8+2)
 			z.emit("\tld (hl), a")
+			z.emit("\tpop hl")
 		}
 
 	case START:
 		z.emitf("\t// START %s: set state to READY", o.Name)
 		z.emitf("\tld a, 0")
 		if idx, ok := z.taskNames[o.Name]; ok {
+			z.emit("\tpush hl")
 			z.emitf("\tld hl, _plz_tcbs+%d", idx*8+2)
 			z.emit("\tld (hl), a")
+			z.emit("\tpop hl")
 		}
 
 	// ── Port I/O ──
@@ -1287,7 +1405,7 @@ func (z *Z80Gen) emitInstr(instr Instr) {
 
 	case SWITCH:
 		z.emit("\tld a, e")
-		z.emit("\tout (0xfffd), a")
+		z.emit("\tld (0xfffd), a")
 		z.fill()
 
 	// ── Data Emission ──

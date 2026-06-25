@@ -282,11 +282,9 @@ func TestZ80GenProcedures(t *testing.T) {
 		"push ix",
 		"ld ix, 0",
 		"add ix, sp",
-		"ld hl, -6",
-		"add hl, sp",
-		"ld sp, hl",
-		"ld (ix), a",
-		"ld (ix+1), a",
+		"dec sp",
+		"ld (ix-6), a",
+		"ld (ix-5), a",
 		"call _plz_other",
 		"ld sp, ix",
 		"pop ix",
@@ -423,7 +421,7 @@ func TestZ80GenBankData(t *testing.T) {
 		want []string
 	}{
 		{name: "BANK", prog: &Program{Instrs: []Instr{{Op: BANK, Operand: Operand{Type: OpNumber, Num: 1}}}}, want: []string{"bank 1"}},
-		{name: "SWITCH", prog: &Program{Instrs: []Instr{{Op: SWITCH}}}, want: []string{"ld a, e", "out (0xfffd), a"}},
+		{name: "SWITCH", prog: &Program{Instrs: []Instr{{Op: SWITCH}}}, want: []string{"ld a, e", "ld (0xfffd), a"}},
 		{name: "DATA_B", prog: &Program{Instrs: []Instr{{Op: DATA_B, Operand: Operand{Type: OpNumber, Num: 255}}}}, want: []string{"db 255"}},
 		{name: "DATA_W", prog: &Program{Instrs: []Instr{{Op: DATA_W, Operand: Operand{Type: OpNumber, Num: 0x1234}}}}, want: []string{"dw 4660"}},
 		{name: "SRAM_ON", prog: &Program{Instrs: []Instr{{Op: SRAM_ON}}}, want: []string{"ld a, 8", "ld (0xfffc), a", "ld (hl), e", "inc hl", "ld (hl), d", "inc hl", "ld de, 0x8000"}},

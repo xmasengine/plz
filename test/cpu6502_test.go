@@ -397,6 +397,209 @@ func Test6502_VarCopy(t *testing.T) {
 	}
 }
 
+func Test6502_NmiHandler(t *testing.T) {
+	// Verify that an NMI handler executes correctly on the 6502 emulator.
+	prog := &pir.Program{Instrs: []pir.Instr{
+		{Op: pir.NMI, Operand: pir.Operand{Type: pir.OpName, Name: "my_nmi"}},
+		{Op: pir.ROUTE, Operand: pir.Operand{Type: pir.OpName, Name: "my_nmi"}},
+		{Op: pir.PUSH_B, Operand: pir.Operand{Type: pir.OpNumber, Num: 42}},
+		{Op: pir.OUT_B},
+		{Op: pir.DONE_NMI},
+		{Op: pir.HLT},
+	}}
+	cfg := pir.Default6502Config()
+	gen := pir.NewGen6502(cfg)
+	asmText := gen.Gen(prog)
+
+	// Assemble and get source map with exports
+	r := bytes.NewReader([]byte(asmText))
+	assembly, sourceMap, err := asm.Assemble(r, "test", cfg.Origin, nil, 0)
+	if err != nil || len(assembly.Errors) > 0 {
+		for _, e := range assembly.Errors {
+			t.Logf("asm error: %s", e)
+		}
+		t.Fatalf("assemble: %v\n%s", err, asmText)
+	}
+
+	// Find NMI handler address from exports
+	var nmiAddr uint16
+	for _, ex := range sourceMap.Exports {
+		if ex.Label == "my_nmi" {
+			nmiAddr = ex.Address
+		}
+	}
+	if nmiAddr == 0 {
+		t.Fatal("NMI handler export not found in source map")
+	}
+	t.Logf("NMI handler at $%04X", nmiAddr)
+
+	// Load code into memory
+	mem := cpu.NewFlatMemory()
+	off := int(cfg.Origin)
+	for i, b := range assembly.Code {
+		mem.StoreByte(uint16(off+i), b)
+	}
+	// Set NMI vector at $FFFA
+	mem.StoreByte(0xFFFA, byte(nmiAddr))
+	mem.StoreByte(0xFFFB, byte(nmiAddr>>8))
+
+	emu := cpu.NewCPU(cpu.NMOS, mem)
+	emu.Reg.PC = cfg.Origin
+
+	// Step past the initial jmp to main
+	emu.Step()
+	// Run until the RTI returns (we step the init + HLT)
+	const maxSteps = 5000
+	for i := 0; i < maxSteps; i++ {
+		if emu.Reg.PC == 0xFFFF || emu.Reg.PC == 0x0000 {
+			break
+		}
+		emu.Step()
+	}
+	// Now trigger NMI
+	emu.NMI()
+	// Step through the handler
+	for i := 0; i < maxSteps; i++ {
+		if emu.Reg.PC == 0xFFFF || emu.Reg.PC == 0x0000 {
+			break
+		}
+		emu.Step()
+	}
+	// Check that the NMI handler wrote 42 to output
+	if v := mem.LoadByte(cfg.OutputBase); v != 42 {
+		t.Errorf("expected 42 at output, got %d", v)
+	}
+}
+
+func Test6502_IrqHandler(t *testing.T) {
+	// Verify that an IRQ handler executes correctly on the 6502 emulator.
+	prog := &pir.Program{Instrs: []pir.Instr{
+		{Op: pir.INT, Operand: pir.Operand{Type: pir.OpName, Name: "my_irq"}},
+		{Op: pir.ROUTE, Operand: pir.Operand{Type: pir.OpName, Name: "my_irq"}},
+		{Op: pir.PUSH_B, Operand: pir.Operand{Type: pir.OpNumber, Num: 77}},
+		{Op: pir.OUT_B},
+		{Op: pir.DONE_INTERRUPT},
+		{Op: pir.HLT},
+	}}
+	cfg := pir.Default6502Config()
+	gen := pir.NewGen6502(cfg)
+	asmText := gen.Gen(prog)
+
+	// Assemble and get source map with exports
+	r := bytes.NewReader([]byte(asmText))
+	assembly, sourceMap, err := asm.Assemble(r, "test", cfg.Origin, nil, 0)
+	if err != nil || len(assembly.Errors) > 0 {
+		for _, e := range assembly.Errors {
+			t.Logf("asm error: %s", e)
+		}
+		t.Fatalf("assemble: %v\n%s", err, asmText)
+	}
+
+	// Find IRQ handler address from exports
+	var irqAddr uint16
+	for _, ex := range sourceMap.Exports {
+		if ex.Label == "my_irq" {
+			irqAddr = ex.Address
+		}
+	}
+	if irqAddr == 0 {
+		t.Fatal("IRQ handler export not found in source map")
+	}
+	t.Logf("IRQ handler at $%04X", irqAddr)
+
+	mem := cpu.NewFlatMemory()
+	off := int(cfg.Origin)
+	for i, b := range assembly.Code {
+		mem.StoreByte(uint16(off+i), b)
+	}
+	// Set IRQ vector at $FFFE
+	mem.StoreByte(0xFFFE, byte(irqAddr))
+	mem.StoreByte(0xFFFF, byte(irqAddr>>8))
+
+	emu := cpu.NewCPU(cpu.NMOS, mem)
+	emu.Reg.PC = cfg.Origin
+
+	// Run past the initial jmp
+	const maxSteps = 5000
+	for i := 0; i < maxSteps; i++ {
+		if emu.Reg.PC == 0xFFFF || emu.Reg.PC == 0x0000 {
+			break
+		}
+		emu.Step()
+	}
+	// Enable interrupts before triggering IRQ
+	emu.Reg.InterruptDisable = false
+	emu.IRQ()
+	for i := 0; i < maxSteps; i++ {
+		if emu.Reg.PC == 0xFFFF || emu.Reg.PC == 0x0000 {
+			break
+		}
+		emu.Step()
+	}
+	if v := mem.LoadByte(cfg.OutputBase); v != 77 {
+		t.Errorf("expected 77 at output, got %d", v)
+	}
+}
+
+func TestIntegrationPLZ_NmiHandler(t *testing.T) {
+	// Full pipeline: PL/Z source → PIR → NES → emulator, then trigger NMI.
+	pirProg := compilePIR(t, `
+PROCEDURE my_nmi() NMI
+  OUTPUT 0 42
+END
+NMI my_nmi
+HALT`)
+
+	cfg := pir.NES6502Config()
+	gen := pir.NewGen6502(cfg)
+	asmText := gen.Gen(pirProg)
+	cfg.IntHandlerName = gen.IntHandler()
+	cfg.NmiHandlerName = gen.NmiHandler()
+
+	rom, err := pir.Assemble6502(cfg, asmText, gen.BankLines())
+	if err != nil {
+		t.Fatalf("Assemble6502: %v\n%s", err, asmText)
+	}
+
+	prgData := rom[16:]
+	prgSize := int(rom[4]) * 0x4000
+	mem := cpu.NewFlatMemory()
+	for i, b := range prgData[:prgSize] {
+		mem.StoreByte(uint16(0x8000+i), b)
+	}
+
+	resetVec := uint16(mem.LoadByte(0xFFFC)) | uint16(mem.LoadByte(0xFFFD))<<8
+	emu := cpu.NewCPU(cpu.NMOS, mem)
+	emu.Reg.PC = resetVec
+	bd := &brkDone6502{}
+	emu.AttachBrkHandler(bd)
+
+	// Step past initial jmp to main
+	emu.Step()
+	// Run main program to BRK
+	const maxSteps = 500000
+	for i := 0; i < maxSteps && !bd.done; i++ {
+		emu.Step()
+	}
+	if !bd.done {
+		t.Fatalf("program did not complete after %d steps; PC=$%04X", maxSteps, emu.Reg.PC)
+	}
+
+	// Trigger NMI and step through handler
+	emu.NMI()
+	for i := 0; i < maxSteps; i++ {
+		if emu.Reg.PC == 0xFFFF || emu.Reg.PC == 0x0000 {
+			break
+		}
+		emu.Step()
+	}
+
+	// Check that NMI handler wrote 42 to output
+	if v := mem.LoadByte(cfg.OutputBase); v != 42 {
+		t.Errorf("expected 42 at output (from NMI), got %d", v)
+	}
+}
+
 func Test6502_AddWMulti(t *testing.T) {
 	mem := assembleAndRun6502(t, &pir.Program{Instrs: []pir.Instr{
 		{Op: pir.PUSH_W, Operand: pir.Operand{Type: pir.OpNumber, Num: 100}},

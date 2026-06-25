@@ -330,9 +330,19 @@ func (cpu *CPU) nmi() {
 	cpu.handleInterrupt(false, vectorNMI)
 }
 
+// NMI generates a non-maskable interrupt on the CPU.
+func (cpu *CPU) NMI() {
+	cpu.nmi()
+}
+
 // Generate a reset signal.
 func (cpu *CPU) reset() {
 	cpu.Reg.PC = cpu.Mem.LoadAddress(vectorReset)
+}
+
+// IRQ generates a maskable hardware interrupt request.
+func (cpu *CPU) IRQ() {
+	cpu.irq()
 }
 
 // Add with carry (CMOS)

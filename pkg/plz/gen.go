@@ -2561,6 +2561,10 @@ func (g *Gen) saveSize(id Identifier) (int, error) {
 	}
 	// Fall back to a declared variable/array/record.
 	if d, ok := g.currentScope.Lookup(id); ok {
+		// DATA parameters are pointers (2 bytes), not single bytes.
+		if d.ParamRef && d.Type.Predeclared() == PredeclaredData {
+			return 2, nil
+		}
 		return d.StorageSize(), nil
 	}
 	return 0, fmt.Errorf("%q not found", id)

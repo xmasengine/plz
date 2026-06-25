@@ -270,16 +270,22 @@ func compilePIR(t *testing.T, src string) *pir.Program {
 
 // readOutBytes reads the sequential output buffer at OutputBase and parses
 // it into a map[port][]byte matching the Z80 ByteIO structure.
-// Format: each value written by OUT_B occupies 1 byte. Since the port
-// number is not stored, all bytes are assigned to port 0.
+// Uses the output pointer at ZP $0C-$0D to determine how many bytes were
+// written.
 func readOutBytes(mem *cpu.FlatMemory, outputBase uint16, maxBytes int) map[int][]byte {
-	out := map[int][]byte{}
-	for i := 0; i < maxBytes; i++ {
-		b := mem.LoadByte(outputBase + uint16(i))
-		if b == 0 && i > 0 && i+1 < maxBytes && mem.LoadByte(outputBase+uint16(i)+1) == 0 {
-			break // stop before a run of consecutive zeros
-		}
-		out[0] = append(out[0], b)
+	outPtr := uint16(mem.LoadByte(0x0C)) | uint16(mem.LoadByte(0x0D))<<8
+	count := int(outPtr - outputBase)
+	if count < 0 {
+		count = 0
+	}
+	if count > maxBytes {
+		count = maxBytes
+	}
+	out := map[int][]byte{
+		0: make([]byte, count),
+	}
+	for i := 0; i < count; i++ {
+		out[0][i] = mem.LoadByte(outputBase + uint16(i))
 	}
 	return out
 }
@@ -335,16 +341,27 @@ func compileAndRunArch(t *testing.T, src string, arch string) *RunResult {
 
 	case "nes":
 		cfg := pir.NES6502Config()
-		asmText := pir.NewGen6502(cfg).Gen(pirProg)
-		rom, err := pir.Assemble6502(cfg, asmText)
+		gen := pir.NewGen6502(cfg)
+		asmText := gen.Gen(pirProg)
+		cfg.IntHandlerName = gen.IntHandler()
+		cfg.NmiHandlerName = gen.NmiHandler()
+		rom, err := pir.Assemble6502(cfg, asmText, gen.BankLines())
 		if err != nil {
 			t.Fatalf("Assemble6502: %v\n%s", err, asmText)
 		}
 		prgData := rom[16:]
 		prgSize := int(rom[4]) * 0x4000
 		mem := cpu.NewFlatMemory()
-		for i, b := range prgData[:prgSize] {
-			mem.StoreByte(uint16(0x8000+i), b)
+		bankSize := 0x4000
+		// NES mapping: last 16KB bank is fixed at $C000; first bank at $8000.
+		fixedOffset := prgSize - bankSize
+		for i := 0; i < bankSize; i++ {
+			mem.StoreByte(uint16(0xC000+i), prgData[fixedOffset+i])
+		}
+		if prgSize > bankSize {
+			for i := 0; i < bankSize; i++ {
+				mem.StoreByte(uint16(0x8000+i), prgData[i])
+			}
 		}
 		resetVec := uint16(mem.LoadByte(0xFFFC)) | uint16(mem.LoadByte(0xFFFD))<<8
 		emu := cpu.NewCPU(cpu.NMOS, mem)

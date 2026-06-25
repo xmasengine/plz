@@ -198,3 +198,27 @@ HALT`, func(t *testing.T, res *RunResult) {
 		}
 	})
 }
+
+func TestIntegrationRecordReturn(t *testing.T) {
+	testArchs(t, `DECLARE rec RECORD x BYTE, y BYTE END
+LET rec.x = 10
+LET rec.y = 20
+PROCEDURE getPoint() RECORD x BYTE, y BYTE END
+  RETURN rec
+END
+CALL getPoint()
+OUTPUT 0 rec.x
+OUTPUT 0 rec.y
+HALT`, func(t *testing.T, res *RunResult) {
+		got := res.OutBytes[0]
+		if len(got) < 2 {
+			t.Fatalf("expected 2 outputs, got %d: %v", len(got), got)
+		}
+		if got[0] != 10 {
+			t.Errorf("expected 10 for rec.x, got %d", got[0])
+		}
+		if got[1] != 20 {
+			t.Errorf("expected 20 for rec.y, got %d", got[1])
+		}
+	})
+}

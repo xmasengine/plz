@@ -106,8 +106,8 @@ END
 	}
 }
 
-func TestIntegrationYield(t *testing.T) {
-	io := compileAndRun(t, `
+func TestIntegrationPIR_Yield(t *testing.T) {
+	testArchs(t, `
 TASK demo PRIORITY 4
   DECLARE x WORD
   LET x = 1
@@ -115,11 +115,12 @@ TASK demo PRIORITY 4
   LET x = x + 1
   OUTPUT 0 x
   YIELD
-END`)
-	if len(io.OutBytes[0]) < 1 {
-		t.Fatal("expected output")
-	}
-	if io.OutBytes[0][0] != 2 {
-		t.Errorf("expected 2, got %d", io.OutBytes[0][0])
-	}
+END`, func(t *testing.T, res *RunResult) {
+		if len(res.OutBytes[0]) < 1 {
+			t.Fatal("expected output")
+		}
+		if res.OutBytes[0][0] != 2 {
+			t.Errorf("expected 2, got %d", res.OutBytes[0][0])
+		}
+	})
 }

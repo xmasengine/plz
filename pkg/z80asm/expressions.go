@@ -21,8 +21,7 @@ func (ei exprInt) evalAs(asm *Assembler, a arg, top bool) ([]byte, bool, error) 
 	case argTypeInt, argTypeAddress:
 		return serializeIntArg(asm, ei.i, a)
 	case argTypeRelAddress:
-		/* TODO: figure out what to do here! */
-		return nil, false, nil
+		return serializeIntArg(asm, ei.i, a)
 	case argTypeFixed:
 		if !validFixedArgs[ei.i] {
 			return nil, false, asm.scanErrorf("0x%x is not a valid argument", ei.i)

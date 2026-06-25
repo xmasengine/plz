@@ -44,6 +44,7 @@ func TestInstrStringNoOperand(t *testing.T) {
 		{WRITE_B, "WRITE_B"},
 		{WRITE_W, "WRITE_W"},
 		{BYE, "BYE"},
+		{YIELD, "YIELD"},
 		{SLEEP, "SLEEP"},
 		{HLT, "HLT"},
 		{DII, "DII"},

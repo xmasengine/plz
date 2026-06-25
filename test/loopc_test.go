@@ -2,9 +2,8 @@ package plz_test
 
 import "testing"
 
-func TestIntegrationLoopComplexCallFor(t *testing.T) {
-	io := compileAndRun(t, `
-
+func TestIntegrationPIR_LoopComplexCallFor(t *testing.T) {
+	testArchs(t, `
 PROCEDURE write_rep(b BYTE, rep BYTE)
 	DECLARE ii BYTE
 	FOR ii = 0 TO rep DO
@@ -23,21 +22,21 @@ END
 
 CALL abc()
 HALT
-`)
-	// 25 letters (A-Y), each repeated 3 times (FOR ii=0 TO 2): 75 total
-	expect := 75
-	if len(io.OutBytes[0]) != expect {
-		t.Fatalf("expected %d outputs, got %d: %v", expect, len(io.OutBytes[0]), io.OutBytes[0])
-	}
-	outs := string(io.OutBytes[0][0:expect])
-	t.Logf("outs: %s", outs)
-	expectedOut := ""
-	for ch := 'B'; ch <= 'Z'; ch++ {
-		for j := 0; j < 3; j++ {
-			expectedOut += string(ch)
+`, func(t *testing.T, res *RunResult) {
+		// 25 letters (A-Y), each repeated 3 times (FOR ii=0 TO 2): 75 total
+		expect := 75
+		if len(res.OutBytes[0]) != expect {
+			t.Fatalf("expected %d outputs, got %d", expect, len(res.OutBytes[0]))
 		}
-	}
-	if outs != expectedOut {
-		t.Errorf("expected %s, got %s", expectedOut, outs)
-	}
+		outs := string(res.OutBytes[0])
+		expectedOut := ""
+		for ch := 'B'; ch <= 'Z'; ch++ {
+			for j := 0; j < 3; j++ {
+				expectedOut += string(ch)
+			}
+		}
+		if outs != expectedOut {
+			t.Errorf("expected %s, got %s", expectedOut, outs)
+		}
+	})
 }

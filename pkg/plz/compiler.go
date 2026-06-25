@@ -56,8 +56,11 @@ func CompileOpt(out, format, src, arch string, legacy bool) error {
 			cfg = pir.Default6502Config()
 		}
 		pirProg = pir.Optimize(pirProg)
-		asmText := pir.NewGen6502(cfg).Gen(pirProg)
-		bin, err := pir.Assemble6502(cfg, asmText)
+		gen := pir.NewGen6502(cfg)
+		asmText := gen.Gen(pirProg)
+		cfg.IntHandlerName = gen.IntHandler()
+		cfg.NmiHandlerName = gen.NmiHandler()
+		bin, err := pir.Assemble6502(cfg, asmText, gen.BankLines())
 		if err != nil {
 			return err
 		}

@@ -117,6 +117,12 @@ func TestIdentityElimination(t *testing.T) {
 		// x | 0
 		{"OR_B x 0", mkprog(getB("x"), pushB(0), orB()), "GET_B x\n"},
 		{"OR_W x 0", mkprog(getW("x"), pushW(0), orW()), "GET_W x\n"},
+		// x | allOnes
+		{"OR_B x ff", mkprog(getB("x"), pushB(0xFF), orB()), "PUSH_W 255\n"},
+		{"OR_W x ffff", mkprog(getW("x"), pushW(0xFFFF), orW()), "PUSH_W 65535\n"},
+		// x ^ 0
+		{"XOR_B x 0", mkprog(getB("x"), pushB(0), xorB()), "GET_B x\n"},
+		{"XOR_W x 0", mkprog(getW("x"), pushW(0), xorW()), "GET_W x\n"},
 		// x & 0
 		{"AND_B x 0", mkprog(getB("x"), pushB(0), andB()), "PUSH_W 0\n"},
 		{"AND_W x 0", mkprog(getW("x"), pushW(0), andW()), "PUSH_W 0\n"},
@@ -359,9 +365,51 @@ func TestDropAfterNonConst(t *testing.T) {
 
 // ── Unchanged instructions ──
 
-func TestUnknownPreventsFolding(t *testing.T) {
-	// An unrecognized opcode (e.g. HLT) calls unknown() which marks all
-	// stack entries as unknown, preventing folding of subsequent operations.
+func TestFoldISConst(t *testing.T) {
+	tests := []struct {
+		name  string
+		prog  *Program
+		want  string
+	}{
+		{"IS_B EQ true", mkprog(pushB(5), pushB(5), isB(CondEQ)), "PUSH_W 1\n"},
+		{"IS_B EQ false", mkprog(pushB(5), pushB(3), isB(CondEQ)), "PUSH_W 0\n"},
+		{"IS_B NE true", mkprog(pushB(5), pushB(3), isB(CondNE)), "PUSH_W 1\n"},
+		{"IS_B NE false", mkprog(pushB(3), pushB(3), isB(CondNE)), "PUSH_W 0\n"},
+		{"IS_W LT true", mkprog(pushW(3), pushW(5), isW(CondLT)), "PUSH_W 1\n"},
+		{"IS_W LT false", mkprog(pushW(5), pushW(3), isW(CondLT)), "PUSH_W 0\n"},
+		{"IS_W GT true", mkprog(pushW(10), pushW(5), isW(CondGT)), "PUSH_W 1\n"},
+		{"IS_W GT false", mkprog(pushW(5), pushW(10), isW(CondGT)), "PUSH_W 0\n"},
+		{"IS_B LE true", mkprog(pushB(3), pushB(3), isB(CondLE)), "PUSH_W 1\n"},
+		{"IS_B LE false", mkprog(pushB(4), pushB(3), isB(CondLE)), "PUSH_W 0\n"},
+		{"IS_W GE true", mkprog(pushW(10), pushW(10), isW(CondGE)), "PUSH_W 1\n"},
+		{"IS_W GE false", mkprog(pushW(9), pushW(10), isW(CondGE)), "PUSH_W 0\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Optimize(tc.prog)
+			if s := got.String(); s != tc.want {
+				t.Errorf("Optimize:\ngot:\n%s\nwant:\n%s", s, tc.want)
+			}
+		})
+	}
+}
+
+func TestFoldISNonConst(t *testing.T) {
+	// Unknown operands should not fold
+	prog := &Program{Instrs: []Instr{
+		{Op: GET_B, Operand: Operand{Type: OpName, Name: "x"}},
+		{Op: PUSH_B, Operand: Operand{Type: OpNumber, Num: 0}},
+		{Op: IS_B, Operand: Operand{Type: OpCondition, Cond: CondEQ}},
+	}}
+	got := Optimize(prog)
+	if len(got.Instrs) != 3 {
+		t.Errorf("expected 3 instrs unchanged, got %d: %s", len(got.Instrs), got.String())
+	}
+}
+
+func TestStackPreservingOpKeepsConstants(t *testing.T) {
+	// Stack-preserving instructions (HLT, NOP, TAG, etc.) should NOT
+	// interfere with constant tracking — subsequent folding will still work.
 	prog := &Program{Instrs: []Instr{
 		{Op: PUSH_W, Operand: Operand{Type: OpNumber, Num: 100}},
 		{Op: PUSH_W, Operand: Operand{Type: OpNumber, Num: 200}},
@@ -369,13 +417,15 @@ func TestUnknownPreventsFolding(t *testing.T) {
 		{Op: ADD_W},
 	}}
 	got := Optimize(prog)
-	// After unknown(), ADD_W sees unknown operands and should not fold.
-	// HLT itself is preserved.
-	if len(got.Instrs) != 4 {
-		t.Errorf("expected 4 instrs preserved, got %d: %s", len(got.Instrs), got.String())
+	// ADD_W sees two known constants (HLT preserved the stack), so it folds.
+	if len(got.Instrs) != 2 {
+		t.Errorf("expected 2 instrs (HLT and folded result), got %d: %s", len(got.Instrs), got.String())
 	}
-	if got.Instrs[2].Op != HLT || got.Instrs[3].Op != ADD_W {
-		t.Errorf("expected HLT then ADD_W, got %s", got.String())
+	if got.Instrs[0].Op != HLT {
+		t.Errorf("expected HLT first, got %s", got.String())
+	}
+	if got.Instrs[1].Op != PUSH_W || got.Instrs[1].Operand.Num != 300 {
+		t.Errorf("expected PUSH_W 300, got %s", got.String())
 	}
 }
 
@@ -472,3 +522,6 @@ func notB() Instr { return Instr{Op: NOT_B} }
 func notW() Instr { return Instr{Op: NOT_W} }
 func castB() Instr { return Instr{Op: CAST_B} }
 func castW() Instr { return Instr{Op: CAST_W} }
+
+func isB(c Condition) Instr  { return Instr{Op: IS_B, Operand: Operand{Type: OpCondition, Cond: c}} }
+func isW(c Condition) Instr  { return Instr{Op: IS_W, Operand: Operand{Type: OpCondition, Cond: c}} }

@@ -44,7 +44,8 @@ test/                      — Integration tests
   cpu6502_test.go          — 6502 PIR backend unit tests (22 tests, all pass)
   nes_test.go              — NES ROM integration tests (4 tests)
   arch_check_test.go       — Arch-specific feature checks
-  plz_test.go              — All legacy integration tests (compileAndRun, Z80-only)
+   basic_test.go, operators_test.go, procedures_test.go — Cross-platform PIR tests (testArchs)
+   save_load_test.go, tasks_music_test.go — Z80-specific legacy tests (compileAndRun)
 asm/                       — Raw assembly examples
 example/                   — PL/Z language example programs
 include/                   — PL/Z standard library
@@ -90,8 +91,13 @@ go test -count=1 ./...      # Run all tests (use -count=1 to avoid cache)
 ## PIR Optimiser (`pkg/pir/optimize.go`)
 
 - **Constant folding** for all binary/unary ops (e.g., `PUSH_I 3; PUSH_I 4; ADD_B` → `PUSH_I 7`)
+- **IS_B/IS_W constant folding:** Compares two known constants at compile time using the condition operand (LT/GT/LE/GE/EQ/NE), replacing with `PUSH_W 0` or `PUSH_W 1`.
 - **Strength reduction:** `MUL_B/W` / `DIV_B/W` by power-of-two → `SHL_B/W` / `SHR_B/W`; `MOD_B/W` by power-of-two → `AND_B/W`
-- **Identity elimination:** `ADD 0`, `MUL 1`, `DIV 1`, `SHL 0`, `SHR 0`, `XOR same`, `SUB same`, etc.
+- **Identity elimination:** `ADD 0`, `MUL 1`, `MUL 0`, `DIV 1`, `SHL 0`, `SHR 0`, `AND 0`, `AND allOnes`, `OR 0`, `OR allOnes`, `XOR 0`, `SUB 0`, etc.
+- **Stack-preserving instructions** (NOP, TAG, ROUTE, JOB, BYE, YIELD, HLT, ALLOC, VAR, PRIORITY, AT, BANK, INT, NMI, ENI, DII, FRAME, LOCAL_B, LOCAL_W, STOP, START, SRAM_ON, SRAM_OFF, PRAGMA, INLINE, DATA_B, DATA_W, DATA_STR) do NOT call `unknown()` — they preserve constant tracking across stack-neutral ops.
+- **SLEEP** pops one value from virtual stack (properly tracked).
+- **GO/DONE/DONE_INTERRUPT/DONE_NMI** clear the virtual stack (unconditional control flow).
+- **GO_IF** pops one value (the condition).
 - **Dead-instruction compaction:** NOP-mark-and-compact pass
 - Called in `compiler.go` for all PIR-based paths (Z80, 6502, NES)
 
@@ -207,15 +213,36 @@ SLEEP counters advance when the scheduler runs — triggered by interrupt (VBlan
 
 Most integration tests in `test/` use `compileAndRun` (legacy Z80-only). Newer tests use `testArchs` for cross-platform (Z80/6502/NES) runs via the PIR pipeline. `testArchs` accepts an optional archs parameter to limit which architectures a test runs on. Unit tests exist per package (`pkg/pir`, `pkg/plz`, etc.). All tests must pass (`go test -count=1 ./...`).
 
+Remaining Z80-only tests (architecture-dependent features): SAVE/LOAD (`save_load_test.go`), PSG music (`tasks_music_test.go` — music tests), TEMPLATE (`procedures_test.go` — `TestIntegrationTemplateProcCall`), debug helper (`debug_test.go`).
+
 ## Known PIR Backend Limitations
 
-- **BREAK/CONTINUE only on Z80 PIR**: 6502/NES backends don't implement BREAK/CONTINUE yet.
-- **CASE only on Z80 PIR**: 6502/NES backends don't implement CASE yet.
-- **Array indexing on variables uses GET_W (reads value as pointer) instead of PUSH_A (pushes address)**: `arr[i]` on a declared array variable computes `*(value_of_arr + i)` instead of `*(address_of_arr + i)`. This causes wrong results when the array's initial value is non-zero. Only works by coincidence when value is 0 (most arrays).
-- **DATA refSize returns 1 instead of actual element count**: `SAVE my_data` copies only 1 byte regardless of DATA size.
-- **Task system lacks PIR initialization**: `JOB`/`BYE`/`YIELD` emit labels and scheduler calls but no TCB setup or first-task startup.
-- **6502 `.org` restriction**: `.org` can only appear before first instruction; `AT` for variable placement is effectively broken.
-- **SAVE/LOAD only work on Z80 with legacy `compileAndRun`**: PIR backend's `_plz_save`/`_plz_load` were fixed for endianness and HL corruption but still exposed by frontend bugs (refSize, array indexing).
+- **6502 `.org` restriction**: `.org` can appear at any point (emits padding to fill the gap). `AT` for variable placement works in the same address space as code. `AT` for NES RAM variables ($0000-$07FF) remains unsupported since RAM is in a different address space than the PRG-ROM binary.
+- **6502 BANK/SWITCH**: BANK compile-time directive places data in switchable PRG banks and SWITCH runtime writes to MMC5 $5113. Data bank labels are exported for cross-bank reference. `AT BANK n` + DATA works for NES multi-bank ROMs.
+- **6502 SEED is a simple 8-bit LCG**: `seed = seed * 5 + 1`, full period 256. Fixed carry bug from `asl` corruption of `adc` — now uses scratch byte $04 and `clc` for correct arithmetic. Pushes result via `emitSpillW()` (proper word spill).
+- **`CONSTANT n = LENGTH(d)` compile-time error for DATA params**: The checker's `evalLength` now errors at compile time for DATA params (dynamic length). Use `LENGTH(d)` in expressions (handled at runtime by the PIR backend).
+- **Legacy `saveSize`**: see gen.go `saveSize()` special-cases DATA params to return 2 (pointer size). `StorageSize()` in ast.go returns the type-based size (1 for DATA).
+- **Record params on PIR backend**: Passing records by value/reference works on all backends. `TestIntegrationProcRecordParam` is cross-platform (was Z80-only).
+
+## Recently Fixed (2026-06-23)
+
+- **6502 INT/NMI handler installation**: INT/NMI PIR instructions now emit `.export <name>` directives. `Assemble6502` reads SourceMap exports to patch the NES vector table ($FFFA NMI, $FFFC Reset, $FFFE IRQ) with correct handler addresses. `cpu.NMI()` and `cpu.IRQ()` exported for emulator testing.
+- **Legacy `saveSize` for DATA params**: Fixed `gen.go:saveSize()` to return 2 (pointer size) for DATA params, matching `genpir.go:refSize()`.
+- **Z80 FRAME fixed**: Negative IX offsets (`ix-N`) to avoid overwriting return address. `dec sp` instead of `ld hl,-N; add hl,sp; ld sp,hl` to avoid clobbering HL.
+- **DATA params (fat pointers)**: PIR backend pushes (length, address) pairs; LENGTH(d) reads runtime length. Non-REENTRANT and REENTRANT both work.
+- **Cross-platform test coverage**: basic_test.go, operators_test.go, procedures_test.go use `testArchs` (Z80/6502/NES). `cpu6502_test.go` has NMI/IRQ handler integration tests.
+- **6502 BANK/SWITCH multi-bank support**: `BANK` (compile-time) tracks current bank in Gen6502; TAG and DATA_B/W/STR instructions route to per-bank line buffers. `Assemble6502` assembles each data bank separately at $8000 origin, collects exports for cross-bank label resolution, and builds a multi-bank iNES ROM with correct PRG bank count. `SWITCH` (runtime) writes to MMC5 $5113 for runtime bank switching. New tests: `TestGen6502BankSwitch` and `TestGen6502Switch`.
+- **`CONSTANT n = LENGTH(d)` compile-time error for DATA params**: `check.go:evalLength()` now returns an error when `LENGTH` is applied to a DATA parameter at compile time, instead of silently returning 1.
+- **6502 `.org` mid-file / AT for variables**: Added `reorigin` segment type to `asm6502` assembler supporting `.org` at any point (creates zero-filled padding). `Gen6502.emitVars` emits `.org` before AT-placed variables so they resolve to the correct address. New test `TestGen6502ATVar` verifies `sta $3000` is emitted.
+- **6502 AT for DATA/ROUTE/JOB**: `gen6502.go`'s `emitProg` now emits `.org $%04x` (instead of `; AT $%04x` comment) when `AT` precedes `DATA_B`, `DATA_W`, `DATA_STR`, `ROUTE`, or `JOB`. `TestGen6502ATRoutine` updated to use forward address ($3000) and verify `.org` emission.
+- **Record params on PIR backend**: Fixed `genPIRRefAddr` and `genPIRFieldAddr` to emit `GET_W` (load pointer) instead of `PUSH_A` (address of pointer) for RECORD parameters, same as DATA parameters. `TestIntegrationProcRecordParam` now runs cross-platform via `testArchs`.
+- **Optimizer conservatism fixed**: PIR peephole optimizer no longer calls `unknown()` on stack-preserving instructions (NOP, TAG, ALLOC, VAR, HLT, etc.), preserving constant tracking across them. Added IS_B/IS_W constant folding and proper SLEEP/GO_IF/GO stack tracking.
+- **Test migration**: Converted legacy Z80-only tests in `basic_test.go`, `loopc_test.go`, `constants_length_test.go`, and `tasks_music_test.go` to cross-platform `testArchs` (z80/6502/nes). Removed duplicate legacy tests already covered by existing PIR tests. `debug_test.go` retained as Z80 debug helper. Architecture-specific tests (SAVE/LOAD, PSG music, TEMPLATE) kept as Z80-only where features are architecture-dependent.
+- **INPUT non-constant port error**: `genpir.go` now emits a compile-time error for `INPUT(port)` when the port expression is not constant (PIR `IN_B` only supports constant port operands), instead of silently producing nothing and corrupting the data stack.
+- **6502 SWITCH non-NES error**: `gen6502.go` now emits `z.emitFillW()` + a `.byte` referencing an undefined label for SWITCH on non-NES 6502, producing an assembler error instead of silently doing nothing.
+- **Optimizer XOR/OR identities**: Added `x ^ 0 → x` (XOR identity), `x | allOnes → allOnes` (OR identity via new `foldOr` function). `x - x → 0` not implemented (dead DUP tracking needed).
+- **6502 SEED carry bug fixed**: `gen6502.go:1625` now uses scratch byte `$04` and explicit `clc` to avoid `asl` carry from corrupting `adc`. Changed `emitSpill()` (1 byte) to `emitSpillW()` (word spill) for proper stack push.
+- **Z80 assembler `reladdr8` evaluation**: `expressions.go:24` now calls `serializeIntArg` for integer exprs in relative-address context (previously returned `nil, false, nil`). `tables.go:113` `addr16` TODO replaced with clarifying comment.
 
 ## Dependencies
 

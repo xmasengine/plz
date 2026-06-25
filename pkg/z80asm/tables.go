@@ -110,7 +110,7 @@ const (
 	const16
 	const16be
 	constS8
-	addr16 // TODO: use this consistently
+	addr16   // 16-bit address (call, jp targets)
 	reladdr8
 	port8
 	portC

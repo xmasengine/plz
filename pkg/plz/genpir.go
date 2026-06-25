@@ -25,9 +25,10 @@ type GenPIR struct {
 	scopeChildIdx map[*Scope]int
 
 	// procedure / task / label state
-	procName string
-	inFrame  bool
-	inTask   bool
+	procName        string
+	procReturnType  Type
+	inFrame         bool
+	inTask          bool
 
 	// unique numeric label suffix
 	label int
@@ -265,9 +266,22 @@ func (p Program) GenPIR() (*pir.Program, error) {
 
 	// Main body — inline statements that are not procedures / data / declares.
 	for _, s := range p.Statements {
-		switch s.Command.(type) {
-		case Procedure, Data, Declare, At:
+		switch c := s.Command.(type) {
+		case Procedure, Data, At:
 			// emitted separately
+		case Declare:
+			if c.Initializer != nil {
+				// Emit init code for globals; VAR is emitted by deferred dataItems.
+				if err := c.Initializer.Expr.genPIRExpr(g); err != nil {
+					return nil, err
+				}
+				size := c.StorageSize()
+				if size == 1 {
+					g.emitName(pir.PUT_B, string(c.Identifier))
+				} else {
+					g.emitName(pir.PUT_W, string(c.Identifier))
+				}
+			}
 		default:
 			if err := s.genPIR(g); err != nil {
 				return nil, err
@@ -295,6 +309,7 @@ func (p Program) GenPIR() (*pir.Program, error) {
 	for i := range taskDefs {
 		t := &taskDefs[i]
 		g.inTask = true
+		g.emitNum(pir.PRIORITY, uint16(t.Priority))
 		g.emitName(pir.JOB, fmt.Sprintf("_plz_task_%d", i))
 		var taskDeclares []Statement
 		for j := range t.Body {
@@ -451,18 +466,17 @@ func (s Let) genPIR(g *GenPIR) error {
 	if err := s.Expression.genPIRExpr(g); err != nil {
 		return err
 	}
-	if err := g.genPIRPutRef(&s.Reference); err != nil {
-		return err
-	}
 	if s.Target2 != nil {
-		// Save first result (TOS = first return val), pop second
-		// Second return value is now TOS after we DROP the first.
-		// Actually: after CALL with 2 returns, stack = [ret1, ret2] with ret2 as TOS.
-		// We want ret1 → first target, ret2 → second target.
+		// After CALL with 2 returns, stack = [ret1, ret2] with ret2 as TOS.
+		// We want ret1 → Reference (first target), ret2 → Target2 (second target).
 		// So: pop to second target (TOS = ret2), then pop to first target (new TOS = ret1)
 		if err := g.genPIRPutRef(s.Target2); err != nil {
 			return err
 		}
+		if err := g.genPIRPutRef(&s.Reference); err != nil {
+			return err
+		}
+	} else {
 		if err := g.genPIRPutRef(&s.Reference); err != nil {
 			return err
 		}
@@ -504,75 +518,92 @@ func (g *GenPIR) genPIRRefAddr(r *Reference) {
 			g.emitName(pir.PUSH_D, string(r.Identifier))
 			goto doOffsets
 		}
-		if d, ok := g.currentScope.Lookup(r.Identifier); ok && d.ParamRef && d.Type.Predeclared() == PredeclaredData {
+		if d, ok := g.currentScope.Lookup(r.Identifier); ok && d.ParamRef && (d.Type.Predeclared() == PredeclaredData || d.Type.Record() != nil) {
 			g.emitName(pir.GET_W, string(r.Identifier))
 			goto doOffsets
 		}
 	}
 	g.emitName(pir.PUSH_A, string(r.Identifier))
 doOffsets:
-	// Add field offset first (if any)
+	// Track the type at the current address for subscript sizing.
+	subType, _ := g.localType(r.Identifier)
+
 	if len(r.Fields) > 0 {
-		t, _ := g.localType(r.Identifier)
-		if arr := t.Array(); arr != nil {
-			t = arr.ElemType
+		// If the base is an array (arr[i].x), process subscripts first.
+		// If the base is a record (s.arr[i]), process the field first.
+		if arr := subType.Array(); arr != nil {
+			// Base is array → process subscripts, then field offset
+			goto doSubscripts
 		}
-		rec := t.Record()
+		// Base is record → add field offset, walk into field type
+		rec := subType.Record()
 		if rec != nil {
-			off := 0
 			for j, f := range rec.Fields {
 				if f.Identifier == r.Fields[0] {
-					off = rec.FieldOffset(j)
+					off := rec.FieldOffset(j)
+					if off > 0 {
+						g.emitNum(pir.PUSH_W, uint16(off))
+						g.emitN(pir.ADD_W)
+					}
+					subType = f.Type
 					break
 				}
 			}
-			if off > 0 {
-				g.emitNum(pir.PUSH_W, uint16(off))
-				g.emitN(pir.ADD_W)
-			}
 		}
 	}
-	// Then add subscript offsets (if any)
+	// Subscript offsets, walking into nested Array types.
 	for _, idx := range r.Subscripts {
 		idx.genPIRExpr(g)
-		elemSize := g.refArrayElemSize(r)
-		if elemSize > 1 {
-			g.emitNum(pir.PUSH_W, uint16(elemSize))
+		arr := subType.Array()
+		if arr != nil {
+			if arr.ElemType.Size() > 1 {
+				g.emitNum(pir.PUSH_W, uint16(arr.ElemType.Size()))
+				g.emitN(pir.MUL_W)
+			}
+			subType = arr.ElemType // walk into next dimension
+		} else if subType.Size() > 1 {
+			g.emitNum(pir.PUSH_W, uint16(subType.Size()))
 			g.emitN(pir.MUL_W)
 		}
 		g.emitN(pir.ADD_W)
 	}
-}
+	return
 
-// refArrayElemSize returns the element stride for subscript access on a reference.
-func (g *GenPIR) refArrayElemSize(r *Reference) int {
-	t, ok := g.localType(r.Identifier)
-	if !ok {
-		return 2
-	}
-	// DATA references are byte arrays
-	if g.checker != nil && g.currentScope != nil {
-		if d, ok2 := g.currentScope.Lookup(r.Identifier); ok2 && d.DataValue != nil {
-			return 1
+doSubscripts:
+	// For array-of-record (arr[i].x), process subscripts first,
+	// sizing by the array element (record) size.
+	subType2, _ := g.localType(r.Identifier)
+	for _, idx := range r.Subscripts {
+		idx.genPIRExpr(g)
+		arr := subType2.Array()
+		if arr != nil {
+			if arr.ElemType.Size() > 1 {
+				g.emitNum(pir.PUSH_W, uint16(arr.ElemType.Size()))
+				g.emitN(pir.MUL_W)
+			}
+			subType2 = arr.ElemType
+		} else if subType2.Size() > 1 {
+			g.emitNum(pir.PUSH_W, uint16(subType2.Size()))
+			g.emitN(pir.MUL_W)
 		}
+		g.emitN(pir.ADD_W)
 	}
-	// If the base is a record with a field, resolve to the field type first.
-	// (e.g. s.arr[i] — the subscript indexes into arr, not s)
-	if len(r.Fields) > 0 && t.Record() != nil {
-		rec := t.Record()
-		for _, f := range rec.Fields {
-			if f.Identifier == r.Fields[0] {
-				t = f.Type
-				break
+	// Then add field offset
+	if len(r.Fields) > 0 {
+		rec := subType2.Record()
+		if rec != nil {
+			for j, f := range rec.Fields {
+				if f.Identifier == r.Fields[0] {
+					off := rec.FieldOffset(j)
+					if off > 0 {
+						g.emitNum(pir.PUSH_W, uint16(off))
+						g.emitN(pir.ADD_W)
+					}
+					break
+				}
 			}
 		}
 	}
-	// Check if the resolved type is an array; return the element size.
-	if arr := t.Array(); arr != nil {
-		return arr.ElemType.Size()
-	}
-	sz := t.Size()
-	return sz
 }
 
 func (g *GenPIR) refLeafSize(r *Reference) int {
@@ -713,6 +744,23 @@ func (g *GenPIR) genPIRFor(f *For, body []Statement) error {
 	return nil
 }
 
+// resolveCaseVal resolves a CASE OF value to an integer. When the value
+// is a named constant (cv.Name != ""), it looks up the constant in the
+// current scope to get its numeric value.
+func (g *GenPIR) resolveCaseVal(cv CaseVal) (int, error) {
+	if cv.Name == "" {
+		return cv.Value, nil
+	}
+	d, ok := g.currentScope.Lookup(Identifier(cv.Name))
+	if !ok || d.ConstantValue == nil {
+		return 0, fmt.Errorf("CASE: undefined constant %q", cv.Name)
+	}
+	if n := d.ConstantValue.Number(); n != nil {
+		return n.Value, nil
+	}
+	return 0, fmt.Errorf("CASE: constant %q is not a number", cv.Name)
+}
+
 func (g *GenPIR) genPIRCase(c *Case) error {
 	n := g.nextLabel()
 	endTag := fmt.Sprintf("_case_end_%d", n)
@@ -728,7 +776,10 @@ func (g *GenPIR) genPIRCase(c *Case) error {
 
 		// Compare selector against any of the values
 		for j, cv := range branch.Values {
-			val := cv.Value
+			val, err := g.resolveCaseVal(cv)
+			if err != nil {
+				return err
+			}
 			g.emitN(pir.DUP)
 			g.emitNum(pir.PUSH_W, uint16(val))
 			g.emitCond(pir.IS_W, pir.CondEQ)
@@ -765,6 +816,7 @@ func (g *GenPIR) genPIRCase(c *Case) error {
 // Procedure genPIR
 func (s Procedure) genPIR(g *GenPIR) error {
 	g.procName = string(s.Name.Name)
+	g.procReturnType = s.Type
 	g.inFrame = s.Reentrant
 	g.emitName(pir.ROUTE, string(s.Name.Name))
 
@@ -773,12 +825,19 @@ func (s Procedure) genPIR(g *GenPIR) error {
 		// Compute frame size from parameters + locals
 		size := 0
 		for _, pt := range s.ParamTypes {
-			size += pt.Size()
+			if pt.Predeclared() == PredeclaredData {
+				size += 4 // 2 for address + 2 for length
+			} else {
+				size += pt.Size()
+			}
 		}
 		g.emitNum(pir.FRAME, uint16(size))
 		// Declare locals for params (in order)
 		for i, p := range s.Parameters {
-			if s.ParamTypes[i].Predeclared() == PredeclaredByte {
+			if s.ParamTypes[i].Predeclared() == PredeclaredData {
+				g.emitName(pir.LOCAL_W, string(p))       // address
+				g.emitName(pir.LOCAL_W, string(p)+"_len") // length
+			} else if s.ParamTypes[i].Predeclared() == PredeclaredByte {
 				g.emitName(pir.LOCAL_B, string(p))
 			} else {
 				g.emitName(pir.LOCAL_W, string(p))
@@ -787,7 +846,10 @@ func (s Procedure) genPIR(g *GenPIR) error {
 		// Pop params from data stack into locals (TOS = first param)
 		for i := 0; i < len(s.Parameters); i++ {
 			p := s.Parameters[i]
-			if s.ParamTypes[i].Predeclared() == PredeclaredByte {
+			if s.ParamTypes[i].Predeclared() == PredeclaredData {
+				g.emitName(pir.PUT_W, string(p))       // pop address
+				g.emitName(pir.PUT_W, string(p)+"_len") // pop length
+			} else if s.ParamTypes[i].Predeclared() == PredeclaredByte {
 				g.emitName(pir.PUT_B, string(p))
 			} else {
 				g.emitName(pir.PUT_W, string(p))
@@ -796,7 +858,12 @@ func (s Procedure) genPIR(g *GenPIR) error {
 	} else {
 		// Non-reentrant: declare global vars for params and pop them in
 		for i, p := range s.Parameters {
-			if s.ParamTypes[i].Predeclared() == PredeclaredByte {
+			if s.ParamTypes[i].Predeclared() == PredeclaredData {
+				g.emitNum(pir.ALLOC, 2)
+				g.emitName(pir.VAR, string(p))       // address
+				g.emitNum(pir.ALLOC, 2)
+				g.emitName(pir.VAR, string(p)+"_len") // length
+			} else if s.ParamTypes[i].Predeclared() == PredeclaredByte {
 				g.emitName(pir.VAR, string(p))
 			} else {
 				g.emitNum(pir.ALLOC, 2)
@@ -806,7 +873,10 @@ func (s Procedure) genPIR(g *GenPIR) error {
 		// Pop params from data stack (TOS = first param)
 		for i := 0; i < len(s.Parameters); i++ {
 			p := s.Parameters[i]
-			if s.ParamTypes[i].Predeclared() == PredeclaredByte {
+			if s.ParamTypes[i].Predeclared() == PredeclaredData {
+				g.emitName(pir.PUT_W, string(p))       // pop address
+				g.emitName(pir.PUT_W, string(p)+"_len") // pop length
+			} else if s.ParamTypes[i].Predeclared() == PredeclaredByte {
 				g.emitName(pir.PUT_B, string(p))
 			} else {
 				g.emitName(pir.PUT_W, string(p))
@@ -831,6 +901,7 @@ func (s Procedure) genPIR(g *GenPIR) error {
 	}
 
 	g.procName = ""
+	g.procReturnType = Type{}
 	g.inFrame = false
 	return nil
 }
@@ -838,8 +909,15 @@ func (s Procedure) genPIR(g *GenPIR) error {
 // Return genPIR
 func (s Return) genPIR(g *GenPIR) error {
 	for _, expr := range s.Expressions {
-		if err := expr.genPIRExpr(g); err != nil {
-			return err
+		if g.procReturnType.Record() != nil {
+			// For RECORD return type, push the ADDRESS of the record
+			if err := g.genPIRExprAsAddr(expr); err != nil {
+				return err
+			}
+		} else {
+			if err := expr.genPIRExpr(g); err != nil {
+				return err
+			}
 		}
 	}
 	if g.procName != "" {
@@ -848,15 +926,108 @@ func (s Return) genPIR(g *GenPIR) error {
 	return nil
 }
 
-// Call genPIR
-func (s Call) genPIR(g *GenPIR) error {
-	// Push args right-to-left (last arg first)
-	for i := len(s.Arguments) - 1; i >= 0; i-- {
-		if err := s.Arguments[i].genPIRExpr(g); err != nil {
-			return err
+// isDataOrRecordParam returns true when t is a DATA or RECORD type.
+func isDataOrRecordParam(t Type) bool {
+	return t.Record() != nil || t.Predeclared() == PredeclaredData
+}
+
+// pushDataLength pushes the element count of a DATA argument onto the data stack.
+// For DATA block references it emits a compile-time constant; for DATA params
+// it reads the stored length from the synthetic <name>_len slot.
+func (g *GenPIR) pushDataLength(expr Expression) error {
+	if g.currentScope == nil {
+		return fmt.Errorf("pushDataLength: no active scope")
+	}
+	if ref := expr.Ref(); ref != nil && len(ref.Fields) == 0 && len(ref.Subscripts) == 0 {
+		if d, ok := g.currentScope.Lookup(ref.Identifier); ok {
+			if d.DataValue != nil {
+				data := d.DataValue
+				switch {
+				case data.Tile != nil:
+					g.emitNum(pir.PUSH_W, uint16(len(data.Tile.Tiles)))
+				case data.Text != nil:
+					g.emitNum(pir.PUSH_W, uint16(len(data.Text.Value)))
+				default:
+					g.emitNum(pir.PUSH_W, uint16(len(data.Values)))
+				}
+				return nil
+			}
+			if d.ParamRef && d.Type.Predeclared() == PredeclaredData {
+				g.emitName(pir.GET_W, string(ref.Identifier)+"_len")
+				return nil
+			}
 		}
 	}
-	g.emitName(pir.RUN, string(s.Identifier))
+	// Fallback: if it has subscripts, evaluate LENGTH at the referent
+	if ref := expr.Ref(); ref != nil && len(ref.Fields) == 0 {
+		if len(ref.Subscripts) > 0 {
+			if d, ok := g.currentScope.Lookup(ref.Identifier); ok && d.DataValue != nil {
+				g.emitNum(pir.PUSH_W, uint16(len(d.DataValue.Values)))
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("pushDataLength: cannot determine length of %v", expr)
+}
+
+// genPIRExprAsAddr evaluates an expression and pushes its address onto the
+// data stack (instead of its value). Used when passing arguments to DATA or
+// RECORD parameters.
+func (g *GenPIR) genPIRExprAsAddr(expr Expression) error {
+	if suff := expr.Suffix(); suff != nil {
+		switch suff.Operator {
+		case OperatorINDEX:
+			return g.genPIRIndexAddr(suff.Operands)
+		case OperatorFIELD:
+			return g.genPIRFieldAddr(suff.Operands)
+		}
+	}
+	if ref := expr.Ref(); ref != nil && len(ref.Fields) == 0 && len(ref.Subscripts) == 0 {
+		if d, ok := g.currentScope.Lookup(ref.Identifier); ok {
+			if d.DataValue != nil {
+				g.emitName(pir.PUSH_D, string(ref.Identifier))
+				return nil
+			}
+			if d.ParamRef {
+				g.emitName(pir.GET_W, string(ref.Identifier))
+				return nil
+			}
+		}
+		g.emitName(pir.PUSH_A, string(ref.Identifier))
+		return nil
+	}
+	return expr.genPIRExpr(g)
+}
+
+// Call genPIR
+func (s Call) genPIR(g *GenPIR) error {
+	name := string(s.Identifier)
+	var pd *ProcData
+	if g.checker != nil {
+		pd = g.checker.ProcData(name)
+	}
+	// Push args right-to-left (last arg first)
+	for i := len(s.Arguments) - 1; i >= 0; i-- {
+		if pd != nil && i < len(pd.ParamTypes) && pd.ParamTypes[i].Predeclared() == PredeclaredData {
+			// DATA param: push length first (underneath), then address (on top)
+			if err := g.pushDataLength(s.Arguments[i]); err != nil {
+				return err
+			}
+			if err := g.genPIRExprAsAddr(s.Arguments[i]); err != nil {
+				return err
+			}
+		} else if pd != nil && i < len(pd.ParamTypes) && isDataOrRecordParam(pd.ParamTypes[i]) {
+			// RECORD param: push address only
+			if err := g.genPIRExprAsAddr(s.Arguments[i]); err != nil {
+				return err
+			}
+		} else {
+			if err := s.Arguments[i].genPIRExpr(g); err != nil {
+				return err
+			}
+		}
+	}
+	g.emitName(pir.RUN, name)
 	return nil
 }
 
@@ -881,7 +1052,11 @@ func (s Output) genPIR(g *GenPIR) error {
 
 // Halt genPIR
 func (s Halt) genPIR(g *GenPIR) error {
-	g.emitN(pir.HLT)
+	if g.inTask {
+		g.emitN(pir.BYE) // mark task DEAD, reschedule
+	} else {
+		g.emitN(pir.HLT)
+	}
 	return nil
 }
 
@@ -906,12 +1081,24 @@ func (s BankStmt) genPIR(g *GenPIR) error {
 
 // Suspend genPIR
 func (s Suspend) genPIR(g *GenPIR) error {
+	if g.checker != nil {
+		if idx := g.checker.TaskIndex(string(s.Name)); idx >= 0 {
+			g.emitName(pir.STOP, fmt.Sprintf("_plz_task_%d", idx))
+			return nil
+		}
+	}
 	g.emitName(pir.STOP, string(s.Name))
 	return nil
 }
 
 // Resume genPIR
 func (s Resume) genPIR(g *GenPIR) error {
+	if g.checker != nil {
+		if idx := g.checker.TaskIndex(string(s.Name)); idx >= 0 {
+			g.emitName(pir.START, fmt.Sprintf("_plz_task_%d", idx))
+			return nil
+		}
+	}
 	g.emitName(pir.START, string(s.Name))
 	return nil
 }
@@ -927,7 +1114,7 @@ func (s Sleep) genPIR(g *GenPIR) error {
 
 // Yield genPIR
 func (s Yield) genPIR(g *GenPIR) error {
-	g.emitN(pir.BYE)
+	g.emitN(pir.YIELD)
 	return nil
 }
 
@@ -1046,6 +1233,17 @@ func (s Declare) genPIR(g *GenPIR) error {
 		g.emitNum(pir.ALLOC, 2)
 	}
 	g.emitName(pir.VAR, string(s.Identifier))
+
+	if s.Initializer != nil {
+		if err := s.Initializer.Expr.genPIRExpr(g); err != nil {
+			return err
+		}
+		if size == 1 {
+			g.emitName(pir.PUT_B, string(s.Identifier))
+		} else {
+			g.emitName(pir.PUT_W, string(s.Identifier))
+		}
+	}
 	return nil
 }
 
@@ -1172,8 +1370,18 @@ func (o Operand) genPIRExpr(g *GenPIR) error {
 	case o.Input() != nil:
 		if n, ok := g.constEval(o.Input().Port); ok {
 			g.emitNum(pir.IN_B, uint16(n))
+		} else {
+			return fmt.Errorf("INPUT port must be a constant (PIR backend limitation), got non-constant expression")
 		}
 	case o.Length() != nil:
+		l := o.Length()
+		if g.currentScope != nil {
+			if d, ok := g.currentScope.Lookup(l.Identifier); ok && d.ParamRef && d.Type.Predeclared() == PredeclaredData {
+				// DATA param: read runtime length from the synthetic _len slot
+				g.emitName(pir.GET_W, string(l.Identifier)+"_len")
+				break
+			}
+		}
 		n, err := g.checker.evalLength(o.Length())
 		if err != nil {
 			return err
@@ -1341,7 +1549,7 @@ func (g *GenPIR) genPIRFieldAddr(operands []Operand) error {
 		if g.checker != nil && g.currentScope != nil {
 			if d, ok := g.currentScope.Lookup(baseRef.Identifier); ok && d.DataValue != nil {
 				g.emitName(pir.PUSH_D, string(baseRef.Identifier))
-			} else if d, ok := g.currentScope.Lookup(baseRef.Identifier); ok && d.ParamRef && d.Type.Predeclared() == PredeclaredData {
+			} else if d, ok := g.currentScope.Lookup(baseRef.Identifier); ok && d.ParamRef && (d.Type.Predeclared() == PredeclaredData || d.Type.Record() != nil) {
 				g.emitName(pir.GET_W, string(baseRef.Identifier))
 			} else {
 				g.emitName(pir.PUSH_A, string(baseRef.Identifier))
@@ -1439,6 +1647,11 @@ func (g *GenPIR) genPIRIndexAddr(operands []Operand) error {
 			} else {
 				g.emitName(pir.PUSH_A, string(ref.Identifier))
 			}
+		} else if s := baseExpr.Suffix(); s != nil && s.Operator == OperatorINDEX {
+			// Nested index: arr[i][j] — push address, not value
+			if err := g.genPIRIndexAddr(s.Operands); err != nil {
+				return err
+			}
 		} else {
 			if err := baseExpr.genPIRExpr(g); err != nil {
 				return err
@@ -1522,6 +1735,33 @@ func (g *GenPIR) indexBaseSize(operands []Operand) int {
 	if baseExpr == nil {
 		return 2
 	}
+	if s := baseExpr.Suffix(); s != nil && s.Operator == OperatorINDEX {
+		// Nested index: arr[i][j] — inner index pushes address of arr[i] (type ARRAY[N]).
+		// This index's element is the inner array's element.
+		ref := s.Operands[0].Ref()
+		if ref == nil {
+			return 2
+		}
+		if g.checker != nil && g.currentScope != nil {
+			if d, ok := g.currentScope.Lookup(ref.Identifier); ok && d.DataValue == nil {
+				if arr := d.Type.Array(); arr != nil {
+					// arr[i] has type arr.ElemType. If it's another array,
+					// the element size is sizeof(innermost element).
+					if inner := arr.ElemType.Array(); inner != nil {
+						if inner.ElemType.Predeclared() == PredeclaredByte {
+							return 1
+						}
+						return inner.ElemType.Size()
+					}
+					if arr.ElemType.Predeclared() == PredeclaredByte {
+						return 1
+					}
+					return arr.ElemType.Size()
+				}
+			}
+		}
+		return 2
+	}
 	if s := baseExpr.Suffix(); s != nil && s.Operator == OperatorFIELD {
 		// Field of a struct — determine the field's element type.
 		ref := s.Operands[0].Ref()
@@ -1602,6 +1842,30 @@ func (g *GenPIR) isByteField(operands []Operand) bool {
 	return false
 }
 
+// genPIROperandAsAddr evaluates an operand and pushes its address onto the
+// data stack (instead of its value). Used when passing arguments to DATA or
+// RECORD parameters in expression-form calls.
+func (g *GenPIR) genPIROperandAsAddr(op Operand) error {
+	if ref := op.Reference(); ref != nil && len(ref.Fields) == 0 && len(ref.Subscripts) == 0 {
+		if d, ok := g.currentScope.Lookup(ref.Identifier); ok {
+			if d.DataValue != nil {
+				g.emitName(pir.PUSH_D, string(ref.Identifier))
+				return nil
+			}
+			if d.ParamRef {
+				g.emitName(pir.GET_W, string(ref.Identifier))
+				return nil
+			}
+		}
+		g.emitName(pir.PUSH_A, string(ref.Identifier))
+		return nil
+	}
+	if expr := op.Expr(); expr != nil {
+		return g.genPIRExprAsAddr(*expr)
+	}
+	return op.genPIRExpr(g)
+}
+
 // genPIRCallExpr generates PIR for a call used as an expression value.
 // operands[0] is the function reference; operands[1:] are the arguments.
 // Args are pushed right-to-left so that TOS is the first argument.
@@ -1613,13 +1877,35 @@ func (g *GenPIR) genPIRCallExpr(operands []Operand) error {
 	if ref == nil {
 		return fmt.Errorf("genPIRCallExpr: indirect calls not supported")
 	}
+	name := string(ref.Identifier)
+	var pd *ProcData
+	if g.checker != nil {
+		pd = g.checker.ProcData(name)
+	}
 	// Push args right-to-left (last arg first, so first arg is TOS)
 	for i := len(operands) - 1; i >= 1; i-- {
-		if err := operands[i].genPIRExpr(g); err != nil {
-			return err
+		argIdx := i - 1 // operand index 1 → param 0
+		if pd != nil && argIdx < len(pd.ParamTypes) && pd.ParamTypes[argIdx].Predeclared() == PredeclaredData {
+			// DATA param: push length first, then address
+			argExpr := Expression{Expr: &operands[i]}
+			if err := g.pushDataLength(argExpr); err != nil {
+				return err
+			}
+			if err := g.genPIROperandAsAddr(operands[i]); err != nil {
+				return err
+			}
+		} else if pd != nil && argIdx < len(pd.ParamTypes) && isDataOrRecordParam(pd.ParamTypes[argIdx]) {
+			// RECORD param: push address only
+			if err := g.genPIROperandAsAddr(operands[i]); err != nil {
+				return err
+			}
+		} else {
+			if err := operands[i].genPIRExpr(g); err != nil {
+				return err
+			}
 		}
 	}
-	g.emitName(pir.RUN, string(ref.Identifier))
+	g.emitName(pir.RUN, name)
 	return nil
 }
 
@@ -1670,14 +1956,20 @@ func (g *GenPIR) refSize(e Expression) int {
 		if ref := op.Reference(); ref != nil {
 			// For DATA references, return the actual byte count of the values.
 			if g.checker != nil && g.currentScope != nil {
-				if d, ok := g.currentScope.Lookup(ref.Identifier); ok && d.DataValue != nil {
-					if d.DataValue.Text != nil {
-						return len(d.DataValue.Text.Value)
+				if d, ok := g.currentScope.Lookup(ref.Identifier); ok {
+					if d.DataValue != nil {
+						if d.DataValue.Text != nil {
+							return len(d.DataValue.Text.Value)
+						}
+						if d.DataValue.Tile != nil {
+							return len(d.DataValue.Tile.Tiles) * 64
+						}
+						return len(d.DataValue.Values)
 					}
-					if d.DataValue.Tile != nil {
-						return len(d.DataValue.Tile.Tiles) * 64
+					// DATA parameters are pointers (2 bytes), not single bytes.
+					if d.ParamRef && d.Type.Predeclared() == PredeclaredData {
+						return 2
 					}
-					return len(d.DataValue.Values)
 				}
 			}
 			t, ok := g.localType(ref.Identifier)
@@ -1690,7 +1982,18 @@ func (g *GenPIR) refSize(e Expression) int {
 	return 1
 }
 
-// genPIRExprOrRef evaluates an expression (usually a reference) for address size.
+// genPIRExprOrRef evaluates an expression (usually a reference) and pushes its ADDRESS.
+// For SAVE/LOAD we need the address of the data, not its value.
 func (g *GenPIR) genPIRExprOrRef(e Expression) error {
+	if op := e.Operand(); op != nil {
+		if ref := op.Reference(); ref != nil {
+			g.genPIRRefAddr(ref)
+			return nil
+		}
+	}
+	if s := e.Suffix(); s != nil && s.Operator == OperatorINDEX {
+		return g.genPIRIndexAddr(s.Operands)
+	}
+	// For other expression types (arithmetic, cast, etc.), the value IS the address.
 	return e.genPIRExpr(g)
 }

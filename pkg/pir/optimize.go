@@ -5,9 +5,15 @@ package pir
 // It walks the instruction stream tracking constant values on the virtual
 // data stack. When a binary or unary operation has known-constant operands,
 // the result is computed at compile time (constant folding). It also
-// eliminates identities (x+0 → x, x*1 → x, x*0 → 0, x&0 → 0, x|0 → x,
-// x-x → 0, x/1 → x, x%1 → 0) and reduces multiplication/division/modulo
+// eliminates identities (x+0 → x, x*1 → x, x*0 → 0, x&0 → 0,
+// x&allOnes → x, x|0 → x, x|allOnes → allOnes, x^0 → x,
+// x/1 → x, x%1 → 0) and reduces multiplication/division/modulo
 // by powers of two to shift/and operations.
+//
+// Note: x − x → 0 is handled only when both operands are known
+// constants (constant folding). The compiler never emits DUP
+// followed by SUB, so the DUP + SUB pattern is absent from
+// real programs.
 //
 // The implementation replaces superseded instructions with NOP and compacts
 // them away in a final pass.
@@ -55,10 +61,10 @@ func (o *optimizer) run() {
 		case AND_B, AND_W:
 			o.foldAnd(i, instr.Op)
 		case OR_B, OR_W:
-			o.foldBinop(i, func(a, b uint16) uint16 { return a | b },
-				func(a, b uint16) bool { return b == 0 })
+			o.foldOr(i, instr.Op)
 		case XOR_B, XOR_W:
-			o.foldBinop(i, func(a, b uint16) uint16 { return a ^ b }, nil)
+			o.foldBinop(i, func(a, b uint16) uint16 { return a ^ b },
+				func(a, b uint16) bool { return b == 0 })
 		case SHL_B, SHL_W:
 			o.foldBinop(i, func(a, b uint16) uint16 { return a << (b & 0x0F) },
 				func(a, b uint16) bool { return b == 0 })
@@ -111,6 +117,27 @@ func (o *optimizer) run() {
 		case SAVE, LOAD:
 			o.pop()
 			o.pop()
+			o.pop()
+		case SLEEP:
+			o.pop()
+
+		case IS_B, IS_W:
+			o.foldIS(i)
+
+		// Stack-preserving instructions (no data stack effect)
+		case NOP, TAG, ROUTE, JOB, BYE, YIELD, HLT,
+			ALLOC, VAR, PRIORITY, AT, BANK, INT, NMI,
+			ENI, DII, FRAME, LOCAL_B, LOCAL_W,
+			STOP, START, SRAM_ON, SRAM_OFF, PRAGMA, INLINE,
+			DATA_B, DATA_W, DATA_STR:
+			// no stack effect — preserve known constant tracking
+
+		// Unconditional control flow — clear stack
+		case GO, DONE, DONE_INTERRUPT, DONE_NMI:
+			o.stack = o.stack[:0]
+
+		// Conditional jump — pops condition value
+		case GO_IF:
 			o.pop()
 
 		default:
@@ -340,6 +367,84 @@ func (o *optimizer) foldAnd(i int, op Instruction) {
 		}
 	}
 
+	o.push(optVal{idx: i})
+}
+
+func (o *optimizer) foldOr(i int, op Instruction) {
+	if len(o.stack) < 2 {
+		o.push(optVal{idx: i})
+		return
+	}
+	r := o.pop()
+	l := o.pop()
+
+	if l.known && r.known {
+		result := l.val | r.val
+		o.nopAt(l.idx)
+		o.nopAt(r.idx)
+		o.replace(i, PUSH_W, result)
+		o.push(optVal{known: true, val: result, idx: i})
+		return
+	}
+
+	allOnes := uint16(0xFFFF)
+	if op == OR_B {
+		allOnes = 0xFF
+	}
+
+	if r.known {
+		switch {
+		case r.val == 0:
+			o.nopAt(r.idx)
+			o.nop(i)
+			o.push(l)
+			return
+		case r.val == allOnes:
+			o.nopAt(l.idx)
+			o.nopAt(r.idx)
+			o.replace(i, PUSH_W, allOnes)
+			o.push(optVal{known: true, val: allOnes, idx: i})
+			return
+		}
+	}
+
+	o.push(optVal{idx: i})
+}
+
+func (o *optimizer) foldIS(i int) {
+	if len(o.stack) < 2 {
+		o.push(optVal{idx: i})
+		return
+	}
+	r := o.pop() // TOS = right operand
+	l := o.pop() // NEXT = left operand
+
+	if l.known && r.known {
+		var result bool
+		switch o.prog[i].Operand.Cond {
+		case CondLT:
+			result = l.val < r.val
+		case CondGT:
+			result = l.val > r.val
+		case CondLE:
+			result = l.val <= r.val
+		case CondGE:
+			result = l.val >= r.val
+		case CondEQ:
+			result = l.val == r.val
+		case CondNE:
+			result = l.val != r.val
+		}
+		val := uint16(0)
+		if result {
+			val = 1
+		}
+		o.nopAt(l.idx)
+		o.nopAt(r.idx)
+		o.replace(i, PUSH_W, val)
+		o.push(optVal{known: true, val: val, idx: i})
+		return
+	}
 	o.push(optVal{idx: i})
 }
 

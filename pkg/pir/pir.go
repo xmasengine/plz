@@ -100,7 +100,8 @@ const (
 
 	JOB      // [name] Declare start of a cooperative task.
 	PRIORITY // [n] One-shot: set priority (0-15) for the next JOB.
-	BYE      // Yield control back to the scheduler.
+	BYE      // Terminate current task (mark DEAD) and reschedule.
+	YIELD    // Yield control back to the scheduler (task stays READY).
 	SLEEP    // Pop 16-bit tick count; sleep current task for that many ticks.
 	STOP     // [name] Suspend the named task.
 	START    // [name] Resume the named task.
@@ -283,6 +284,7 @@ var instructionNames = map[Instruction]string{
 	JOB:            "JOB",
 	PRIORITY:       "PRIORITY",
 	BYE:            "BYE",
+	YIELD:          "YIELD",
 	SLEEP:          "SLEEP",
 	STOP:           "STOP",
 	START:          "START",
@@ -362,7 +364,7 @@ func expectedOperand(op Instruction) OperandType {
 		CAST_W, CAST_B,
 		DUP, DROP, SWAP,
 		READ_B, READ_W, WRITE_B, WRITE_W,
-		BYE, SLEEP,
+		BYE, YIELD, SLEEP,
 		HLT, DII, ENI, SEED, SWITCH,
 		SAVE, LOAD, SRAM_ON, SRAM_OFF:
 		return OpNone

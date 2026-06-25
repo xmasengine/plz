@@ -257,6 +257,17 @@ func (p *padding) address() int {
 	return p.addr
 }
 
+// A reorigin segment moves the program counter to a new address,
+// filling the gap with zero bytes.
+type reorigin struct {
+	addr      int
+	newOrigin int
+}
+
+func (r *reorigin) address() int {
+	return r.addr
+}
+
 // An export segment contains an exported address.
 type export struct {
 	addr int
@@ -597,6 +608,14 @@ func (a *assembler) assignAddresses() error {
 			a.log("%04X  .PAD Len:%d Val:%d", ss.addr, ss.pad, ss.value)
 			a.pc += ss.pad
 
+		case *reorigin:
+			ss.addr = a.pc
+			if ss.newOrigin < a.pc {
+				a.addError(fstring{}, "origin must not go backwards (from $%04X to $%04X)", a.pc, ss.newOrigin)
+				return errParse
+			}
+			a.pc = ss.newOrigin
+
 		case *export:
 			ss.addr = a.pc
 		}
@@ -688,6 +707,11 @@ func (a *assembler) generateCode() error {
 			for i := 0; i < ss.pad; i++ {
 				pad[i] = ss.value
 			}
+			a.code = append(a.code, pad...)
+			a.logBytes(ss.addr, pad)
+
+		case *reorigin:
+			pad := make([]byte, ss.newOrigin-ss.addr)
 			a.code = append(a.code, pad...)
 			a.logBytes(ss.addr, pad)
 
@@ -866,11 +890,6 @@ func (a *assembler) parseEquate(line, label fstring, param any) error {
 
 // Parse an ".ORG" origin definition
 func (a *assembler) parseOrigin(line, label fstring, param any) error {
-	if len(a.segments) > 0 {
-		a.addError(line, "origin directive must appear before first instruction")
-		return errParse
-	}
-
 	a.logLine(line, "origin=")
 
 	e, _, err := a.exprParser.parse(line, a.scopeLabel, allowParentheses)
@@ -887,7 +906,12 @@ func (a *assembler) parseOrigin(line, label fstring, param any) error {
 	a.logLine(line, "expr=%s", e.String())
 	a.logLine(line, "val=$%04X", e.value)
 
-	a.origin = e.value
+	if len(a.segments) == 0 {
+		a.origin = e.value
+	} else {
+		// Mid-program .org: insert padding to reach the new address
+		a.segments = append(a.segments, &reorigin{newOrigin: int(e.value)})
+	}
 	return nil
 }
 

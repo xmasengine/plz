@@ -12,8 +12,11 @@ import (
 func runNES(t *testing.T, prog *pir.Program) *cpu.FlatMemory {
 	t.Helper()
 	cfg := pir.NES6502Config()
-	asmText := pir.NewGen6502(cfg).Gen(prog)
-	rom, err := pir.Assemble6502(cfg, asmText)
+	gen := pir.NewGen6502(cfg)
+	asmText := gen.Gen(prog)
+	cfg.IntHandlerName = gen.IntHandler()
+	cfg.NmiHandlerName = gen.NmiHandler()
+	rom, err := pir.Assemble6502(cfg, asmText, gen.BankLines())
 	if err != nil {
 		t.Fatalf("Assemble6502: %v\n%s", err, asmText)
 	}

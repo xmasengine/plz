@@ -1100,11 +1100,8 @@ func (i Input) Check(c *Checker) error {
 	return i.Port.Check(c)
 }
 
-// Check rejects HALT inside a task body (use YIELD instead).
+// Check validates HALT.
 func (s Halt) Check(c *Checker) error {
-	if c.inTask() {
-		return c.Errorf("", "HALT not allowed inside a task body (use YIELD instead)")
-	}
 	return nil
 }
 
@@ -1207,6 +1204,10 @@ func (c *Checker) evalLength(l *Length) (int, error) {
 		}
 		return len(data.Values), nil
 	}
+	// DATA parameters have dynamic length, can't resolve at compile time.
+	if d.ParamRef && d.Type.Predeclared() == PredeclaredData {
+		return 0, c.Errorf("", "LENGTH: cannot take length of DATA parameter %s at compile time (use in expression instead of CONSTANT)", l.Identifier)
+	}
 	// Arrays
 	if arr := d.Type.Array(); arr != nil {
 		if arr.Size > 0 {
@@ -1247,10 +1248,62 @@ func (s Suffix) Check(c *Checker) error {
 	}
 	// Compile-time bounds check for array subscript expressions (e.g., x = arr[7]).
 	if s.Operator == OperatorINDEX && len(s.Operands) == 2 {
-		if ref := s.Operands[0].Ref(); ref != nil {
-			if idxExpr := s.Operands[1].Expr(); idxExpr != nil {
-				if err := c.checkArraySubscript(ref.Identifier, *idxExpr); err != nil {
-					return err
+		if idxExpr := s.Operands[1].Expr(); idxExpr != nil {
+			// Find base ref and count how many INDEX levels deep we are
+			// for multi-dimensional indexing like arr[i][j].
+			ref := s.Operands[0].Ref()
+			depth := 0
+			if ref == nil {
+				op := s.Operands[0]
+				for {
+					if r := op.Ref(); r != nil {
+						ref = r
+						break
+					}
+					if expr := op.Expr(); expr != nil {
+						if sub := expr.Suffix(); sub != nil && sub.Operator == OperatorINDEX && len(sub.Operands) >= 1 {
+							depth++
+							op = sub.Operands[0]
+						} else {
+							break
+						}
+					} else {
+						break
+					}
+				}
+			}
+			if ref != nil {
+				d, ok := c.Lookup(ref.Identifier)
+				if ok {
+					if data := d.DataValue; data != nil {
+						size := 0
+						if data.Tile != nil {
+							size = len(data.Tile.Tiles)
+						} else if data.Text != nil {
+							size = len(data.Text.Value)
+						} else {
+							size = len(data.Values)
+						}
+						if size > 0 && depth == 0 {
+							v, err := c.EvalConstExpr(*idxExpr)
+							if err == nil && (v < 0 || v >= size) {
+								return c.Errorf("", "index %d out of bounds for data %q (size %d)", v, ref.Identifier, size)
+							}
+						}
+					} else {
+						typ := d.Type
+						for i := 0; i < depth; i++ {
+							if arr := typ.Array(); arr != nil {
+								typ = arr.ElemType
+							}
+						}
+						if arr := typ.Array(); arr != nil && arr.Size > 0 {
+							v, err := c.EvalConstExpr(*idxExpr)
+							if err == nil && (v < 0 || v >= arr.Size) {
+								return c.Errorf("", "index %d out of bounds for array %q (size %d)", v, ref.Identifier, arr.Size)
+							}
+						}
+					}
 				}
 			}
 		}
@@ -1376,10 +1429,49 @@ func (c *Checker) checkArraySubscript(id Identifier, expr Expression) error {
 // are within the declared array or DATA bounds. Non-constant subscripts are
 // silently skipped since they can only be checked at runtime.
 func (c *Checker) checkArrayBounds(ref Reference) error {
-	for _, sub := range ref.Subscripts {
-		if err := c.checkArraySubscript(ref.Identifier, sub); err != nil {
-			return err
+	d, ok := c.Lookup(ref.Identifier)
+	if !ok {
+		return nil
+	}
+	// Check DATA items.
+	if data := d.DataValue; data != nil {
+		size := 0
+		if data.Tile != nil {
+			size = len(data.Tile.Tiles)
+		} else if data.Text != nil {
+			size = len(data.Text.Value)
+		} else {
+			size = len(data.Values)
 		}
+		if size == 0 {
+			return nil
+		}
+		for _, sub := range ref.Subscripts {
+			v, err := c.EvalConstExpr(sub)
+			if err != nil {
+				return nil
+			}
+			if v < 0 || v >= size {
+				return c.Errorf("", "index %d out of bounds for data %q (size %d)", v, ref.Identifier, size)
+			}
+		}
+		return nil
+	}
+	// Check declared variables (arrays) — walk into nested Array types.
+	typ := d.Type
+	for _, sub := range ref.Subscripts {
+		arr := typ.Array()
+		if arr == nil || arr.Size == 0 {
+			return nil // not an array or unbounded
+		}
+		v, err := c.EvalConstExpr(sub)
+		if err != nil {
+			return nil // non-constant subscript, skip
+		}
+		if v < 0 || v >= arr.Size {
+			return c.Errorf("", "index %d out of bounds for array %q (size %d)", v, ref.Identifier, arr.Size)
+		}
+		typ = arr.ElemType // walk into next dimension
 	}
 	return nil
 }
